@@ -3450,6 +3450,7 @@ dependencies = [
  "burn-wgpu",
  "clap",
  "env_logger",
+ "memmap2",
  "rand 0.8.5",
  "serde",
  "serde_json",
