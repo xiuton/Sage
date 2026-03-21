@@ -95,7 +95,12 @@ cargo run --target-dir .\target_tmp --bin infer -- --help
 
 - 增加高质量 SFT 数据量（至少几千～几万条）
 - 减少模板化重复样本
-- 未来升级 tokenizer（BPE/SentencePiece）
+- 未来升级 tokenizer（BPE/SentencePiece）✅ **BPE已完成**
+- **使用 BPE 分词器**（推荐）：BPE 能显著减少高频字符重复问题
+
+```bash
+cargo run --release --bin train -- --sft-jsonl your_data.jsonl --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256
+```
 
 ---
 
@@ -155,3 +160,45 @@ cargo run --release --bin train -- --sft-jsonl sft_smoke_200.jsonl --sft-max-rec
 
 2) 降低 `--max-bytes` 或减少 `--num-epochs`
 3) 后续考虑切换 GPU 后端（计划任务）
+
+---
+
+## 7) BPE 分词器相关问题
+
+### 7.1 训练时 BPE 编译错误
+
+#### 现象
+使用 `--use-bpe` 时出现编译错误，提示 `ModelWrapper`、`TrainerWrapper` 等相关错误。
+
+#### 原因
+tokenizers crate API 版本兼容性问题。
+
+#### 解决方案
+- 确保使用项目指定的 `tokenizers = "0.19.1"` 版本
+- 如果仍有问题，暂时使用字符级分词器：移除 `--use-bpe` 参数
+
+### 7.2 BPE 训练速度慢
+
+#### 现象
+BPE 训练比字符级慢很多。
+
+#### 原因
+BPE 需要从语料中学习合并规则，计算复杂度较高。
+
+#### 建议
+- 对于小数据集（<1M tokens），可以接受
+- 对于大语料，考虑预训练 BPE 或使用现有 BPE 模型
+- 或者在小数据集上训练 BPE，然后用于大语料
+
+### 7.3 BPE 模型推理不一致
+
+#### 现象
+使用 BPE 训练的模型推理结果与字符级差异很大。
+
+#### 原因
+BPE 改变了 token 粒度，模型需要重新学习 token 间的关系。
+
+#### 建议
+- 这是正常现象，BPE 通常需要更多训练数据和 epochs
+- 增加 `--num-epochs` 到 50+，`--batch-size` 到 32+
+- 使用更大的 `--bpe-vocab-size`（如 8000-10000）以获得更好平衡

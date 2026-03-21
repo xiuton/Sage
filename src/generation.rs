@@ -105,13 +105,11 @@ pub fn generate<B: Backend>(
         if options.punctuation_penalty > 1.0 {
             let last_is_punct = tokens
                 .last()
-                .and_then(|&id| tokenizer.char_for_id(id))
-                .is_some_and(is_punctuation_like);
+                .map(|&id| tokenizer.is_punctuation_token(id))
+                .unwrap_or(false);
 
             for (idx, (token_id, _)) in candidates.iter().enumerate() {
-                let is_punct = tokenizer
-                    .char_for_id(*token_id)
-                    .is_some_and(is_punctuation_like);
+                let is_punct = tokenizer.is_punctuation_token(*token_id);
                 if is_punct {
                     weights[idx] /= options.punctuation_penalty;
                     if last_is_punct {
@@ -136,41 +134,4 @@ pub fn generate<B: Backend>(
     }
 
     tokenizer.decode(&tokens)
-}
-
-fn is_punctuation_like(ch: char) -> bool {
-    if ch.is_ascii_punctuation() {
-        return true;
-    }
-    matches!(
-        ch,
-        '，' | '。'
-            | '、'
-            | '；'
-            | '：'
-            | '！'
-            | '？'
-            | '…'
-            | '—'
-            | '·'
-            | '（'
-            | '）'
-            | '《'
-            | '》'
-            | '“'
-            | '”'
-            | '‘'
-            | '’'
-            | '【'
-            | '】'
-            | '〔'
-            | '〕'
-            | '『'
-            | '』'
-            | '「'
-            | '」'
-            | '\n'
-            | '\r'
-            | '\t'
-    )
 }

@@ -56,16 +56,16 @@ struct Args {
     artifact_dir: String,
 
     /// 训练的总轮数。
-    #[arg(long, default_value_t = 20)]
+    #[arg(long, default_value_t = 50)]
     num_epochs: usize,
 
-    #[arg(long, default_value_t = 16)]
+    #[arg(long, default_value_t = 32)]
     batch_size: usize,
 
     #[arg(long, default_value_t = 1.0e-4)]
     lr: f64,
 
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = 256)]
     max_seq_len: usize,
 
     #[arg(long, default_value_t = false)]
@@ -79,6 +79,12 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     reset_tokenizer: bool,
+
+    #[arg(long, default_value_t = false)]
+    use_bpe: bool,
+
+    #[arg(long, default_value_t = 5000)]
+    bpe_vocab_size: usize,
 }
 
 #[derive(Deserialize)]
@@ -686,8 +692,13 @@ fn main() {
             panic!("语料为空。");
         }
         println!("正在从语料创建新分词器...");
-        Tokenizer::new(&text)
+        if args.use_bpe {
+            Tokenizer::new_bpe(&text, args.bpe_vocab_size)
+        } else {
+            Tokenizer::new(&text)
+        }
     };
+
     println!("词表大小: {}", tokenizer.vocab_size);
 
     // 3. 配置模型
