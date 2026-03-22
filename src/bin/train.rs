@@ -1,6 +1,8 @@
+use burn::prelude::Backend;
 use burn::backend::{
     Autodiff,
-    ndarray::{NdArray, NdArrayDevice},
+    ndarray::NdArray,
+    wgpu::Wgpu,
 };
 use burn::module::Module;
 use burn::optim::AdamConfig;
@@ -11,6 +13,8 @@ use sage::{
     training::{self, TrainingConfig},
 };
 use serde::Deserialize;
+use ctrlc;
+use num_cpus;
 use std::{
     collections::BTreeSet,
     fs,
@@ -85,9 +89,49 @@ struct Args {
 
     #[arg(long, default_value_t = 5000)]
     bpe_vocab_size: usize,
+
+    /// Enable high parallel training mode (faster data loading + batch throughput)
+    #[arg(long, default_value_t = false)]
+    fast: bool,
+
+    /// Worker threads for data loading
+    #[arg(long, default_value_t = 4)]
+    num_workers: usize,
+
+    /// Enable quick development mode (1 epoch, small batch, high lr)
+    #[arg(long, default_value_t = false)]
+    quick_dev: bool,
+
+    /// Enable ultra-quick development mode (1 epoch, tiny batch, limit data to 100 records)
+    #[arg(long, default_value_t = false)]
+    ultra_quick: bool,
+
+    /// Disable progress bars and TUI display
+    #[arg(long, default_value_t = false)]
+    no_progress: bool,
+
+    /// Enable TUI progress display (may not work in all terminals, especially Windows PowerShell)
+    #[arg(long, default_value_t = false)]
+    tui: bool,
+
+    /// Backend to use for training: cpu or gpu
+    #[arg(long, default_value = "cpu", value_name = "cpu|gpu")]
+    backend: String,
+
+    /// Model size configuration: default (1M), 10m, 30m
+    #[arg(long, default_value = "default", value_name = "default|10m|30m")]
+    model_size: String,
+
+    /// Training mode: general, code, math
+    #[arg(long, default_value = "general", value_name = "general|code|math")]
+    training_mode: String,
+
+    /// Force enable TUI progress display even in environments that might not support it
+    #[arg(long, default_value_t = false)]
+    force_tui: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct SftRecord {
     prompt: String,
     response: String,
@@ -171,11 +215,50 @@ fn load_corpus(args: &Args) -> io::Result<String> {
 fn sft_template(prompt: &str, response: &str) -> String {
     let mut out = String::new();
     out.push('\u{0002}');
-    out.push_str("用户：");
+    out.push_str("<s>");
+    out.push_str("\n<user>");
     out.push_str(prompt);
+    out.push_str("</user>");
     out.push('\n');
-    out.push_str("助手：");
+    out.push_str("<assistant>");
     out.push_str(response);
+    out.push_str("</assistant>");
+    out.push('\u{0003}');
+    out.push('\n');
+    out
+}
+
+/// 代码生成训练模板 - 优化代码生成场景
+fn code_template(prompt: &str, response: &str) -> String {
+    let mut out = String::new();
+    out.push('\u{0002}');
+    out.push_str("<s>");
+    out.push_str("\n<system>你是一个专业的代码助手，擅长编写高质量、可读性强的代码。</system>");
+    out.push_str("\n<user>");
+    out.push_str(prompt);
+    out.push_str("</user>");
+    out.push('\n');
+    out.push_str("<assistant>");
+    out.push_str(response);
+    out.push_str("</assistant>");
+    out.push('\u{0003}');
+    out.push('\n');
+    out
+}
+
+/// 数学推理训练模板 - 优化数学问题解决场景
+fn math_template(prompt: &str, response: &str) -> String {
+    let mut out = String::new();
+    out.push('\u{0002}');
+    out.push_str("<s>");
+    out.push_str("\n<system>你是一个数学专家，擅长解决各类数学问题并提供详细的解题步骤。</system>");
+    out.push_str("\n<user>");
+    out.push_str(prompt);
+    out.push_str("</user>");
+    out.push('\n');
+    out.push_str("<assistant>");
+    out.push_str(response);
+    out.push_str("</assistant>");
     out.push('\u{0003}');
     out.push('\n');
     out
@@ -184,27 +267,42 @@ fn sft_template(prompt: &str, response: &str) -> String {
 fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
     let mut out = String::new();
     out.push('\u{0002}');
+    out.push_str("<s>");
 
     let mut has_assistant = false;
     for m in messages {
         match m.role.as_str() {
-            "user" => {
-                out.push_str("用户：");
-                out.push_str(&m.content);
+            "system" => {
                 out.push('\n');
+                out.push_str("<system>");
+                out.push_str(&m.content);
+                out.push_str("</system>");
+            }
+            "user" => {
+                out.push('\n');
+                out.push_str("<user>");
+                out.push_str(&m.content);
+                out.push_str("</user>");
             }
             "assistant" => {
                 has_assistant = true;
-                out.push_str("助手：");
-                out.push_str(&m.content);
-                out.push('\u{0003}');
                 out.push('\n');
+                out.push_str("<assistant>");
+                out.push_str(&m.content);
+                out.push_str("</assistant>");
+                out.push('\u{0003}');
             }
             _ => {}
         }
     }
+    
+    out.push('\n');
 
-    if has_assistant { Some(out) } else { None }
+    if has_assistant {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn load_sft_jsonl(args: &Args, path: &str) -> io::Result<String> {
@@ -226,7 +324,13 @@ fn load_sft_jsonl(args: &Args, path: &str) -> io::Result<String> {
             continue;
         }
         if let Ok(rec) = serde_json::from_str::<SftRecord>(line) {
-            out.push_str(&sft_template(&rec.prompt, &rec.response));
+            // 根据训练模式选择模板
+            let template = match args.training_mode.as_str() {
+                "code" => code_template(&rec.prompt, &rec.response),
+                "math" => math_template(&rec.prompt, &rec.response),
+                _ => sft_template(&rec.prompt, &rec.response),
+            };
+            out.push_str(&template);
         } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
             if let Some(messages) = v.get("messages") {
                 if let Ok(messages) = serde_json::from_value::<Vec<SftMessage>>(messages.clone()) {
@@ -252,25 +356,48 @@ fn load_sft_jsonl(args: &Args, path: &str) -> io::Result<String> {
     Ok(out)
 }
 
-fn load_sft_sample() -> String {
-    let samples = [
-        SftRecord {
-            prompt: "你是谁？".to_string(),
-            response: "我是一个用 Rust 训练出来的小模型。".to_string(),
-        },
-        SftRecord {
-            prompt: "用一句话解释千字文是什么。".to_string(),
-            response: "《千字文》是由一千个不重复汉字组成的启蒙文章。".to_string(),
-        },
-        SftRecord {
-            prompt: "给我一个学习 Rust 的建议。".to_string(),
-            response: "从所有权和借用入手，多写小项目并配合 clippy 修正。".to_string(),
-        },
-    ];
+fn load_sft_sample(args: &Args) -> String {
+    let samples = match args.training_mode.as_str() {
+        "code" => [
+            SftRecord {
+                prompt: "请写一个Python函数，计算斐波那契数列的第n项。".to_string(),
+                response: "def fibonacci(n):\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        a, b = 0, 1\n        for _ in range(2, n + 1):\n            a, b = b, a + b\n        return b\n\n# 使用示例\nprint(fibonacci(10))  # 输出: 55".to_string(),
+            },
+            SftRecord {
+                prompt: "如何用Python实现快速排序算法？".to_string(),
+                response: "def quick_sort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quick_sort(left) + middle + quick_sort(right)\n\n# 使用示例\nprint(quick_sort([3, 6, 8, 10, 1, 2, 1]))".to_string(),
+            },
+        ],
+        "math" => [
+            SftRecord {
+                prompt: "求解方程 2x + 5 = 15".to_string(),
+                response: "解：2x + 5 = 15\n步骤1：两边同时减去5\n2x = 15 - 5\n2x = 10\n步骤2：两边同时除以2\nx = 10 / 2\nx = 5\n答案：x = 5".to_string(),
+            },
+            SftRecord {
+                prompt: "计算三角形面积，底为6，高为4".to_string(),
+                response: "三角形面积公式：面积 = (底 × 高) / 2\n代入数值：面积 = (6 × 4) / 2 = 24 / 2 = 12\n答案：12平方单位".to_string(),
+            },
+        ],
+        _ => [
+            SftRecord {
+                prompt: "你是谁？".to_string(),
+                response: "我是一个用 Rust 训练出来的小模型。".to_string(),
+            },
+            SftRecord {
+                prompt: "用一句话解释千字文是什么。".to_string(),
+                response: "《千字文》是由一千个不重复汉字组成的启蒙文章。".to_string(),
+            },
+        ],
+    };
 
     let mut out = String::new();
     for rec in samples {
-        out.push_str(&sft_template(&rec.prompt, &rec.response));
+        let template = match args.training_mode.as_str() {
+            "code" => code_template(&rec.prompt, &rec.response),
+            "math" => math_template(&rec.prompt, &rec.response),
+            _ => sft_template(&rec.prompt, &rec.response),
+        };
+        out.push_str(&template);
     }
     out
 }
@@ -318,9 +445,14 @@ fn load_sft_messages_sample() -> String {
     out
 }
 
-fn sft_sample_from_json_line(line: &str) -> Option<String> {
+fn sft_sample_from_json_line(line: &str, training_mode: &str) -> Option<String> {
     if let Ok(rec) = serde_json::from_str::<SftRecord>(line) {
-        return Some(sft_template(&rec.prompt, &rec.response));
+        let template = match training_mode {
+            "code" => code_template(&rec.prompt, &rec.response),
+            "math" => math_template(&rec.prompt, &rec.response),
+            _ => sft_template(&rec.prompt, &rec.response),
+        };
+        return Some(template);
     }
 
     let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
@@ -354,7 +486,7 @@ fn collect_vocab_chars_stream(args: &Args) -> io::Result<Vec<char>> {
             if trimmed.is_empty() {
                 continue;
             }
-            let sample = match sft_sample_from_json_line(trimmed) {
+            let sample = match sft_sample_from_json_line(trimmed, &args.training_mode) {
                 Some(v) => v,
                 None => continue,
             };
@@ -381,7 +513,7 @@ fn collect_vocab_chars_stream(args: &Args) -> io::Result<Vec<char>> {
     }
 
     if args.sft_sample {
-        let text = load_sft_sample();
+        let text = load_sft_sample(&args);
         for ch in text.chars() {
             set.insert(ch);
         }
@@ -482,7 +614,7 @@ fn build_token_cache_stream(args: &Args, tokenizer: &Tokenizer) -> io::Result<(S
             if trimmed.is_empty() {
                 continue;
             }
-            let sample = match sft_sample_from_json_line(trimmed) {
+            let sample = match sft_sample_from_json_line(trimmed, &args.training_mode) {
                 Some(v) => v,
                 None => continue,
             };
@@ -522,7 +654,7 @@ fn build_token_cache_stream(args: &Args, tokenizer: &Tokenizer) -> io::Result<(S
     }
 
     if args.sft_sample {
-        let text = load_sft_sample();
+        let text = load_sft_sample(&args);
         let (ids, mask) = tokenizer.encode_with_assistant_mask(&text);
         for (&id, &m) in ids.iter().zip(mask.iter()) {
             write_u32_le(&mut tokens_file, id as u32)?;
@@ -646,7 +778,7 @@ fn count_sft_records_stream(args: &Args) -> io::Result<usize> {
         if trimmed.is_empty() {
             continue;
         }
-        if sft_sample_from_json_line(trimmed).is_none() {
+        if sft_sample_from_json_line(trimmed, &args.training_mode).is_none() {
             continue;
         }
 
@@ -660,7 +792,23 @@ fn count_sft_records_stream(args: &Args) -> io::Result<usize> {
 }
 
 fn main() {
-    let args = Args::parse();
+    let mut args = Args::parse();
+
+    // For ultra_quick mode, automatically limit data to 100 records for very fast testing
+    if args.ultra_quick && args.sft_max_records == 0 {
+        args.sft_max_records = 100;
+    }
+
+    // Set up Ctrl+C handler for graceful shutdown
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        eprintln!("\n收到中断信号，正在保存检查点...");
+        r.store(false, std::sync::atomic::Ordering::SeqCst);
+        // Give some time for cleanup, then exit
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::process::exit(130);
+    }).expect("Error setting Ctrl+C handler");
 
     // 初始化日志
     if std::env::var("RUST_LOG").is_err() {
@@ -668,8 +816,16 @@ fn main() {
     }
     env_logger::init();
 
-    let device = NdArrayDevice::Cpu;
+    // 设置环境变量改善Burn TUI显示
+    unsafe {
+        std::env::set_var("BURN_TUI_NO_CLEAR", "1");
+        std::env::set_var("TERM", "xterm-256color");
+        
+        // 禁用burn框架的实验日志记录器，解决Windows下file logger安装失败的问题
+        std::env::set_var("BURN_EXPERIMENT_LOGGER_DISABLED", "1");
+    }
 
+    // 加载或创建分词器
     let tokenizer_path = format!("{}/tokenizer.json", args.artifact_dir);
     let tokenizer = if !args.reset_tokenizer && Path::new(&tokenizer_path).exists() {
         println!("正在加载现有分词器...");
@@ -684,7 +840,7 @@ fn main() {
         } else if args.sft_sample_messages {
             load_sft_messages_sample()
         } else if args.sft_sample {
-            load_sft_sample()
+            load_sft_sample(&args)
         } else {
             load_corpus(&args).expect("Should load corpus")
         };
@@ -699,14 +855,59 @@ fn main() {
         }
     };
 
-    println!("词表大小: {}", tokenizer.vocab_size);
-
-    // 3. 配置模型
-    let mut model_config = ModelConfig::new();
+    // 根据模型大小选择配置
+    let mut model_config = match args.model_size.as_str() {
+        "10m" => {
+            println!("使用约10M参数的模型配置");
+            ModelConfig::small_10m()
+        },
+        "30m" => {
+            println!("使用约30M参数的模型配置");
+            ModelConfig::medium_30m()
+        },
+        _ => {
+            println!("使用默认模型配置（约1M参数）");
+            ModelConfig::new()
+        }
+    };
+    
+    // 更新动态参数
     model_config.vocab_size = tokenizer.vocab_size;
     model_config.max_seq_len = args.max_seq_len;
 
-    let model_init = model_config.init::<NdArray>(&device);
+    // 根据后端参数选择训练路径
+    if args.backend == "gpu" {
+        println!("使用GPU后端进行训练...");
+        train_with_backend::<Wgpu>(args, tokenizer, model_config);
+    } else {
+        println!("使用CPU后端进行训练...");
+        train_with_backend::<NdArray>(args, tokenizer, model_config);
+    }
+}
+
+fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config: ModelConfig) {
+    // 根据后端类型优化设备配置
+    let device = if args.backend == "gpu" {
+        // GPU后端优化配置
+        println!("使用优化的GPU后端配置...");
+        // 为WGPU设置更好的设备选项
+        unsafe {
+            std::env::set_var("WGPU_POWER_PREFERENCE", "HighPerformance");
+        }
+        B::Device::default()
+    } else {
+        B::Device::default()
+    };
+    println!("设备信息: {:?}", device);
+
+    println!("词表大小: {}", tokenizer.vocab_size);
+
+    // 3. 配置模型
+    let mut model_config = model_config;
+    model_config.vocab_size = tokenizer.vocab_size;
+    model_config.max_seq_len = args.max_seq_len;
+
+    let model_init = model_config.init::<B>(&device);
     println!("模型参数总量: {} (约 0.001B)", model_init.num_params());
 
     // 4. 训练流程
@@ -714,24 +915,100 @@ fn main() {
     let has_model = Path::new(&model_path).exists();
 
     if !has_model || args.force || args.r#continue || args.resume_epoch.is_some() {
+        if args.ultra_quick {
+            println!("启用超快速开发模式：1轮训练，极小批量(2)，极高学习率，只用100条数据，适合闪电验证");
+        } else if args.quick_dev {
+            println!("启用快速开发模式：1轮训练，超小批量(4)，超高学习率，适合快速验证");
+        }
         println!("未发现已训练模型，开始正式训练...");
         let mut training_config = TrainingConfig::new(model_config.clone(), AdamConfig::new());
-        training_config.num_epochs = args.num_epochs;
-        training_config.batch_size = args.batch_size;
-        training_config.lr = args.lr;
+        training_config.num_epochs = if args.ultra_quick { 1 } else if args.quick_dev { 1 } else { args.num_epochs };
+        // 根据后端类型优化批处理大小
+        training_config.batch_size = if args.backend == "gpu" {
+            // GPU优化：更大的批处理大小以提高利用率
+            if args.ultra_quick {
+                4
+            } else if args.quick_dev {
+                8
+            } else if args.fast {
+                (args.batch_size * 4).min(256)
+            } else {
+                args.batch_size.max(32)
+            }
+        } else {
+            // CPU保持原有逻辑
+            if args.ultra_quick {
+                2
+            } else if args.quick_dev {
+                4
+            } else if args.fast {
+                (args.batch_size * 2).min(128)
+            } else {
+                args.batch_size
+            }
+        };
+        
+        // 根据后端类型优化学习率
+        training_config.lr = if args.backend == "gpu" {
+            // GPU可以使用更高的学习率
+            if args.ultra_quick { 2e-2 } else if args.quick_dev { 2e-2 } else if args.fast { args.lr * 3.0 } else { args.lr * 1.5 }
+        } else {
+            if args.ultra_quick { 1e-2 } else if args.quick_dev { 1e-2 } else if args.fast { args.lr * 2.0 } else { args.lr }
+        };
+        
+        // 根据后端类型优化并行工作线程数
+        let cpu_cores = num_cpus::get();
+        let optimal_workers = if args.backend == "gpu" {
+            // GPU模式下：更多工作线程用于数据预处理，避免GPU等待
+            if args.fast {
+                cpu_cores.max(12)
+            } else {
+                cpu_cores.max(8)
+            }
+        } else {
+            // CPU模式下：保持平衡以避免过度竞争
+            if args.fast {
+                cpu_cores.max(8)
+            } else {
+                cpu_cores.max(4)
+            }
+        };
+        training_config.num_workers = args.num_workers.max(optimal_workers);
+        
+        println!("使用 {} 个工作线程进行数据加载", training_config.num_workers);
+        
+        // GPU性能优化提示
+        if args.backend == "gpu" {
+            println!("GPU优化配置:");
+            println!("  - 批处理大小: {}", training_config.batch_size);
+            println!("  - 学习率: {:.6}", training_config.lr);
+            println!("  - 工作线程数: {}", training_config.num_workers);
+            println!("  - 高性能GPU模式已启用");
+        }
+        
+        // 默认启用TUI，除非明确禁用或使用快速模式
+        training_config.no_progress = args.no_progress || args.fast;
+        
+        // 如果用户显式请求TUI，则强制启用
+        if args.tui {
+            training_config.no_progress = false;
+            println!("强制启用TUI进度显示");
+        }
+        
+        println!("进度条状态: {}", if training_config.no_progress { "已禁用" } else { "已启用" });
 
         let init_model = if let Some(epoch) = args.resume_epoch {
             let ckpt_path = format!("{}/checkpoint/model-{}.mpk", args.artifact_dir, epoch);
             Some(
                 model_config
-                    .init::<Autodiff<NdArray>>(&device)
+                    .init::<Autodiff<B>>(&device)
                     .load_file(&ckpt_path, &burn::record::CompactRecorder::new(), &device)
                     .expect("Should load checkpoint model"),
             )
         } else if has_model && args.r#continue {
             Some(
                 model_config
-                    .init::<Autodiff<NdArray>>(&device)
+                    .init::<Autodiff<B>>(&device)
                     .load_file(&model_path, &burn::record::CompactRecorder::new(), &device)
                     .expect("Should load model"),
             )
@@ -784,25 +1061,26 @@ fn main() {
                     1_000_000usize
                 };
 
-                let dataloader_train = Arc::new(StreamingSftDataLoader::<Autodiff<NdArray>> {
+                let device_clone = device.clone();
+                let dataloader_train = Arc::new(StreamingSftDataLoader::<Autodiff<B>> {
                     tokenizer: Arc::clone(&tok),
-                    device,
+                    device: device.clone(),
                     batch_size: args.batch_size,
                     seq_len: args.max_seq_len,
                     input: input_train,
                     items_total,
                 });
 
-                let dataloader_valid = Arc::new(StreamingSftDataLoader::<NdArray> {
+                let dataloader_valid = Arc::new(StreamingSftDataLoader::<B> {
                     tokenizer: Arc::clone(&tok),
-                    device,
+                    device: device_clone,
                     batch_size: args.batch_size,
                     seq_len: args.max_seq_len,
                     input: input_valid,
                     items_total,
                 });
 
-                training::train_with_loaders::<Autodiff<NdArray>>(
+                training::train_with_loaders::<Autodiff<B>>(
                     &args.artifact_dir,
                     training_config,
                     device,
@@ -815,7 +1093,7 @@ fn main() {
                 let (tokens_path, mask_path) =
                     build_token_cache_stream(&args, &tokenizer).expect("Should build token cache");
 
-                training::train_from_cache::<Autodiff<NdArray>>(
+                training::train_from_cache::<Autodiff<B>>(
                     &args.artifact_dir,
                     training_config,
                     device,
@@ -831,7 +1109,7 @@ fn main() {
             } else if args.sft_sample_messages {
                 load_sft_messages_sample()
             } else if args.sft_sample {
-                load_sft_sample()
+                load_sft_sample(&args)
             } else {
                 load_corpus(&args).expect("Should load corpus")
             };
@@ -848,7 +1126,7 @@ fn main() {
                     (tokens, mask)
                 };
 
-            training::train::<Autodiff<NdArray>>(
+            training::train::<Autodiff<B>>(
                 &args.artifact_dir,
                 training_config,
                 device,

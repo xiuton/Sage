@@ -10,14 +10,16 @@ use burn::{
     },
 };
 
-use crate::data::{MmapTextDataset, TextBatcher, TextDataset};
-use crate::model::{Model, ModelConfig};
-use crate::tokenizer::Tokenizer;
 use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
+
+use crate::data::{MmapTextDataset, TextBatcher, TextDataset};
+use crate::model::{Model, ModelConfig};
+use crate::tokenizer::Tokenizer;
 
 #[derive(Config)]
 pub struct TrainingConfig {
@@ -33,6 +35,8 @@ pub struct TrainingConfig {
     pub seed: u64,
     #[config(default = 5.0e-4)]
     pub lr: f64,
+    #[config(default = false)]
+    pub no_progress: bool,
 }
 
 pub fn train<B: AutodiffBackend>(
@@ -64,6 +68,10 @@ pub fn train<B: AutodiffBackend>(
     let mask_train = mask[..train_split].to_vec();
     let mask_test = mask[train_split..].to_vec();
 
+    println!("训练数据: {} tokens, 验证数据: {} tokens", tokens_train.len(), tokens_test.len());
+    println!("批量大小: {}, 序列长度: {}", config.batch_size, config.model.max_seq_len);
+    println!("工作线程数: {}", config.num_workers);
+
     let batcher_train = TextBatcher::<B>::new(device.clone());
     let batcher_valid = TextBatcher::<B::InnerBackend>::new(device.clone());
 
@@ -87,21 +95,29 @@ pub fn train<B: AutodiffBackend>(
             config.model.max_seq_len,
         ));
 
-    let learner = LearnerBuilder::new(artifact_dir)
+    let mut learner_builder = LearnerBuilder::new(artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
         .devices(vec![device.clone()])
-        .num_epochs(config.num_epochs)
-        .summary()
+        .num_epochs(config.num_epochs);
+
+    if !config.no_progress {
+        learner_builder = learner_builder.summary();
+    }
+
+    // 使用文件checkpointer，它会自动处理恢复逻辑
+    let learner = learner_builder
         .build(
             init_model.unwrap_or_else(|| config.model.init::<B>(&device)),
             config.optimizer.init(),
             config.lr,
         );
 
+    let start_time = Instant::now();
     let model_trained = learner.fit(dataloader_train, dataloader_test);
+    let elapsed = start_time.elapsed();
 
     model_trained
         .save_file(format!("{}/model", artifact_dir), &CompactRecorder::new())
@@ -113,6 +129,22 @@ pub fn train<B: AutodiffBackend>(
             .join(format!("model-{}.mpk", best_epoch));
         let to = Path::new(artifact_dir).join("best_model.mpk");
         let _ = fs::copy(from, to);
+    }
+
+    // 打印性能统计
+    let total_tokens = tokens.len();
+    let tokens_per_second = total_tokens as f64 / elapsed.as_secs_f64();
+    println!("\n性能统计:");
+    println!("总训练时间: {:?}", elapsed);
+    println!("总处理 tokens: {}", total_tokens);
+    println!("处理速度: {:.2} tokens/sec", tokens_per_second);
+    println!("每轮平均时间: {:?}", elapsed / config.num_epochs as u32);
+    
+    // 计算并显示perplexity
+    if let Some(last_epoch_loss) = find_last_epoch_loss(Path::new(artifact_dir)) {
+        let perplexity = last_epoch_loss.exp();
+        println!("最后一轮训练损失: {:.4}", last_epoch_loss);
+        println!("Perplexity: {:.4}", perplexity);
     }
 }
 
@@ -143,6 +175,10 @@ pub fn train_from_cache<B: AutodiffBackend>(
     let dataset_train = dataset_full.with_range(0, train_split);
     let dataset_test = dataset_full.with_range(train_split, n_tokens);
 
+    println!("训练数据: {} tokens, 验证数据: {} tokens", train_split, n_tokens - train_split);
+    println!("批量大小: {}, 序列长度: {}", config.batch_size, config.model.max_seq_len);
+    println!("工作线程数: {}", config.num_workers);
+
     let batcher_train = TextBatcher::<B>::new(device.clone());
     let batcher_valid = TextBatcher::<B::InnerBackend>::new(device.clone());
 
@@ -158,21 +194,29 @@ pub fn train_from_cache<B: AutodiffBackend>(
         .num_workers(config.num_workers)
         .build(dataset_test);
 
-    let learner = LearnerBuilder::new(artifact_dir)
+    let mut learner_builder = LearnerBuilder::new(artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
         .devices(vec![device.clone()])
-        .num_epochs(config.num_epochs)
-        .summary()
+        .num_epochs(config.num_epochs);
+
+    if !config.no_progress {
+        learner_builder = learner_builder.summary();
+    }
+
+    // 使用文件checkpointer，它会自动处理恢复逻辑
+    let learner = learner_builder
         .build(
             init_model.unwrap_or_else(|| config.model.init::<B>(&device)),
             config.optimizer.init(),
             config.lr,
         );
 
+    let start_time = Instant::now();
     let model_trained = learner.fit(dataloader_train, dataloader_test);
+    let elapsed = start_time.elapsed();
 
     model_trained
         .save_file(format!("{}/model", artifact_dir), &CompactRecorder::new())
@@ -184,6 +228,22 @@ pub fn train_from_cache<B: AutodiffBackend>(
             .join(format!("model-{}.mpk", best_epoch));
         let to = Path::new(artifact_dir).join("best_model.mpk");
         let _ = fs::copy(from, to);
+    }
+
+    // 打印性能统计
+    let total_tokens = n_tokens;
+    let tokens_per_second = total_tokens as f64 / elapsed.as_secs_f64();
+    println!("\n性能统计:");
+    println!("总训练时间: {:?}", elapsed);
+    println!("总处理 tokens: {}", total_tokens);
+    println!("处理速度: {:.2} tokens/sec", tokens_per_second);
+    println!("每轮平均时间: {:?}", elapsed / config.num_epochs as u32);
+    
+    // 计算并显示perplexity
+    if let Some(last_epoch_loss) = find_last_epoch_loss(Path::new(artifact_dir)) {
+        let perplexity = last_epoch_loss.exp();
+        println!("最后一轮训练损失: {:.4}", last_epoch_loss);
+        println!("Perplexity: {:.4}", perplexity);
     }
 }
 
@@ -209,21 +269,34 @@ pub fn train_with_loaders<B: AutodiffBackend>(
 
     B::seed(config.seed);
 
-    let learner = LearnerBuilder::new(artifact_dir)
+    let total_items = dataloader_train.num_items();
+    println!("批量大小: {}, 序列长度: {}", config.batch_size, config.model.max_seq_len);
+    println!("工作线程数: {}", config.num_workers);
+    println!("总训练样本数: {}", total_items);
+
+    let mut learner_builder = LearnerBuilder::new(artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
         .devices(vec![device.clone()])
-        .num_epochs(config.num_epochs)
-        .summary()
+        .num_epochs(config.num_epochs);
+
+    if !config.no_progress {
+        learner_builder = learner_builder.summary();
+    }
+
+    // 使用文件checkpointer，它会自动处理恢复逻辑
+    let learner = learner_builder
         .build(
             init_model.unwrap_or_else(|| config.model.init::<B>(&device)),
             config.optimizer.init(),
             config.lr,
         );
 
+    let start_time = Instant::now();
     let model_trained = learner.fit(dataloader_train, dataloader_valid);
+    let elapsed = start_time.elapsed();
 
     model_trained
         .save_file(format!("{}/model", artifact_dir), &CompactRecorder::new())
@@ -235,6 +308,21 @@ pub fn train_with_loaders<B: AutodiffBackend>(
             .join(format!("model-{}.mpk", best_epoch));
         let to = Path::new(artifact_dir).join("best_model.mpk");
         let _ = fs::copy(from, to);
+    }
+
+    // 打印性能统计
+    let items_per_second = total_items as f64 / elapsed.as_secs_f64();
+    println!("\n性能统计:");
+    println!("总训练时间: {:?}", elapsed);
+    println!("总处理样本数: {}", total_items);
+    println!("处理速度: {:.2} samples/sec", items_per_second);
+    println!("每轮平均时间: {:?}", elapsed / config.num_epochs as u32);
+    
+    // 计算并显示perplexity
+    if let Some(last_epoch_loss) = find_last_epoch_loss(Path::new(artifact_dir)) {
+        let perplexity = last_epoch_loss.exp();
+        println!("最后一轮训练损失: {:.4}", last_epoch_loss);
+        println!("Perplexity: {:.4}", perplexity);
     }
 }
 
@@ -267,4 +355,31 @@ fn read_last_loss(path: &PathBuf) -> Option<f64> {
     let last = text.lines().rev().find(|l| !l.trim().is_empty())?;
     let value = last.split(',').next()?.trim().parse::<f64>().ok()?;
     Some(value)
+}
+
+fn find_last_epoch_loss(artifact_dir: &Path) -> Option<f64> {
+    let train_dir = artifact_dir.join("train");
+    let entries = fs::read_dir(&train_dir).ok()?;
+    
+    let mut max_epoch = None;
+    let mut max_epoch_path = None;
+    
+    for entry in entries {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy();
+        if let Some(epoch_str) = name.strip_prefix("epoch-") {
+            if let Ok(epoch) = epoch_str.parse::<usize>() {
+                if max_epoch.map(|e| epoch > e).unwrap_or(true) {
+                    max_epoch = Some(epoch);
+                    max_epoch_path = Some(path);
+                }
+            }
+        }
+    }
+    
+    max_epoch_path.and_then(|path| {
+        let loss_path = path.join("Loss.log");
+        read_last_loss(&loss_path)
+    })
 }

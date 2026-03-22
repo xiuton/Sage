@@ -45,7 +45,7 @@ impl Dataset<TextItem> for TextDataset {
             if m == 1 {
                 target.push(token_id);
             } else {
-                target.push(0);
+                target.push(0); // 使用pad token作为mask
             }
         }
 
@@ -148,7 +148,7 @@ impl Dataset<TextItem> for MmapTextDataset {
             if m == 1 {
                 target.push(token_id);
             } else {
-                target.push(0);
+                target.push(0); // 使用pad token作为mask
             }
         }
 

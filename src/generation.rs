@@ -14,6 +14,8 @@ pub struct GenerateOptions {
     pub punctuation_penalty: f32,
     pub seed: Option<u64>,
     pub context_len: usize,
+    pub stop_on_user: bool,
+    pub stop_sequences: Vec<String>,
 }
 
 pub fn generate<B: Backend>(
@@ -128,7 +130,28 @@ pub fn generate<B: Backend>(
 
         tokens.push(sampled_idx);
 
+        // Check stop conditions
         if sampled_idx == tokenizer.eos_id {
+            break;
+        }
+
+        // Check if generated text contains stop sequences
+        let current_text = tokenizer.decode(&tokens);
+        
+        // Check for "<user>" sequence if stop_on_user is enabled
+        if options.stop_on_user && current_text.contains("<user>") {
+            break;
+        }
+
+        // Check custom stop sequences
+        let mut should_stop = false;
+        for stop_seq in &options.stop_sequences {
+            if current_text.contains(stop_seq) {
+                should_stop = true;
+                break;
+            }
+        }
+        if should_stop {
             break;
         }
     }

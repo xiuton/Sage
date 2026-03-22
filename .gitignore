@@ -1,4 +1,5 @@
 /target
 /tmp
-sft*.jsonl
+*.jsonl
 *.txt
+/deploy

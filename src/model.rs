@@ -65,6 +65,32 @@ impl ModelConfig {
             n_layers: self.n_layers,
         }
     }
+
+    /// 创建约10M参数的模型配置
+    pub fn small_10m() -> Self {
+        Self {
+            d_model: 512,
+            n_layers: 6,
+            n_heads: 8,
+            d_ff: 2048,
+            vocab_size: 1000,
+            max_seq_len: 256,
+            dropout: 0.1,
+        }
+    }
+
+    /// 创建约30M参数的模型配置
+    pub fn medium_30m() -> Self {
+        Self {
+            d_model: 768,
+            n_layers: 12,
+            n_heads: 12,
+            d_ff: 3072,
+            vocab_size: 1000,
+            max_seq_len: 512,
+            dropout: 0.1,
+        }
+    }
 }
 
 impl<B: Backend> Model<B> {

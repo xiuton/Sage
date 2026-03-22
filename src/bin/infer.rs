@@ -56,21 +56,36 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     chat: bool,
+
+    /// 遇到"用户："时停止生成（适用于chat模式）
+    #[arg(long, default_value_t = true)]
+    stop_on_user: bool,
+
+    /// 自定义停止序列（可多次使用）
+    #[arg(long, use_value_delimiter = true)]
+    stop_sequence: Vec<String>,
 }
 
 fn format_chat_prefix(user_text: &str) -> String {
     let mut out = String::new();
     out.push('\u{0002}');
-    out.push_str("用户：");
-    out.push_str(user_text);
+    out.push_str("<s>");
     out.push('\n');
-    out.push_str("助手：");
+    out.push_str("<user>");
+    out.push_str(user_text);
+    out.push_str("</user>");
+    out.push('\n');
+    out.push_str("<assistant>");
     out
 }
 
 fn extract_assistant_reply(full: &str) -> String {
-    if let Some(idx) = full.rfind("助手：") {
-        return full[idx + "助手：".len()..].trim().to_string();
+    if let Some(idx) = full.rfind("<assistant>") {
+        let start = idx + "<assistant>".len();
+        if let Some(end) = full[start..].find("</assistant>") {
+            return full[start..start + end].trim().to_string();
+        }
+        return full[start..].trim().to_string();
     }
     full.trim().to_string()
 }
@@ -93,7 +108,27 @@ fn main() {
         format!("{}/model.mpk", args.model_dir)
     };
 
-    let training_config: TrainingConfig = TrainingConfig::load(&config_path).unwrap();
+    if !std::path::Path::new(&config_path).exists() {
+        eprintln!("错误：模型配置文件未找到：{}", config_path);
+        eprintln!("请确认指定的 --model-dir 有效，并且已完成训练。");
+        std::process::exit(1);
+    }
+
+    if !std::path::Path::new(&tokenizer_path).exists() {
+        eprintln!("错误：分词器文件未找到：{}", tokenizer_path);
+        eprintln!("请确认指定的 --model-dir 有效，并且已完成训练。");
+        std::process::exit(1);
+    }
+
+    if !std::path::Path::new(&model_path).exists() {
+        eprintln!("错误：模型权重文件未找到：{}", model_path);
+        eprintln!("可选路径为 best_model.mpk 或 model.mpk（如果使用 --use-best 但 first 失败会回退）。");
+        eprintln!("请确认指定的 --model-dir 有效，并且已完成训练。");
+        std::process::exit(1);
+    }
+
+    let training_config: TrainingConfig = TrainingConfig::load(&config_path)
+        .expect("读取 config.json 失败");
     let model_config = training_config.model;
     let requested_context_len = if args.context_len == 0 {
         model_config.max_seq_len
@@ -130,10 +165,11 @@ fn main() {
             }
 
             let input_text = if args.chat {
-                history.push_str("用户：");
+                history.push_str("\n<user>");
                 history.push_str(user_prompt);
+                history.push_str("</user>");
                 history.push('\n');
-                history.push_str("助手：");
+                history.push_str("<assistant>");
                 history.clone()
             } else {
                 user_prompt.to_string()
@@ -148,6 +184,8 @@ fn main() {
                 punctuation_penalty: args.punctuation_penalty,
                 seed: args.seed,
                 context_len,
+                stop_on_user: args.stop_on_user,
+                stop_sequences: args.stop_sequence.clone(),
             };
             let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
             if args.chat {
@@ -175,6 +213,8 @@ fn main() {
             punctuation_penalty: args.punctuation_penalty,
             seed: args.seed,
             context_len,
+            stop_on_user: args.stop_on_user,
+            stop_sequences: args.stop_sequence.clone(),
         };
         let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
         if args.chat {

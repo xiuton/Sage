@@ -86,6 +86,37 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --sft-max-records
 cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_bpe --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
 ```
 
+**B5. 快速开发模式（用于测试和迭代）**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_quick --quick-dev --force --reset-tokenizer
+```
+
+快速开发模式会自动设置：
+- 训练轮数：3（而非默认50）
+- 批次大小：8（而非默认32）
+- 学习率：0.001（而非默认0.0001）
+- 保留进度条显示（便于观察训练进度）
+
+**B6. 超快速开发模式 + BPE（闪电验证）**
+
+```bash
+cargo run --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_ultra_quick --ultra-quick --force --reset-tokenizer --use-bpe --bpe-vocab-size 1000 --max-seq-len 128
+```
+
+超快速开发模式会自动设置：
+- 训练轮数：1
+- 批次大小：2
+- 学习率：0.01（极高）
+- 数据限制：100条（如果未指定--sft-max-records）
+- 训练时间通常在10-30秒内完成
+
+**B7. 跳过 BPE 的快速验证**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_no_bpe_quick --quick-dev --force --reset-tokenizer
+```
+
 **B2. JSONL 的 schema 示例**
 
 prompt/response：
@@ -132,6 +163,8 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--sft-sample`：使用内置 prompt/response 样例数据（约 100 条）。用于快速测试 SFT 训练流程。
 - `--sft-sample-messages`：使用内置 messages 样例数据（约 100 条）。用于测试多轮对话格式的 SFT 训练。
 - `--sft-max-records <SFT_MAX_RECORDS>`：最多读取多少条 SFT 记录（默认 `0` 不限制）。
+- `--fast`：启用高速训练模式（更大batch、更高num_workers、关闭TUI）。在数据量大、CPU多核场景下可显著缩短训练时间。
+- `--num-workers <NUM_WORKERS>`：数据加载线程数（默认 `4`；`--fast` 设为最少8）。
 - `--artifact-dir <ARTIFACT_DIR>`：输出目录（默认 `./tmp/sage_model_formal`）。存放训练产物，包括模型权重、tokenizer、配置和checkpoint。
 - `--num-epochs <NUM_EPOCHS>`：训练 epoch（默认 `50`）。完整数据集被训练的轮数。更多的 epochs 可以提高模型性能，但也增加训练时间。建议监控验证损失来确定合适的 epoch 数。
 - `--batch-size <BATCH_SIZE>`：batch size（默认 `32`）。控制每次训练迭代处理的样本数量。较大的 batch-size（32-64）可以提高训练稳定性，减少梯度噪声，但需要更多内存；较小的 batch-size（8-16）可以节省内存，但可能导致训练不稳定。建议根据你的 GPU/CPU 内存情况选择合适的值。
@@ -143,10 +176,16 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--continue`：从 `<artifact-dir>/model.mpk` 加载权重继续训练。用于增量训练或微调。
 - `--resume-epoch <RESUME_EPOCH>`：从 `<artifact-dir>/checkpoint/model-<epoch>.mpk` 加载权重继续训练。用于从特定checkpoint恢复训练。
 - `--reset-tokenizer`：忽略已有 `tokenizer.json`，从当前语料重新构建词表。当语料发生重大变化时使用。
+- `--quick-dev`：启用快速开发模式（3轮训练，小批量8，更高学习率1e-3）。用于快速迭代和测试训练流程。
+- `--ultra-quick`：启用超快速开发模式（1轮训练，极小批量2，极高学习率1e-2，自动限制数据为100条）。用于闪电验证代码修改和BPE调参，训练通常在10-30秒内完成。
+- `--no-progress`：禁用进度条和TUI显示，输出更清洁的日志。适合重定向输出或CI/CD环境。
+- `--tui`：强制启用TUI进度显示（注意：在Windows PowerShell中可能不工作，建议使用Windows Terminal或VS Code终端）
+- `--backend <BACKEND>`：训练后端选择，可选值为 `cpu` 或 `gpu`（默认 `cpu`）。GPU后端需要支持WGPU的显卡。
 
 补充说明：
 
 - `--corpus-dir` 会递归读取所有 `.txt` 并按路径排序拼接；每个文件后追加换行。
+- TUI进度条在Windows PowerShell中可能无法正常显示，这是由于终端兼容性问题。建议使用Windows Terminal或VS Code终端以获得更好的TUI体验。
 - `--max-bytes` 同时作用于 `--corpus` / `--corpus-dir` / `--sft-jsonl`（用于限制读入大小）。
 - `--batch-size` 控制每次训练迭代处理的样本数量。较大的 batch-size（32-64）可以提高训练稳定性，减少梯度噪声，但需要更多内存；较小的 batch-size（8-16）可以节省内存，但可能导致训练不稳定。建议根据你的 GPU/CPU 内存情况选择合适的值。
 - `--use-bpe` 启用 BPE 分词器，能显著减少高频字符的重复问题（如中文中的"解"字符重复），建议在遇到重复生成问题时使用。
