@@ -810,20 +810,23 @@ fn main() {
         std::process::exit(130);
     }).expect("Error setting Ctrl+C handler");
 
-    // 初始化日志
-    if std::env::var("RUST_LOG").is_err() {
-        unsafe { std::env::set_var("RUST_LOG", "info") };
-    }
-    env_logger::init();
-
     // 设置环境变量改善Burn TUI显示
     unsafe {
         std::env::set_var("BURN_TUI_NO_CLEAR", "1");
         std::env::set_var("TERM", "xterm-256color");
+        std::env::set_var("BURN_TUI_ENABLED", "1");
+        std::env::set_var("BURN_TUI_FORCE", "1");
+        std::env::set_var("WGPU_LOG", "off");
         
         // 禁用burn框架的实验日志记录器，解决Windows下file logger安装失败的问题
         std::env::set_var("BURN_EXPERIMENT_LOGGER_DISABLED", "1");
+        
+        // 设置日志级别
+        std::env::set_var("RUST_LOG", "burn_train=info,wgpu_core=off,burn_core=off");
     }
+    
+    // 初始化日志
+    env_logger::init();
 
     // 加载或创建分词器
     let tokenizer_path = format!("{}/tokenizer.json", args.artifact_dir);
@@ -990,7 +993,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         training_config.no_progress = args.no_progress || args.fast;
         
         // 如果用户显式请求TUI，则强制启用
-        if args.tui {
+        if args.tui || args.force_tui {
             training_config.no_progress = false;
             println!("强制启用TUI进度显示");
         }

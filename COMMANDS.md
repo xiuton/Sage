@@ -310,7 +310,7 @@ cargo run --release --bin gen_sft -- --out <path> --count <n> --seed <seed>
 
 参数：
 
-- `--out <path>`：输出文件（默认 `sft_demo_5000.jsonl`）
+- `--out <path>`：输出文件（默认 `data/sft_demo.jsonl`）
 - `--count <n>`：生成条数（默认 `5000`）
 - `--seed <seed>`：随机种子（默认 `42`）
 
@@ -327,9 +327,57 @@ cargo run --release --bin gen_sft -- --out sft_demo_20000.jsonl --count 20000 --
 
 ---
 
-## 4) 常见问题
+## 4) gen_web_sft（生成真实问答语料）
 
-### 4.1 为什么会出现大量标点？
+运行：
+
+```bash
+cargo run --release --bin gen_web_sft -- [OPTIONS]
+```
+
+这是一个用于生成真实问答语料的工具，支持从本地数据和网络API获取数据，生成格式为 `{"messages":[...], "id": ..., "domain": "..."}`，与 `train --sft-jsonl` 兼容。
+
+参数：
+
+- `--out <path>`：输出文件（默认 `data/web_sft_demo.jsonl`）
+- `--count <n>`：生成条数（默认 `100`）
+- `--seed <seed>`：随机种子（默认 `42`）
+- `--web`：启用网络数据获取
+- `--web-only`：仅使用网络数据（不包含本地数据）
+
+环境变量（可选）：
+
+- `STACKEXCHANGE_API_KEY`：Stack Exchange API密钥（用于获取Stack Overflow技术问答）
+- `GITHUB_TOKEN`：GitHub个人访问令牌（用于获取热门开源项目信息）
+
+支持的数据源：
+
+- **本地预设数据**：内置高质量问答对（人工智能、编程语言、Web开发等）
+- **Stack Exchange API**：Stack Overflow技术问答（编程、开发相关问题）
+- **GitHub API**：热门开源项目信息（Rust项目介绍、描述）
+- **公开技术知识库**：技术概念解释（容器、DevOps、架构设计等）
+
+示例：
+
+```bash
+# 生成真实问答语料（本地数据）
+cargo run --release --bin gen_web_sft -- --out real_qa.jsonl --count 500 --seed 42
+
+# 生成真实问答语料（本地+网络数据）
+cargo run --release --bin gen_web_sft -- --out real_qa_web.jsonl --count 500 --web --seed 42
+
+# 仅使用网络数据
+cargo run --release --bin gen_web_sft -- --out web_only.jsonl --count 500 --web --web-only --seed 42
+
+# 完整参数示例
+cargo run --release --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 --web --seed 123
+```
+
+---
+
+## 5) 常见问题
+
+### 5.1 为什么会出现大量标点？
 
 小模型 + 字符级 tokenizer + 语料风格会导致标点容易被高概率采样。可以通过：
 
@@ -338,11 +386,11 @@ cargo run --release --bin gen_sft -- --out sft_demo_20000.jsonl --count 20000 --
 - 增大 `--repetition-penalty`
 - 使用更多真实 SFT 数据训练
 
-### 4.2 为什么 `--context-len` 不能超过 `max_seq_len`？
+### 5.2 为什么 `--context-len` 不能超过 `max_seq_len`？
 
 因为位置 embedding 只为 `max_seq_len` 个位置训练/初始化，超过会越界。infer 会自动截断，但如果你确实需要更长上下文，请在训练时提高 `--max-seq-len` 并重新训练。
 
-### 4.3 Windows 下遇到 LNK1104 无法写入 infer.exe？
+### 5.3 Windows 下遇到 LNK1104 无法写入 infer.exe？
 
 这是 Windows 常见的文件锁问题：之前运行的 exe 进程未完全退出，或被杀软/索引占用。
 

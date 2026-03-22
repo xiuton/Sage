@@ -3,3 +3,4 @@
 *.jsonl
 *.txt
 /deploy
+/data
