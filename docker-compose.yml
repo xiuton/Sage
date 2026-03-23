@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  sage-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+
+  sage-api-gpu:
+    build: 
+      context: .
+      dockerfile: Dockerfile.gpu
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./models:/app/models
+      - /dev/shm:/dev/shm
+    environment:
+      - RUST_LOG=info
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
