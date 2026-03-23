@@ -231,21 +231,15 @@ impl Tokenizer {
                 for (token_idx, (start, end)) in encoding.get_offsets().iter().enumerate() {
                     let token_text = &text[*start..*end];
 
-                    // 检查token是否包含完整的标记序列
-                    if token_text.contains("用户：") {
+                    // 检查token是否包含标记序列
+                    if token_text.contains("<user>") {
                         in_assistant = false;
-                    } else if token_text.contains("助手：") {
+                    } else if token_text.contains("</user>") {
+                        in_assistant = false;
+                    } else if token_text.contains("<assistant>") {
                         in_assistant = true;
-                    }
-
-                    // 检查token是否是标记序列的一部分
-                    if *end >= 3 {
-                        let potential_mark = &text[(*end).saturating_sub(3)..*end];
-                        if potential_mark == "用户：" {
-                            in_assistant = false;
-                        } else if potential_mark == "助手：" {
-                            in_assistant = true;
-                        }
+                    } else if token_text.contains("</assistant>") {
+                        in_assistant = false;
                     }
 
                     assistant_mask[token_idx] = if in_assistant { 1 } else { 0 };
