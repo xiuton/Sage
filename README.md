@@ -148,7 +148,7 @@ Sage/
 ### 模型（Transformer LM）
 
 - Token Embedding + 可学习位置 Embedding
-- Transformer Encoder（多层、多头注意力、FFN）
+- **Transformer Encoder（Encoder-only Transformer 架构）**（多层、多头注意力、FFN）
 - 语言模型输出头（Linear → vocab logits）
 - 参数量统计（估算）
 - **多规模模型配置**：

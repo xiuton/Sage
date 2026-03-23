@@ -28,10 +28,10 @@ cargo run --release --bin train -- [OPTIONS]
 
 训练输入可以来自三类来源（建议只选其一）：
 
-- **纯文本语料 LM 训练**
+- **纯文本语料 LM 训练（预训练）**
   - `--corpus <path>`：单文件（默认 `corpus_cn.txt`）
   - `--corpus-dir <dir>`：目录（递归读取所有 `.txt`）
-- **SFT 训练（JSONL）**
+- **SFT 训练（指令微调）**
   - `--sft-jsonl <path>`：每行一条 JSON
   - 支持两种 schema：
     - `{"prompt":"...","response":"..."}`
@@ -50,19 +50,31 @@ cargo run --release --bin train -- [OPTIONS]
 
 ### 1.2 常用示例
 
-**A. 目录语料训练（续写 LM）**
+**A. 目录语料训练（续写 LM - 预训练）**
 
 ```bash
 cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --artifact-dir ./tmp/lm_cn --num-epochs 5 --max-seq-len 64
 ```
 
-**A2. 目录语料训练（限制读取大小 + 快速验证）**
+**A2. 目录语料训练（限制读取大小 + 快速验证 - 预训练）**
 
 ```bash
 cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --artifact-dir ./tmp/lm_cn_quick --num-epochs 1 --max-seq-len 64 --max-bytes 10000000 --force --reset-tokenizer
 ```
 
-**B. 使用 JSONL 做 SFT**
+**A3. 大规模预训练（使用 GPU 和流式处理）**
+
+```bash
+cargo run --release --bin train -- --corpus-dir ./corpus --max-bytes 1000000000 --stream --backend gpu --model-size 30m --artifact-dir ./models/large_pretrained
+```
+
+**A4. 基本预训练（使用 CPU）**
+
+```bash
+cargo run --release --bin train -- --corpus corpus_cn.txt --max-seq-len 256 --num-epochs 50 --batch-size 32 --lr 1e-4 --artifact-dir ./models/pretrained
+```
+
+**B. 使用 JSONL 做 SFT（指令微调）**
 
 ```bash
 cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer

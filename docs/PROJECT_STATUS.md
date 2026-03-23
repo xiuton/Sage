@@ -35,7 +35,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 ### 2.2 模型（Transformer LM）
 
 - Token Embedding + Position Embedding
-- Transformer Encoder + LM Head
+- Transformer Encoder + LM Head（**Encoder-only Transformer 架构**）
 - TrainStep / ValidStep 接入 Burn Learner
 - **多规模模型配置**：
   - `default`：约 1M 参数（默认）
@@ -52,9 +52,9 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 
 ### 2.4 训练（LM/SFT）
 
-- LM 训练：单文件 `--corpus`、目录多文件 `--corpus-dir`
+- **LM 预训练**：单文件 `--corpus`、目录多文件 `--corpus-dir`
 - 读取上限：`--max-bytes`
-- SFT 训练：`--sft-jsonl`（兼容 `prompt/response` 或 `messages`）
+- **SFT 训练**：`--sft-jsonl`（兼容 `prompt/response` 或 `messages`）
 - 内置 SFT 样例：`--sft-sample` / `--sft-sample-messages`
 - SFT “只学助手回复”：
   - 通过 mask 把非助手回复位置的 target 置为 pad，并在 loss 中忽略 pad token
