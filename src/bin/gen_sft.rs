@@ -1,3 +1,4 @@
+use sage::utils::common::{arg_value, get_unique_file_path};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json::json;
 use std::{
@@ -7,42 +8,28 @@ use std::{
     path::PathBuf,
 };
 
-fn arg_value(args: &[String], key: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == key)
-        .and_then(|i| args.get(i + 1))
-        .cloned()
-}
-
-fn get_unique_file_path(mut path: PathBuf) -> PathBuf {
-    if !path.exists() {
-        return path;
-    }
-    
-    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let parent = path.parent().unwrap_or(std::path::Path::new(""));
-    
-    for i in 1.. {
-        let new_name = if extension.is_empty() {
-            format!("{}_{}", stem, i)
-        } else {
-            format!("{}_{}.{}", stem, i, extension)
-        };
-        let mut new_path = parent.join(new_name);
-        if !new_path.exists() {
-            return new_path;
-        }
-    }
-    
-    path
-}
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let out = arg_value(&args, "--out")
-        .map(PathBuf::from)
+        .map(|path| {
+            let path_buf = PathBuf::from(path);
+            // 检查路径是否包含目录部分
+            if path_buf.parent().is_none() || path_buf.parent() == Some(std::path::Path::new("")) {
+                // 只指定了文件名，保存到 data 目录
+                let mut data_path = PathBuf::from("data");
+                std::fs::create_dir_all(&data_path).expect("create data directory");
+                data_path.push(path_buf);
+                data_path
+            } else {
+                // 指定了完整路径，保存到指定目录
+                // 确保目标目录存在
+                if let Some(parent) = path_buf.parent() {
+                    std::fs::create_dir_all(parent).expect("create target directory");
+                }
+                path_buf
+            }
+        })
         .unwrap_or_else(|| {
             // 默认保存到data目录
             let mut path = PathBuf::from("data");
@@ -66,46 +53,99 @@ fn main() {
 
     // 扩展主题列表
     let topics = [
-        "Rust", "Python", "JavaScript", "Go", "C++",
-        "网络", "数据库", "算法", "数据结构", "人工智能",
-        "数学", "物理", "化学", "英语", "中文",
-        "写作", "演讲", "沟通", "旅行", "美食",
-        "健康", "健身", "心理学", "历史", "哲学",
-        "古诗词", "文学", "艺术", "音乐", "电影",
-        "科技", "经济", "政治", "法律", "教育",
+        "Rust",
+        "Python",
+        "JavaScript",
+        "Go",
+        "C++",
+        "网络",
+        "数据库",
+        "算法",
+        "数据结构",
+        "人工智能",
+        "数学",
+        "物理",
+        "化学",
+        "英语",
+        "中文",
+        "写作",
+        "演讲",
+        "沟通",
+        "旅行",
+        "美食",
+        "健康",
+        "健身",
+        "心理学",
+        "历史",
+        "哲学",
+        "古诗词",
+        "文学",
+        "艺术",
+        "音乐",
+        "电影",
+        "科技",
+        "经济",
+        "政治",
+        "法律",
+        "教育",
     ];
 
     // 学习资源类型
     let resources = [
-        "书籍", "课程", "视频", "文档", "博客",
-        "论坛", "社区", "项目", "教程", "实战",
+        "书籍", "课程", "视频", "文档", "博客", "论坛", "社区", "项目", "教程", "实战",
     ];
 
     // 技术概念
     let concepts = [
-        "机器学习", "深度学习", "神经网络", "自然语言处理",
-        "计算机视觉", "强化学习", "大数据", "云计算",
-        "区块链", "物联网", "人工智能", "自动化",
+        "机器学习",
+        "深度学习",
+        "神经网络",
+        "自然语言处理",
+        "计算机视觉",
+        "强化学习",
+        "大数据",
+        "云计算",
+        "区块链",
+        "物联网",
+        "人工智能",
+        "自动化",
     ];
 
     // 编程语言特性
     let features = [
-        "并发", "内存安全", "性能", "生态系统",
-        "类型系统", "错误处理", "包管理", "跨平台",
-        "编译速度", "学习曲线", "社区支持", "文档质量",
+        "并发",
+        "内存安全",
+        "性能",
+        "生态系统",
+        "类型系统",
+        "错误处理",
+        "包管理",
+        "跨平台",
+        "编译速度",
+        "学习曲线",
+        "社区支持",
+        "文档质量",
     ];
 
     // 项目类型
     let project_types = [
-        "Web应用", "移动应用", "桌面应用", "后端服务",
-        "数据分析", "机器学习", "游戏开发", "嵌入式系统",
-        "自动化脚本", "工具开发", "API服务", "微服务",
+        "Web应用",
+        "移动应用",
+        "桌面应用",
+        "后端服务",
+        "数据分析",
+        "机器学习",
+        "游戏开发",
+        "嵌入式系统",
+        "自动化脚本",
+        "工具开发",
+        "API服务",
+        "微服务",
     ];
 
     // 对话语气
     let tones = [
-        "正式", "友好", "专业", "简洁",
-        "详细", "轻松", "幽默", "严谨",
+        "正式", "友好", "专业", "简洁", "详细", "轻松", "幽默", "严谨",
     ];
 
     for i in 0..count {

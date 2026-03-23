@@ -271,6 +271,16 @@ cargo run --release --bin train -- --ultra-quick
 cargo run --release --bin train -- --fast
 ```
 
+### 3.4.1 流式数据加载
+
+```bash
+# 启用流式数据加载（落盘 token cache）
+cargo run --release --bin train -- --sft-jsonl large_dataset.jsonl --stream
+
+# 直接流式加载（不落盘，边读边训）
+cargo run --release --bin train -- --sft-jsonl large_dataset.jsonl --stream --stream-direct
+```
+
 ### 3.5 训练配置参数
 
 | 参数 | 说明 | 默认值 |
@@ -283,6 +293,8 @@ cargo run --release --bin train -- --fast
 | `--backend` | 后端（cpu/gpu） | cpu |
 | `--model-size` | 模型大小 | default |
 | `--training-mode` | 训练模式 | general |
+| `--stream` | 启用流式数据加载 | false |
+| `--stream-direct` | 直接流式加载（不落盘） | false |
 
 ### 3.6 训练监控
 

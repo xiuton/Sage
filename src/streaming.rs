@@ -36,7 +36,8 @@ struct SftMessage {
 }
 
 fn sft_template(prompt: &str, response: &str) -> String {
-    let mut out = String::new();
+    let estimated_len = 4 + "用户：".len() + prompt.len() + 1 + "助手：".len() + response.len() + 2;
+    let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
     out.push_str("用户：");
     out.push_str(prompt);
@@ -49,7 +50,8 @@ fn sft_template(prompt: &str, response: &str) -> String {
 }
 
 fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
-    let mut out = String::new();
+    let estimated_len: usize = messages.iter().map(|m| m.content.len() + 10).sum();
+    let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
 
     let mut has_assistant = false;
@@ -81,7 +83,7 @@ fn sft_sample_from_json_line(line: &str) -> Option<String> {
 
     let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
     let messages = v.get("messages")?;
-    let messages = serde_json::from_value::<Vec<SftMessage>>(messages.clone()).ok()?;
+    let messages: Vec<SftMessage> = serde_json::from_value(messages.clone()).ok()?;
     sft_messages_template(&messages)
 }
 
@@ -101,7 +103,10 @@ fn load_sft_sample() -> String {
         },
     ];
 
-    let mut out = String::new();
+    let estimated_len: usize = samples.iter()
+        .map(|rec| rec.prompt.len() + rec.response.len() + 20)
+        .sum();
+    let mut out = String::with_capacity(estimated_len);
     for rec in samples {
         out.push_str(&sft_template(&rec.prompt, &rec.response));
     }
@@ -142,7 +147,11 @@ fn load_sft_messages_sample() -> String {
         ],
     ];
 
-    let mut out = String::new();
+    let estimated_len: usize = samples.iter()
+        .flat_map(|msgs| msgs.iter())
+        .map(|m| m.content.len() + 10)
+        .sum();
+    let mut out = String::with_capacity(estimated_len);
     for messages in samples {
         if let Some(sample) = sft_messages_template(&messages) {
             out.push_str(&sample);
@@ -241,13 +250,7 @@ impl<B: Backend> StreamingSftIterator<B> {
                 self.current_mask = mask;
                 self.record_index += 1;
             }
-            SftInput::Jsonl {
-                max_bytes,
-                max_records,
-                start_record,
-                end_record,
-                ..
-            } => {
+            SftInput::Jsonl { path: _, max_bytes, max_records, start_record, end_record, .. } => {
                 let reader = self.reader.as_mut()?;
                 let mut line = String::new();
                 loop {
@@ -265,9 +268,14 @@ impl<B: Backend> StreamingSftIterator<B> {
                     if trimmed.is_empty() {
                         continue;
                     }
+                    
                     let sample = match sft_sample_from_json_line(trimmed) {
                         Some(v) => v,
-                        None => continue,
+                        None => {
+                            // 记录错误但继续处理
+                            eprintln!("Warning: Failed to parse line: {}", trimmed);
+                            continue;
+                        }
                     };
 
                     let current_record = self.record_index;
@@ -337,30 +345,24 @@ impl<B: Backend> Iterator for StreamingSftIterator<B> {
     type Item = TextBatch<B>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut inputs = Vec::with_capacity(self.loader.batch_size);
-        let mut targets = Vec::with_capacity(self.loader.batch_size);
+        let mut inputs_flat = Vec::with_capacity(self.loader.batch_size * self.loader.seq_len);
+        let mut targets_flat = Vec::with_capacity(self.loader.batch_size * self.loader.seq_len);
 
         for _ in 0..self.loader.batch_size {
             let (input, target) = self.next_item()?;
-            inputs.push(
-                Tensor::<B, 1, Int>::from_data(
-                    TensorData::from(input.as_slice()),
-                    &self.loader.device,
-                )
-                .unsqueeze::<2>(),
-            );
-            targets.push(
-                Tensor::<B, 1, Int>::from_data(
-                    TensorData::from(target.as_slice()),
-                    &self.loader.device,
-                )
-                .unsqueeze::<2>(),
-            );
+            inputs_flat.extend_from_slice(&input);
+            targets_flat.extend_from_slice(&target);
         }
 
         self.items_processed = self.items_processed.saturating_add(self.loader.batch_size);
-        let inputs = Tensor::cat(inputs, 0);
-        let targets = Tensor::cat(targets, 0);
+        let inputs = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(inputs_flat, [self.loader.batch_size, self.loader.seq_len]),
+            &self.loader.device,
+        );
+        let targets = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(targets_flat, [self.loader.batch_size, self.loader.seq_len]),
+            &self.loader.device,
+        );
         Some(TextBatch { inputs, targets })
     }
 }

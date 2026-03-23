@@ -1,11 +1,7 @@
-use burn::prelude::Backend;
-use burn::backend::{
-    Autodiff,
-    ndarray::NdArray,
-    wgpu::Wgpu,
-};
+use burn::backend::{Autodiff, ndarray::NdArray, wgpu::Wgpu};
 use burn::module::Module;
 use burn::optim::AdamConfig;
+use burn::prelude::Backend;
 use sage::{
     model::ModelConfig,
     streaming::{SftInput, StreamingSftDataLoader},
@@ -13,8 +9,6 @@ use sage::{
     training::{self, TrainingConfig},
 };
 use serde::Deserialize;
-use ctrlc;
-use num_cpus;
 use std::{
     collections::BTreeSet,
     fs,
@@ -212,11 +206,20 @@ fn load_corpus(args: &Args) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
-fn sft_template(prompt: &str, response: &str) -> String {
-    let mut out = String::new();
+fn create_template(system: Option<&str>, prompt: &str, response: &str) -> String {
+    let mut out = String::with_capacity(512); // 预分配合理容量
     out.push('\u{0002}');
     out.push_str("<s>");
-    out.push_str("\n<user>");
+    
+    if let Some(system_msg) = system {
+        out.push('\n');
+        out.push_str("<system>");
+        out.push_str(system_msg);
+        out.push_str("</system>");
+    }
+    
+    out.push('\n');
+    out.push_str("<user>");
     out.push_str(prompt);
     out.push_str("</user>");
     out.push('\n');
@@ -226,46 +229,24 @@ fn sft_template(prompt: &str, response: &str) -> String {
     out.push('\u{0003}');
     out.push('\n');
     out
+}
+
+fn sft_template(prompt: &str, response: &str) -> String {
+    create_template(None, prompt, response)
 }
 
 /// 代码生成训练模板 - 优化代码生成场景
 fn code_template(prompt: &str, response: &str) -> String {
-    let mut out = String::new();
-    out.push('\u{0002}');
-    out.push_str("<s>");
-    out.push_str("\n<system>你是一个专业的代码助手，擅长编写高质量、可读性强的代码。</system>");
-    out.push_str("\n<user>");
-    out.push_str(prompt);
-    out.push_str("</user>");
-    out.push('\n');
-    out.push_str("<assistant>");
-    out.push_str(response);
-    out.push_str("</assistant>");
-    out.push('\u{0003}');
-    out.push('\n');
-    out
+    create_template(Some("你是一个专业的代码助手，擅长编写高质量、可读性强的代码。"), prompt, response)
 }
 
 /// 数学推理训练模板 - 优化数学问题解决场景
 fn math_template(prompt: &str, response: &str) -> String {
-    let mut out = String::new();
-    out.push('\u{0002}');
-    out.push_str("<s>");
-    out.push_str("\n<system>你是一个数学专家，擅长解决各类数学问题并提供详细的解题步骤。</system>");
-    out.push_str("\n<user>");
-    out.push_str(prompt);
-    out.push_str("</user>");
-    out.push('\n');
-    out.push_str("<assistant>");
-    out.push_str(response);
-    out.push_str("</assistant>");
-    out.push('\u{0003}');
-    out.push('\n');
-    out
+    create_template(Some("你是一个数学专家，擅长解决各类数学问题并提供详细的解题步骤。"), prompt, response)
 }
 
 fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
-    let mut out = String::new();
+    let mut out = String::with_capacity(1024); // 预分配合理容量
     out.push('\u{0002}');
     out.push_str("<s>");
 
@@ -295,14 +276,10 @@ fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
             _ => {}
         }
     }
-    
+
     out.push('\n');
 
-    if has_assistant {
-        Some(out)
-    } else {
-        None
-    }
+    if has_assistant { Some(out) } else { None }
 }
 
 fn load_sft_jsonl(args: &Args, path: &str) -> io::Result<String> {
@@ -513,7 +490,7 @@ fn collect_vocab_chars_stream(args: &Args) -> io::Result<Vec<char>> {
     }
 
     if args.sft_sample {
-        let text = load_sft_sample(&args);
+        let text = load_sft_sample(args);
         for ch in text.chars() {
             set.insert(ch);
         }
@@ -654,7 +631,7 @@ fn build_token_cache_stream(args: &Args, tokenizer: &Tokenizer) -> io::Result<(S
     }
 
     if args.sft_sample {
-        let text = load_sft_sample(&args);
+        let text = load_sft_sample(args);
         let (ids, mask) = tokenizer.encode_with_assistant_mask(&text);
         for (&id, &m) in ids.iter().zip(mask.iter()) {
             write_u32_le(&mut tokens_file, id as u32)?;
@@ -808,7 +785,8 @@ fn main() {
         // Give some time for cleanup, then exit
         std::thread::sleep(std::time::Duration::from_secs(2));
         std::process::exit(130);
-    }).expect("Error setting Ctrl+C handler");
+    })
+    .expect("Error setting Ctrl+C handler");
 
     // 设置环境变量改善Burn TUI显示
     unsafe {
@@ -817,14 +795,14 @@ fn main() {
         std::env::set_var("BURN_TUI_ENABLED", "1");
         std::env::set_var("BURN_TUI_FORCE", "1");
         std::env::set_var("WGPU_LOG", "off");
-        
+
         // 禁用burn框架的实验日志记录器，解决Windows下file logger安装失败的问题
         std::env::set_var("BURN_EXPERIMENT_LOGGER_DISABLED", "1");
-        
+
         // 设置日志级别
         std::env::set_var("RUST_LOG", "burn_train=info,wgpu_core=off,burn_core=off");
     }
-    
+
     // 初始化日志
     env_logger::init();
 
@@ -863,17 +841,17 @@ fn main() {
         "10m" => {
             println!("使用约10M参数的模型配置");
             ModelConfig::small_10m()
-        },
+        }
         "30m" => {
             println!("使用约30M参数的模型配置");
             ModelConfig::medium_30m()
-        },
+        }
         _ => {
             println!("使用默认模型配置（约1M参数）");
             ModelConfig::new()
         }
     };
-    
+
     // 更新动态参数
     model_config.vocab_size = tokenizer.vocab_size;
     model_config.max_seq_len = args.max_seq_len;
@@ -919,13 +897,19 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
     if !has_model || args.force || args.r#continue || args.resume_epoch.is_some() {
         if args.ultra_quick {
-            println!("启用超快速开发模式：1轮训练，极小批量(2)，极高学习率，只用100条数据，适合闪电验证");
+            println!(
+                "启用超快速开发模式：1轮训练，极小批量(2)，极高学习率，只用100条数据，适合闪电验证"
+            );
         } else if args.quick_dev {
             println!("启用快速开发模式：1轮训练，超小批量(4)，超高学习率，适合快速验证");
         }
         println!("未发现已训练模型，开始正式训练...");
         let mut training_config = TrainingConfig::new(model_config.clone(), AdamConfig::new());
-        training_config.num_epochs = if args.ultra_quick { 1 } else if args.quick_dev { 1 } else { args.num_epochs };
+        training_config.num_epochs = if args.ultra_quick || args.quick_dev {
+            1
+        } else {
+            args.num_epochs
+        };
         // 根据后端类型优化批处理大小
         training_config.batch_size = if args.backend == "gpu" {
             // GPU优化：更大的批处理大小以提高利用率
@@ -950,15 +934,24 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 args.batch_size
             }
         };
-        
+
         // 根据后端类型优化学习率
         training_config.lr = if args.backend == "gpu" {
-            // GPU可以使用更高的学习率
-            if args.ultra_quick { 2e-2 } else if args.quick_dev { 2e-2 } else if args.fast { args.lr * 3.0 } else { args.lr * 1.5 }
+            if args.ultra_quick || args.quick_dev {
+                2e-2
+            } else if args.fast {
+                args.lr * 3.0
+            } else {
+                args.lr * 1.5
+            }
+        } else if args.ultra_quick || args.quick_dev {
+            1e-2
+        } else if args.fast {
+            args.lr * 2.0
         } else {
-            if args.ultra_quick { 1e-2 } else if args.quick_dev { 1e-2 } else if args.fast { args.lr * 2.0 } else { args.lr }
+            args.lr
         };
-        
+
         // 根据后端类型优化并行工作线程数
         let cpu_cores = num_cpus::get();
         let optimal_workers = if args.backend == "gpu" {
@@ -977,9 +970,12 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             }
         };
         training_config.num_workers = args.num_workers.max(optimal_workers);
-        
-        println!("使用 {} 个工作线程进行数据加载", training_config.num_workers);
-        
+
+        println!(
+            "使用 {} 个工作线程进行数据加载",
+            training_config.num_workers
+        );
+
         // GPU性能优化提示
         if args.backend == "gpu" {
             println!("GPU优化配置:");
@@ -988,17 +984,24 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             println!("  - 工作线程数: {}", training_config.num_workers);
             println!("  - 高性能GPU模式已启用");
         }
-        
+
         // 默认启用TUI，除非明确禁用或使用快速模式
         training_config.no_progress = args.no_progress || args.fast;
-        
+
         // 如果用户显式请求TUI，则强制启用
         if args.tui || args.force_tui {
             training_config.no_progress = false;
             println!("强制启用TUI进度显示");
         }
-        
-        println!("进度条状态: {}", if training_config.no_progress { "已禁用" } else { "已启用" });
+
+        println!(
+            "进度条状态: {}",
+            if training_config.no_progress {
+                "已禁用"
+            } else {
+                "已启用"
+            }
+        );
 
         let init_model = if let Some(epoch) = args.resume_epoch {
             let ckpt_path = format!("{}/checkpoint/model-{}.mpk", args.artifact_dir, epoch);

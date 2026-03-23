@@ -87,6 +87,7 @@ cargo run --release --bin train -- --stream --stream-direct --sft-jsonl your_dat
 
 ```json
 {"messages":[
+  {"role":"system","content":"你是一个有帮助的助手。"},
   {"role":"user","content":"你是谁？"},
   {"role":"assistant","content":"我是一个用 Rust 训练出来的小模型。"}
 ]}
@@ -94,28 +95,55 @@ cargo run --release --bin train -- --stream --stream-direct --sft-jsonl your_dat
 
 规则：
 
-- `role` 当前只识别：`user` / `assistant`
-- 其他 role 会被忽略
-- 多轮对话推荐顺序：`user → assistant → user → assistant ...`
+- `role` 支持：`system` / `user` / `assistant`
+- `system` 角色用于设置系统提示词（可选）
+- 多轮对话推荐顺序：`system → user → assistant → user → assistant ...`
 
 ### 2.3 Sage 内部对话模板（训练时）
 
-Sage 会把 SFT 数据转换成内部模板文本进行训练（示意）：
+Sage 会把 SFT 数据转换成内部模板文本进行训练：
+
+**通用对话模式（general）**：
 
 ```
-\u{0002}用户：<prompt>\n助手：<response>\u{0003}\n
+\u{0002}<s>
+<user>用户问题</user>
+<assistant>助手回复</assistant>\u{0003}
+```
+
+**代码生成模式（code）**：
+
+```
+\u{0002}<s>
+<system>你是一个专业的代码助手，擅长编写高质量、可读性强的代码。</system>
+<user>用户问题</user>
+<assistant>助手回复</assistant>\u{0003}
+```
+
+**数学推理模式（math）**：
+
+```
+\u{0002}<s>
+<system>你是一个数学专家，擅长解决各类数学问题并提供详细的解题步骤。</system>
+<user>用户问题</user>
+<assistant>助手回复</assistant>\u{0003}
 ```
 
 其中：
 
 - `\u{0002}`：BOS（开始标记）
 - `\u{0003}`：EOS（结束标记）
+- `<s>`：序列开始标签
+- `<user>` / `</user>`：用户内容标签
+- `<assistant>` / `</assistant>`：助手内容标签
+- `<system>` / `</system>`：系统提示标签（可选）
 
 ### 2.4 “只学助手回复”（mask loss）
 
 为了让模型更像“助手”，Sage 在 SFT 训练中会只对“助手回复段”计算学习信号：
 
-- 用户段（`用户：...`）对应的 target 会被置为 pad token（id=0）
+- 用户段（`<user>...</user>`）对应的 target 会被置为 pad token（id=0）
+- 系统提示段（`<system>...</system>`）对应的 target 也会被置为 pad token
 - loss 会忽略 pad token
 
 这能显著减少“模型复读用户问题”的倾向。

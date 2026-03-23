@@ -4,3 +4,4 @@ pub mod model;
 pub mod streaming;
 pub mod tokenizer;
 pub mod training;
+pub mod utils;

@@ -33,31 +33,23 @@ impl Dataset<TextItem> for TextDataset {
             return None;
         }
 
-        let input = self.data[index..index + self.seq_len]
+        let input: Vec<i32> = self.data[index..index + self.seq_len]
             .iter()
             .map(|&v| v as i32)
-            .collect::<Vec<_>>();
+            .collect();
 
         let mut target = Vec::with_capacity(self.seq_len);
         for j in 0..self.seq_len {
             let token_id = self.data[index + 1 + j] as i32;
             let m = *self.mask.get(index + 1 + j).unwrap_or(&1);
-            if m == 1 {
-                target.push(token_id);
-            } else {
-                target.push(0); // 使用pad token作为mask
-            }
+            target.push(if m == 1 { token_id } else { 0 });
         }
 
         Some(TextItem { input, target })
     }
 
     fn len(&self) -> usize {
-        if self.data.len() <= self.seq_len {
-            0
-        } else {
-            self.data.len() - self.seq_len - 1
-        }
+        self.data.len().saturating_sub(self.seq_len + 1)
     }
 }
 
@@ -75,11 +67,8 @@ impl MmapTextDataset {
         mask_path: impl AsRef<Path>,
         seq_len: usize,
     ) -> Self {
-        let tokens_path = tokens_path.as_ref().to_path_buf();
-        let mask_path = mask_path.as_ref().to_path_buf();
-
-        let tokens_file = File::open(&tokens_path).expect("Open tokens file");
-        let mask_file = File::open(&mask_path).expect("Open mask file");
+        let tokens_file = File::open(tokens_path).expect("Open tokens file");
+        let mask_file = File::open(mask_path).expect("Open mask file");
 
         let tokens = Arc::new(unsafe { Mmap::map(&tokens_file).expect("Mmap tokens") });
         let mask = Arc::new(unsafe { Mmap::map(&mask_file).expect("Mmap mask") });
@@ -116,16 +105,16 @@ impl MmapTextDataset {
     fn token_at(&self, index: usize) -> usize {
         let i = self.start + index;
         let off = i * 4;
-        let b0 = self.tokens[off] as u32;
-        let b1 = (self.tokens[off + 1] as u32) << 8;
-        let b2 = (self.tokens[off + 2] as u32) << 16;
-        let b3 = (self.tokens[off + 3] as u32) << 24;
-        (b0 | b1 | b2 | b3) as usize
+        u32::from_le_bytes([
+            self.tokens[off],
+            self.tokens[off + 1],
+            self.tokens[off + 2],
+            self.tokens[off + 3],
+        ]) as usize
     }
 
     fn mask_at(&self, index: usize) -> u8 {
-        let i = self.start + index;
-        self.mask[i]
+        self.mask[self.start + index]
     }
 }
 
@@ -137,19 +126,13 @@ impl Dataset<TextItem> for MmapTextDataset {
         }
 
         let mut input = Vec::with_capacity(self.seq_len);
+        let mut target = Vec::with_capacity(self.seq_len);
+
         for j in 0..self.seq_len {
             input.push(self.token_at(index + j) as i32);
-        }
-
-        let mut target = Vec::with_capacity(self.seq_len);
-        for j in 0..self.seq_len {
             let token_id = self.token_at(index + 1 + j) as i32;
             let m = self.mask_at(index + 1 + j);
-            if m == 1 {
-                target.push(token_id);
-            } else {
-                target.push(0); // 使用pad token作为mask
-            }
+            target.push(if m == 1 { token_id } else { 0 });
         }
 
         Some(TextItem { input, target })
@@ -157,11 +140,7 @@ impl Dataset<TextItem> for MmapTextDataset {
 
     fn len(&self) -> usize {
         let total = self.end.saturating_sub(self.start);
-        if total <= self.seq_len {
-            0
-        } else {
-            total - self.seq_len - 1
-        }
+        total.saturating_sub(self.seq_len + 1)
     }
 }
 
@@ -184,22 +163,25 @@ pub struct TextBatch<B: Backend> {
 
 impl<B: Backend> Batcher<TextItem, TextBatch<B>> for TextBatcher<B> {
     fn batch(&self, items: Vec<TextItem>) -> TextBatch<B> {
-        let inputs = items
-            .iter()
-            .map(|item| TensorData::from(item.input.as_slice()))
-            .map(|data| Tensor::<B, 1, Int>::from_data(data, &self.device))
-            .map(|tensor| tensor.unsqueeze::<2>())
-            .collect::<Vec<_>>();
+        let batch_size = items.len();
+        let seq_len = items.first().map(|v| v.input.len()).unwrap_or(0);
 
-        let targets = items
-            .iter()
-            .map(|item| TensorData::from(item.target.as_slice()))
-            .map(|data| Tensor::<B, 1, Int>::from_data(data, &self.device))
-            .map(|tensor| tensor.unsqueeze::<2>())
-            .collect::<Vec<_>>();
+        let mut inputs_flat = Vec::with_capacity(batch_size * seq_len);
+        let mut targets_flat = Vec::with_capacity(batch_size * seq_len);
 
-        let inputs = Tensor::cat(inputs, 0);
-        let targets = Tensor::cat(targets, 0);
+        for item in items.iter() {
+            inputs_flat.extend_from_slice(&item.input);
+            targets_flat.extend_from_slice(&item.target);
+        }
+
+        let inputs = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(inputs_flat, [batch_size, seq_len]),
+            &self.device,
+        );
+        let targets = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(targets_flat, [batch_size, seq_len]),
+            &self.device,
+        );
 
         TextBatch { inputs, targets }
     }

@@ -83,7 +83,7 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --sft-max-records
 **B4. 使用 BPE 分词器训练 SFT（减少重复字符问题）**
 
 ```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_bpe --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
+cargo run --release --bin train -- --sft-jsonl data/web_sft_demo.jsonl --artifact-dir ./tmp/sft_bpe --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
 ```
 
 **B5. 快速开发模式（用于测试和迭代）**
@@ -115,6 +115,30 @@ cargo run --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sf
 
 ```bash
 cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_no_bpe_quick --quick-dev --force --reset-tokenizer
+```
+
+**B8. 使用 10M 模型训练（更大参数量）**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_10m --model-size 10m --use-bpe --bpe-vocab-size 10000 --num-epochs 30 --batch-size 16 --max-seq-len 256 --force --reset-tokenizer
+```
+
+**B9. 代码生成模式训练**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl code_data.jsonl --artifact-dir ./tmp/sft_code --training-mode code --use-bpe --bpe-vocab-size 8000 --num-epochs 50 --batch-size 32 --max-seq-len 512 --force --reset-tokenizer
+```
+
+**B10. 数学推理模式训练**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl math_data.jsonl --artifact-dir ./tmp/sft_math --training-mode math --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
+```
+
+**B11. GPU 后端训练**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_gpu --backend gpu --use-bpe --num-epochs 20 --force --reset-tokenizer
 ```
 
 **B2. JSONL 的 schema 示例**
@@ -181,6 +205,9 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--no-progress`：禁用进度条和TUI显示，输出更清洁的日志。适合重定向输出或CI/CD环境。
 - `--tui`：强制启用TUI进度显示（注意：在Windows PowerShell中可能不工作，建议使用Windows Terminal或VS Code终端）
 - `--backend <BACKEND>`：训练后端选择，可选值为 `cpu` 或 `gpu`（默认 `cpu`）。GPU后端需要支持WGPU的显卡。
+- `--model-size <MODEL_SIZE>`：模型大小配置，可选值为 `default`（约1M参数）、`10m`（约10M参数）、`30m`（约30M参数）。默认 `default`。更大的模型需要更多内存和训练时间，但可能获得更好的效果。
+- `--training-mode <TRAINING_MODE>`：训练模式，可选值为 `general`（通用对话）、`code`（代码生成）、`math`（数学推理）。默认 `general`。不同模式会使用不同的对话模板优化特定场景。
+- `--force-tui`：强制启用TUI进度显示，即使在可能不支持的环境中。注意：在某些终端中可能导致显示问题。
 
 补充说明：
 
@@ -258,8 +285,7 @@ cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --interactiv
 **D. 采样参数推荐（减少标点、减少重复）**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "给我学习 Rust 的建议" \
-  -n 120 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.6 -s 42
+cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "给我学习 Rust 的建议" -n 120 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.6 -s 42
 ```
 
 **E. context window（避免超长输入/生成导致越界）**
@@ -269,6 +295,18 @@ cargo run --bin infer -- --model-dir ./tmp/sft_cn --prompt "天地玄黄" --cont
 ```
 
 如果 `context-len` 超过训练时 `max_seq_len`，程序会自动截断到 `max_seq_len` 并提示。
+
+**F. 使用自定义停止序列**
+
+```bash
+cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "介绍一下Rust语言" -n 200 --stop-sequence "总结" --stop-sequence "END"
+```
+
+**G. 禁用 stop-on-user（允许模型生成用户输入）**
+
+```bash
+cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "模拟一段对话" -n 200 --stop-on-user false
+```
 
 ### 2.2 参数说明（来自 `infer --help`）
 
@@ -284,7 +322,9 @@ cargo run --bin infer -- --model-dir ./tmp/sft_cn --prompt "天地玄黄" --cont
 - `--use-best`：优先加载 `best_model.mpk`（若不存在则回退到 `model.mpk`）。
 - `--context-len <CONTEXT_LEN>`：上下文窗口长度（默认 `0`=自动使用 `model.max_seq_len`；如果传得比 `max_seq_len` 大，会自动截断避免越界）。
 - `-i, --interactive`：交互模式。
-- `--chat`：chat 模式（使用 `用户/助手` 模板生成，并从输出中提取“助手回复”部分）。
+- `--chat`：chat 模式（使用 `用户/助手` 模板生成，并从输出中提取"助手回复"部分）。
+- `--stop-on-user`：遇到 `<user>` 标签时停止生成（默认 `true`）。适用于 chat 模式，防止模型生成下一轮用户输入。
+- `--stop-sequence <STOP_SEQUENCE>`：自定义停止序列（可多次使用）。当生成内容包含指定序列时立即停止。例如：`--stop-sequence "用户：" --stop-sequence "END"`。
 
 补充说明：
 - `-t, --temperature`：控制生成随机性。值越大（>1.0）生成更随机/创造性，值越小（<1.0）生成更保守/确定性。0.7-0.9 适合大多数应用。

@@ -12,19 +12,15 @@ use std::io::{self, Write};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// 要用于推理的提示词。
     #[arg(long)]
     prompt: Option<String>,
 
-    /// 生成新 token 的数量。
     #[arg(short = 'n', long, default_value_t = 50)]
     num_tokens: usize,
 
-    /// 控制生成随机性的温度。
     #[arg(short = 't', long, default_value_t = 0.8)]
     temperature: f32,
 
-    /// Top-K 采样中的 K 值。
     #[arg(short = 'k', long, default_value_t = 10)]
     top_k: usize,
 
@@ -40,7 +36,6 @@ struct Args {
     #[arg(short = 's', long)]
     seed: Option<u64>,
 
-    /// 模型权重和配置所在的目录。
     #[arg(long, default_value = "./tmp/sage_model_formal")]
     model_dir: String,
 
@@ -50,44 +45,55 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     context_len: usize,
 
-    /// 进入交互模式，可以连续输入提示词。
     #[arg(short, long, default_value_t = false)]
     interactive: bool,
 
     #[arg(long, default_value_t = false)]
     chat: bool,
 
-    /// 遇到"用户："时停止生成（适用于chat模式）
     #[arg(long, default_value_t = true)]
     stop_on_user: bool,
 
-    /// 自定义停止序列（可多次使用）
     #[arg(long, use_value_delimiter = true)]
     stop_sequence: Vec<String>,
 }
 
+impl Args {
+    fn gen_options(&self, context_len: usize) -> GenerateOptions {
+        GenerateOptions {
+            max_new_tokens: self.num_tokens,
+            temperature: self.temperature,
+            top_k: self.top_k,
+            top_p: self.top_p,
+            repetition_penalty: self.repetition_penalty,
+            punctuation_penalty: self.punctuation_penalty,
+            seed: self.seed,
+            context_len,
+            stop_on_user: self.stop_on_user,
+            stop_sequences: self.stop_sequence.clone(),
+        }
+    }
+}
+
 fn format_chat_prefix(user_text: &str) -> String {
-    let mut out = String::new();
+    let estimated_len = 10 + user_text.len();
+    let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
-    out.push_str("<s>");
-    out.push('\n');
-    out.push_str("<user>");
+    out.push_str("<s>\n<user>");
     out.push_str(user_text);
-    out.push_str("</user>");
-    out.push('\n');
-    out.push_str("<assistant>");
+    out.push_str("</user>\n<assistant>");
     out
 }
 
 fn extract_assistant_reply(full: &str) -> String {
-    if let Some(idx) = full.rfind("<assistant>") {
-        let start = idx + "<assistant>".len();
-        if let Some(end) = full[start..].find("</assistant>") {
-            return full[start..start + end].trim().to_string();
-        }
+    let Some(idx) = full.rfind("<assistant>") else {
+        return full.trim().to_string();
+    };
+    let start = idx + "<assistant>".len();
+    let Some(end) = full[start..].find("</assistant>") else {
         return full[start..].trim().to_string();
-    }
-    full.trim().to_string()
+    };
+    full[start..start + end].trim().to_string()
 }
 
 fn main() {
@@ -122,13 +128,15 @@ fn main() {
 
     if !std::path::Path::new(&model_path).exists() {
         eprintln!("错误：模型权重文件未找到：{}", model_path);
-        eprintln!("可选路径为 best_model.mpk 或 model.mpk（如果使用 --use-best 但 first 失败会回退）。");
+        eprintln!(
+            "可选路径为 best_model.mpk 或 model.mpk（如果使用 --use-best 但 first 失败会回退）。"
+        );
         eprintln!("请确认指定的 --model-dir 有效，并且已完成训练。");
         std::process::exit(1);
     }
 
-    let training_config: TrainingConfig = TrainingConfig::load(&config_path)
-        .expect("读取 config.json 失败");
+    let training_config: TrainingConfig =
+        TrainingConfig::load(&config_path).expect("读取 config.json 失败");
     let model_config = training_config.model;
     let requested_context_len = if args.context_len == 0 {
         model_config.max_seq_len
@@ -175,18 +183,7 @@ fn main() {
                 user_prompt.to_string()
             };
 
-            let gen_options = GenerateOptions {
-                max_new_tokens: args.num_tokens,
-                temperature: args.temperature,
-                top_k: args.top_k,
-                top_p: args.top_p,
-                repetition_penalty: args.repetition_penalty,
-                punctuation_penalty: args.punctuation_penalty,
-                seed: args.seed,
-                context_len,
-                stop_on_user: args.stop_on_user,
-                stop_sequences: args.stop_sequence.clone(),
-            };
+            let gen_options = args.gen_options(context_len);
             let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
             if args.chat {
                 let reply = extract_assistant_reply(&generated);
@@ -197,25 +194,14 @@ fn main() {
                 println!("生成结果: \"{}\"\n", generated);
             }
         }
-    } else if let Some(prompt) = args.prompt {
+    } else if let Some(ref prompt) = args.prompt {
         println!("--- 模型生成 ---");
         let input_text = if args.chat {
             format_chat_prefix(&prompt)
         } else {
             prompt.clone()
         };
-        let gen_options = GenerateOptions {
-            max_new_tokens: args.num_tokens,
-            temperature: args.temperature,
-            top_k: args.top_k,
-            top_p: args.top_p,
-            repetition_penalty: args.repetition_penalty,
-            punctuation_penalty: args.punctuation_penalty,
-            seed: args.seed,
-            context_len,
-            stop_on_user: args.stop_on_user,
-            stop_sequences: args.stop_sequence.clone(),
-        };
+        let gen_options = args.gen_options(context_len);
         let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
         if args.chat {
             println!("用户: \"{}\"", prompt);

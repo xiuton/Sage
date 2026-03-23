@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
 use tokenizers::decoders::byte_level::ByteLevel as ByteLevelDecoder;
@@ -29,6 +29,7 @@ pub struct Tokenizer {
     char_to_id: HashMap<char, usize>,
     id_to_char: HashMap<usize, char>,
     bpe_tokenizer: Option<HFTokenizer>,
+    bpe_id_to_token: HashMap<usize, String>,
     pub vocab_size: usize,
     pub pad_id: usize,
     pub unk_id: usize,
@@ -37,21 +38,18 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    pub fn new(text: &str) -> Self {
-        let mut chars: Vec<char> = text.chars().collect();
-        chars.sort();
-        chars.dedup();
+    const SPECIAL_TOKENS: [char; 4] = ['\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}'];
 
+    fn build_char_vocab(chars: Vec<char>) -> (HashMap<char, usize>, HashMap<usize, char>) {
         let mut char_to_id = HashMap::new();
         let mut id_to_char = HashMap::new();
 
-        let special_tokens = ['\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}'];
-        for (id, &c) in special_tokens.iter().enumerate() {
+        for (id, &c) in Self::SPECIAL_TOKENS.iter().enumerate() {
             char_to_id.insert(c, id);
             id_to_char.insert(id, c);
         }
 
-        let mut current_id = special_tokens.len();
+        let mut current_id = Self::SPECIAL_TOKENS.len();
         for &c in chars.iter() {
             if let std::collections::hash_map::Entry::Vacant(e) = char_to_id.entry(c) {
                 e.insert(current_id);
@@ -60,6 +58,15 @@ impl Tokenizer {
             }
         }
 
+        (char_to_id, id_to_char)
+    }
+
+    pub fn new(text: &str) -> Self {
+        let mut chars: Vec<char> = text.chars().collect();
+        chars.sort();
+        chars.dedup();
+
+        let (char_to_id, id_to_char) = Self::build_char_vocab(chars);
         let vocab_size = char_to_id.len();
 
         Self {
@@ -67,6 +74,7 @@ impl Tokenizer {
             char_to_id,
             id_to_char,
             bpe_tokenizer: None,
+            bpe_id_to_token: HashMap::new(),
             vocab_size,
             pad_id: 0,
             unk_id: 1,
@@ -76,40 +84,41 @@ impl Tokenizer {
     }
 
     pub fn new_bpe(text: &str, vocab_size: usize) -> Self {
+        use tokenizers::models::ModelWrapper;
         use tokenizers::models::TrainerWrapper;
         use tokenizers::pre_tokenizers::PreTokenizerWrapper;
-        use tokenizers::models::ModelWrapper;
 
-        // Create initial BPE model with empty vocab and merges
         let vocab = HashMap::new();
         let merges = Vec::new();
         let bpe_model = BPE::new(vocab, merges);
 
-        // Create tokenizer with the model
         let mut tokenizer = HFTokenizer::new(ModelWrapper::BPE(bpe_model));
 
-        // Set up pre-tokenizer
         let byte_level_pre_tokenizer = ByteLevelPreTokenizer::new(true, true, true);
         tokenizer.with_pre_tokenizer(PreTokenizerWrapper::ByteLevel(byte_level_pre_tokenizer));
 
-        // Set up decoder
         tokenizer.with_decoder(ByteLevelDecoder::default());
 
-        // Create trainer
         let trainer = BpeTrainer::new(2, vocab_size);
 
-        // Train the tokenizer
         tokenizer
             .train(&mut TrainerWrapper::BpeTrainer(trainer), text.lines())
             .expect("BPE training failed");
 
         let vocab_size = tokenizer.get_vocab_size(true);
+        
+        let bpe_id_to_token: HashMap<usize, String> = tokenizer
+            .get_vocab(true)
+            .into_iter()
+            .map(|(tok, id)| (id as usize, tok))
+            .collect();
 
         Self {
             tokenizer_type: TokenizerType::Bpe,
             char_to_id: HashMap::new(),
             id_to_char: HashMap::new(),
             bpe_tokenizer: Some(tokenizer),
+            bpe_id_to_token,
             vocab_size,
             pad_id: 0,
             unk_id: 1,
@@ -122,24 +131,7 @@ impl Tokenizer {
         chars.sort();
         chars.dedup();
 
-        let mut char_to_id = HashMap::new();
-        let mut id_to_char = HashMap::new();
-
-        let special_tokens = ['\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}'];
-        for (id, &c) in special_tokens.iter().enumerate() {
-            char_to_id.insert(c, id);
-            id_to_char.insert(id, c);
-        }
-
-        let mut current_id = special_tokens.len();
-        for &c in chars.iter() {
-            if let std::collections::hash_map::Entry::Vacant(e) = char_to_id.entry(c) {
-                e.insert(current_id);
-                id_to_char.insert(current_id, c);
-                current_id += 1;
-            }
-        }
-
+        let (char_to_id, id_to_char) = Self::build_char_vocab(chars);
         let vocab_size = char_to_id.len();
 
         Self {
@@ -147,6 +139,7 @@ impl Tokenizer {
             char_to_id,
             id_to_char,
             bpe_tokenizer: None,
+            bpe_id_to_token: HashMap::new(),
             vocab_size,
             pad_id: 0,
             unk_id: 1,
@@ -163,8 +156,13 @@ impl Tokenizer {
                 .collect(),
             TokenizerType::Bpe => {
                 if let Some(tokenizer) = &self.bpe_tokenizer {
-                    let encoding = tokenizer.encode(text, false).unwrap();
-                    encoding.get_ids().iter().map(|&id| id as usize).collect()
+                    match tokenizer.encode(text, false) {
+                        Ok(encoding) => encoding.get_ids().iter().map(|&id| id as usize).collect(),
+                        Err(e) => {
+                            eprintln!("Warning: Failed to encode text '{}': {}", text, e);
+                            Vec::new()
+                        }
+                    }
                 } else {
                     Vec::new()
                 }
@@ -218,44 +216,42 @@ impl Tokenizer {
                     .as_ref()
                     .expect("BPE tokenizer should exist");
 
-                let encoding = hf_tokenizer.encode(text, false).unwrap();
-                let ids = encoding.get_ids().iter().map(|&id| id as usize).collect::<Vec<_>>();
+                let encoding = hf_tokenizer.encode(text, false).expect("Failed to encode text");
+                let ids = encoding
+                    .get_ids()
+                    .iter()
+                    .map(|&id| id as usize)
+                    .collect::<Vec<_>>();
 
-                let mut assistant_mask_bytes = vec![false; text.len()];
-                let mut last3: [char; 3] = ['\0', '\0', '\0'];
-                let mut assistant = false;
+                // 查找所有 "助手：" 和 "用户：" 序列的位置
+                let mut assistant_mask = vec![0u8; ids.len()];
+                let mut in_assistant = false;
 
-                for (byte_idx, ch) in text.char_indices() {
-                    last3 = [last3[1], last3[2], ch];
-                    if last3 == ['助', '手', '：'] {
-                        assistant = true;
-                        continue;
-                    } else if last3 == ['用', '户', '：'] {
-                        assistant = false;
-                        continue;
+                // 直接在原始文本中查找标记，然后映射到token位置
+                for (token_idx, (start, end)) in encoding.get_offsets().iter().enumerate() {
+                    let token_text = &text[*start..*end];
+
+                    // 检查token是否包含完整的标记序列
+                    if token_text.contains("用户：") {
+                        in_assistant = false;
+                    } else if token_text.contains("助手：") {
+                        in_assistant = true;
                     }
-                    if assistant {
-                        for offset in 0..ch.len_utf8() {
-                            if byte_idx + offset < assistant_mask_bytes.len() {
-                                assistant_mask_bytes[byte_idx + offset] = true;
-                            }
+
+                    // 检查token是否是标记序列的一部分
+                    if *end >= 3 {
+                        let potential_mark = &text[(*end).saturating_sub(3)..*end];
+                        if potential_mark == "用户：" {
+                            in_assistant = false;
+                        } else if potential_mark == "助手：" {
+                            in_assistant = true;
                         }
                     }
+
+                    assistant_mask[token_idx] = if in_assistant { 1 } else { 0 };
                 }
 
-                let mut token_mask = Vec::with_capacity(ids.len());
-                for (start, end) in encoding.get_offsets() {
-                    let mut is_assistant = false;
-                    for idx in *start..*end {
-                        if idx < assistant_mask_bytes.len() && assistant_mask_bytes[idx] {
-                            is_assistant = true;
-                            break;
-                        }
-                    }
-                    token_mask.push(if is_assistant { 1 } else { 0 });
-                }
-
-                (ids, token_mask)
+                (ids, assistant_mask)
             }
         }
     }
@@ -281,16 +277,7 @@ impl Tokenizer {
     pub fn token_for_id(&self, id: usize) -> Option<String> {
         match self.tokenizer_type {
             TokenizerType::Char => self.id_to_char.get(&id).map(|c| c.to_string()),
-            TokenizerType::Bpe => {
-                if let Some(tokenizer) = &self.bpe_tokenizer {
-                    tokenizer
-                        .get_vocab(true)
-                        .into_iter()
-                        .find_map(|(tok, tok_id)| if tok_id as usize == id { Some(tok) } else { None })
-                } else {
-                    None
-                }
-            }
+            TokenizerType::Bpe => self.bpe_id_to_token.get(&id).cloned(),
         }
     }
 
@@ -326,7 +313,9 @@ impl Tokenizer {
             }
             TokenizerType::Bpe => {
                 if let Some(tokenizer) = &self.bpe_tokenizer {
-                    tokenizer.save(path, false).expect("Should save BPE tokenizer");
+                    tokenizer
+                        .save(path, false)
+                        .expect("Should save BPE tokenizer");
                 }
                 let mut meta = HashMap::new();
                 meta.insert("tokenizer_type", "bpe");
@@ -343,18 +332,22 @@ impl Tokenizer {
         if Path::new(&meta_path).exists() {
             let meta_text = std::fs::read_to_string(&meta_path)?;
             let meta_value: serde_json::Value = serde_json::from_str(&meta_text)?;
-            if meta_value
-                .get("tokenizer_type")
-                .and_then(|v| v.as_str())
-                == Some("bpe")
-            {
+            if meta_value.get("tokenizer_type").and_then(|v| v.as_str()) == Some("bpe") {
                 let tokenizer = HFTokenizer::from_file(path).expect("Should load BPE tokenizer");
                 let vocab_size = tokenizer.get_vocab_size(true);
+                
+                let bpe_id_to_token: HashMap<usize, String> = tokenizer
+                    .get_vocab(true)
+                    .into_iter()
+                    .map(|(tok, id)| (id as usize, tok))
+                    .collect();
+                
                 return Ok(Self {
                     tokenizer_type: TokenizerType::Bpe,
                     char_to_id: HashMap::new(),
                     id_to_char: HashMap::new(),
                     bpe_tokenizer: Some(tokenizer),
+                    bpe_id_to_token,
                     vocab_size,
                     pad_id: 0,
                     unk_id: 1,
@@ -365,12 +358,14 @@ impl Tokenizer {
         }
 
         let json = std::fs::read_to_string(path)?;
-        let raw: CharTokenizerData = serde_json::from_str(&json).expect("Should deserialize tokenizer");
+        let raw: CharTokenizerData =
+            serde_json::from_str(&json).expect("Should deserialize tokenizer");
         Ok(Self {
             tokenizer_type: TokenizerType::Char,
             char_to_id: raw.char_to_id,
             id_to_char: raw.id_to_char,
             bpe_tokenizer: None,
+            bpe_id_to_token: HashMap::new(),
             vocab_size: raw.vocab_size,
             pad_id: raw.pad_id,
             unk_id: raw.unk_id,

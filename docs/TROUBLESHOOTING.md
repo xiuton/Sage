@@ -284,3 +284,95 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 - 快速开发模式仅用于测试，不要用于生产训练
 - 训练结果可能不如完整参数调优的模型
 - 如果需要高质量模型，请使用完整训练参数
+
+---
+
+## 11) GPU 训练崩溃：`wgpu error: Validation Error` / `Not enough memory left`
+
+### 现象
+
+- 训练启动后很快 panic
+- 典型报错包含：`In Device::create_buffer` 与 `Not enough memory left`
+
+### 原因
+
+- GPU 显存不足（batch 太大、序列太长、模型太大、或者同时跑了其他占显存程序）。
+- 旧版本在构建 batch 时会产生大量小的 GPU buffer 分配，容易触发显存分配失败。
+
+### 解决方案
+
+1) 降低显存压力（推荐按顺序尝试）：
+
+- 降低 `--batch-size`（例如 8/16）
+- 降低 `--max-seq-len`（例如 64/128）
+- 不要开启 `--fast`（会提高 batch/worker/lr）
+
+2) 使用 CPU 后端验证流程：
+
+```bash
+cargo run --release --bin train -- --backend cpu [其他参数]
+```
+
+3) 更新到最新代码并重新编译：
+
+- 已优化 batch 构建方式，减少 GPU 端临时分配，缓解该类 OOM。
+
+---
+
+## 12) 流式数据加载问题
+
+### 12.1 流式加载速度慢
+
+#### 现象
+
+- 使用 `--stream` 或 `--stream-direct` 时训练速度明显慢于普通模式
+
+#### 原因
+
+- 流式加载需要实时处理数据，IO 操作可能成为瓶颈
+- `--stream-direct` 模式下，每次迭代都需要重新读取和处理数据
+
+#### 解决方案
+
+1) 对于大数据集，优先使用 `--stream`（落盘缓存）而非 `--stream-direct`
+2) 确保存储设备性能足够（SSD 优于 HDD）
+3) 考虑增加 `--batch-size` 以提高数据处理效率
+
+### 12.2 流式加载内存占用仍然很高
+
+#### 现象
+
+- 使用 `--stream` 后内存占用仍然超出预期
+
+#### 原因
+
+- 数据预处理和 tokenization 过程中可能产生临时内存占用
+- 批处理过程中需要在内存中保存当前批次的数据
+
+#### 解决方案
+
+1) 降低 `--batch-size` 以减少内存占用
+2) 确保 `--max-seq-len` 设置合理，避免过长序列
+3) 对于非常大的数据集，考虑分批次处理或使用更小的模型配置
+
+### 12.3 流式加载报错：`Failed to read JSONL`
+
+#### 现象
+
+- 流式加载过程中出现 JSON 解析错误
+
+#### 原因
+
+- JSONL 文件格式不正确或包含无效的 JSON 记录
+- 文件编码问题（非 UTF-8）
+
+#### 解决方案
+
+1) 验证 JSONL 文件格式是否正确，确保每行都是有效的 JSON
+2) 使用 UTF-8 编码保存 JSONL 文件
+3) 对于大文件，可以使用工具（如 `jq`）验证文件格式
+
+```bash
+# 使用 jq 验证 JSONL 文件
+cat your_data.jsonl | jq -c '. | select(. != null)'
+```

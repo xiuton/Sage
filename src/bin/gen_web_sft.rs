@@ -1,3 +1,4 @@
+use sage::utils::common::{arg_value, get_unique_file_path};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json::json;
 use std::{
@@ -6,37 +7,6 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
-
-fn arg_value(args: &[String], key: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == key)
-        .and_then(|i| args.get(i + 1))
-        .cloned()
-}
-
-fn get_unique_file_path(mut path: PathBuf) -> PathBuf {
-    if !path.exists() {
-        return path;
-    }
-    
-    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let parent = path.parent().unwrap_or(std::path::Path::new(""));
-    
-    for i in 1.. {
-        let new_name = if extension.is_empty() {
-            format!("{}_{}", stem, i)
-        } else {
-            format!("{}_{}.{}", stem, i, extension)
-        };
-        let mut new_path = parent.join(new_name);
-        if !new_path.exists() {
-            return new_path;
-        }
-    }
-    
-    path
-}
 
 // 真实问答数据集
 struct QAPair {
@@ -176,33 +146,32 @@ fn get_local_qa_pairs() -> Vec<QAPair> {
     ]
 }
 
-
-
 // 联网获取问答数据
 fn fetch_web_qa_pairs() -> Vec<QAPair> {
     println!("正在从公开技术知识库获取问答数据...");
-    
+
     let mut qa_pairs = Vec::new();
-    
+
     // 获取公开数据集（大量高质量技术问答）
     let public_data = fetch_from_public_datasets();
     let public_count = public_data.len();
     qa_pairs.extend(public_data);
     println!("从公开技术知识库获取了 {} 条数据", public_count);
-    
 
-    
     println!("成功获取 {} 条网络问答数据", qa_pairs.len());
     qa_pairs
 }
 
 // 从Stack Exchange API获取数据
-fn fetch_from_stackexchange(api_key: Option<&str>) -> Result<Vec<QAPair>, Box<dyn std::error::Error>> {
+#[allow(dead_code)]
+fn fetch_from_stackexchange(
+    api_key: Option<&str>,
+) -> Result<Vec<QAPair>, Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::new();
-    
+
     // Stack Exchange API端点
     let url = "https://api.stackexchange.com/2.3/questions";
-    
+
     // 构建请求参数
     let mut params = vec![
         ("site", "stackoverflow"),
@@ -211,55 +180,49 @@ fn fetch_from_stackexchange(api_key: Option<&str>) -> Result<Vec<QAPair>, Box<dy
         ("sort", "votes"),
         ("filter", "withbody"),
     ];
-    
+
     if let Some(key) = api_key {
         params.push(("key", key));
     }
-    
+
     // 发送请求
     let response = client.get(url).query(&params).send()?;
-    
+
     if !response.status().is_success() {
         eprintln!("Stack Exchange API请求失败: {}", response.status());
         return Ok(Vec::new());
     }
-    
+
     // 解析响应
     let data: serde_json::Value = response.json()?;
     let mut qa_pairs = Vec::new();
-    
+
     if let Some(items) = data["items"].as_array() {
         for item in items {
-            if let (Some(title), Some(_body), Some(answers)) = (
-                item["title"].as_str(),
-                item["body"].as_str(),
-                item["answers"].as_array(),
-            ) {
-                // 提取第一个回答作为答案
-                if let Some(best_answer) = answers.first() {
-                    if let Some(answer_body) = best_answer["body"].as_str() {
-                        // 清理HTML标签
-                        let cleaned_question = clean_html(title);
-                        let cleaned_answer = clean_html(answer_body);
-                        
-                        // 限制长度
-                        if cleaned_question.len() < 500 && cleaned_answer.len() < 1000 {
-                            qa_pairs.push(QAPair {
-                                question: cleaned_question,
-                                answer: cleaned_answer,
-                                domain: "技术问答".to_string(),
-                            });
-                        }
-                    }
+            if let Some(title) = item["title"].as_str()
+                && let Some(answers) = item["answers"].as_array()
+                && let Some(best_answer) = answers.first()
+                && let Some(answer_body) = best_answer["body"].as_str()
+            {
+                let cleaned_question = clean_html(title);
+                let cleaned_answer = clean_html(answer_body);
+
+                if cleaned_question.len() < 500 && cleaned_answer.len() < 1000 {
+                    qa_pairs.push(QAPair {
+                        question: cleaned_question,
+                        answer: cleaned_answer,
+                        domain: "技术问答".to_string(),
+                    });
                 }
             }
         }
     }
-    
+
     Ok(qa_pairs)
 }
 
 // 清理HTML标签
+#[allow(dead_code)]
 fn clean_html(text: &str) -> String {
     // 简单的HTML标签清理
     text.replace("<p>", "\n")
@@ -278,35 +241,36 @@ fn clean_html(text: &str) -> String {
 }
 
 // 从GitHub API获取数据
+#[allow(dead_code)]
 fn fetch_from_github(token: Option<&str>) -> Result<Vec<QAPair>, Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::new();
-    
+
     // 获取热门开源项目的README
     let url = "https://api.github.com/search/repositories";
-    
+
     let params = vec![
         ("q", "language:rust stars:>1000"),
         ("sort", "stars"),
         ("order", "desc"),
         ("per_page", "5"),
     ];
-    
+
     let mut request = client.get(url).query(&params);
-    
+
     if let Some(token) = token {
         request = request.header("Authorization", format!("token {}", token));
     }
-    
+
     let response = request.send()?;
-    
+
     if !response.status().is_success() {
         eprintln!("GitHub API请求失败: {}", response.status());
         return Ok(Vec::new());
     }
-    
+
     let data: serde_json::Value = response.json()?;
     let mut qa_pairs = Vec::new();
-    
+
     if let Some(items) = data["items"].as_array() {
         for item in items {
             if let (Some(name), Some(description), Some(html_url)) = (
@@ -316,9 +280,11 @@ fn fetch_from_github(token: Option<&str>) -> Result<Vec<QAPair>, Box<dyn std::er
             ) {
                 // 创建关于这个项目的问答
                 let question = format!("什么是{}项目？", name);
-                let answer = format!("{}是一个热门的Rust开源项目。项目描述：{}。项目地址：{}", 
-                    name, description, html_url);
-                
+                let answer = format!(
+                    "{}是一个热门的Rust开源项目。项目描述：{}。项目地址：{}",
+                    name, description, html_url
+                );
+
                 qa_pairs.push(QAPair {
                     question,
                     answer,
@@ -327,7 +293,7 @@ fn fetch_from_github(token: Option<&str>) -> Result<Vec<QAPair>, Box<dyn std::er
             }
         }
     }
-    
+
     Ok(qa_pairs)
 }
 
@@ -361,7 +327,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "自然语言处理(NLP)是人工智能的一个分支，旨在使计算机能够理解、处理和生成人类语言。应用包括机器翻译、语音识别、文本分类、情感分析、问答系统等。核心技术包括词法分析、句法分析和语义理解。".to_string(),
             domain: "自然语言处理".to_string(),
         },
-        
+
         // 编程语言相关
         QAPair {
             question: "什么是Python？".to_string(),
@@ -383,7 +349,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "JavaScript是一种高级、解释型编程语言，主要用于Web前端开发。它可以在浏览器中运行，也可以通过Node.js在服务器端运行。JavaScript支持面向对象、函数式和事件驱动编程，是现代Web开发的核心语言。".to_string(),
             domain: "编程语言".to_string(),
         },
-        
+
         // Web开发相关
         QAPair {
             question: "什么是HTML？".to_string(),
@@ -405,7 +371,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "Vue.js是一个渐进式JavaScript框架，用于构建用户界面。它采用响应式数据绑定和组件化开发，具有简单易用的API和良好的性能。Vue可以用于构建单页应用(SPA)或集成到现有项目中。".to_string(),
             domain: "Web开发".to_string(),
         },
-        
+
         // 数据库相关
         QAPair {
             question: "什么是SQL？".to_string(),
@@ -427,7 +393,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "MongoDB是一种流行的文档型NoSQL数据库。它以JSON格式存储数据，具有灵活的模式和强大的查询功能。MongoDB支持水平扩展，适合处理非结构化数据和快速变化的业务需求。".to_string(),
             domain: "数据库".to_string(),
         },
-        
+
         // DevOps和云计算相关
         QAPair {
             question: "什么是Docker？".to_string(),
@@ -449,7 +415,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "云计算是通过互联网提供计算资源(服务器、存储、数据库、网络等)的服务模式。主要服务模型包括IaaS(基础设施即服务)、PaaS(平台即服务)和SaaS(软件即服务)。云计算提供了按需扩展、按需付费和高可用性等优势。".to_string(),
             domain: "云计算".to_string(),
         },
-        
+
         // 算法和数据结构相关
         QAPair {
             question: "什么是算法？".to_string(),
@@ -471,7 +437,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "动态规划是一种算法设计技术，通过将问题分解为子问题并存储子问题的解来避免重复计算。动态规划适用于具有最优子结构和重叠子问题的问题。典型应用包括背包问题、最长公共子序列、最短路径等。".to_string(),
             domain: "算法".to_string(),
         },
-        
+
         // 网络和安全相关
         QAPair {
             question: "什么是TCP/IP？".to_string(),
@@ -493,7 +459,7 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
             answer: "防火墙是一种网络安全设备，用于监控和控制网络流量。它根据预定义的规则来允许或阻止数据包的传输。防火墙可以是硬件设备或软件程序，用于保护网络免受未授权访问和恶意攻击。".to_string(),
             domain: "网络安全".to_string(),
         },
-        
+
         // 系统设计相关
         QAPair {
             question: "什么是微服务架构？".to_string(),
@@ -519,7 +485,12 @@ fn fetch_from_public_datasets() -> Vec<QAPair> {
 }
 
 // 生成多样化的对话风格
-fn generate_dialog_style(rng: &mut StdRng, prompt: &str, response: &str, domain: &str) -> serde_json::Value {
+fn generate_dialog_style(
+    rng: &mut StdRng,
+    prompt: &str,
+    response: &str,
+    domain: &str,
+) -> serde_json::Value {
     let style = rng.gen_range(0..8);
     match style {
         0 => json!([
@@ -561,7 +532,24 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let out = arg_value(&args, "--out")
-        .map(PathBuf::from)
+        .map(|path| {
+            let path_buf = PathBuf::from(path);
+            // 检查路径是否包含目录部分
+            if path_buf.parent().is_none() || path_buf.parent() == Some(std::path::Path::new("")) {
+                // 只指定了文件名，保存到 data 目录
+                let mut data_path = PathBuf::from("data");
+                std::fs::create_dir_all(&data_path).expect("create data directory");
+                data_path.push(path_buf);
+                data_path
+            } else {
+                // 指定了完整路径，保存到指定目录
+                // 确保目标目录存在
+                if let Some(parent) = path_buf.parent() {
+                    std::fs::create_dir_all(parent).expect("create target directory");
+                }
+                path_buf
+            }
+        })
         .unwrap_or_else(|| {
             // 默认保存到data目录
             let mut path = PathBuf::from("data");
@@ -587,20 +575,20 @@ fn main() {
     let mut w = BufWriter::new(file);
 
     let mut all_qa_pairs = Vec::new();
-    
+
     // 获取本地数据
     if include_local {
         let local_pairs = get_local_qa_pairs();
         all_qa_pairs.extend(local_pairs);
         println!("加载了 {} 条本地问答数据", all_qa_pairs.len());
     }
-    
+
     // 获取网络数据
     if use_web {
         let web_pairs = fetch_web_qa_pairs();
         all_qa_pairs.extend(web_pairs);
     }
-    
+
     if all_qa_pairs.is_empty() {
         println!("错误：没有可用的问答数据");
         return;
@@ -609,29 +597,45 @@ fn main() {
     // 扩展数据：通过变换和组合生成更多样的对话
     for i in 0..count {
         let base_pair = &all_qa_pairs[i % all_qa_pairs.len()];
-        
+
         // 创建多样化的问题变体
-        let question_variants = vec![
+        let question_variants = [
             base_pair.question.clone(),
-            format!("什么是{}？", base_pair.question.replace("什么是", "").replace("？", "")),
+            format!(
+                "什么是{}？",
+                base_pair.question.replace("什么是", "").replace("？", "")
+            ),
             format!("请解释一下{}", base_pair.question),
             format!("关于{}，{}", base_pair.domain, base_pair.question),
             format!("能详细说明一下{}吗？", base_pair.question),
             format!("请教一个问题：{}", base_pair.question),
         ];
-        
+
         let question = &question_variants[rng.gen_range(0..question_variants.len())];
         let response = &base_pair.answer;
         let domain = &base_pair.domain;
-        
+
         let messages = generate_dialog_style(&mut rng, question, response, domain);
-        
+
         let line = json!({"messages": messages, "id": i, "domain": domain}).to_string();
         w.write_all(line.as_bytes()).expect("write");
         w.write_all(b"\n").expect("write newline");
     }
 
     w.flush().expect("flush");
-    println!("成功生成 {} 条高质量问答语料到 {}", count, unique_out.display());
-    println!("数据源：{}", if include_local && use_web { "本地 + 网络" } else if use_web { "仅网络" } else { "仅本地" });
+    println!(
+        "成功生成 {} 条高质量问答语料到 {}",
+        count,
+        unique_out.display()
+    );
+    println!(
+        "数据源：{}",
+        if include_local && use_web {
+            "本地 + 网络"
+        } else if use_web {
+            "仅网络"
+        } else {
+            "仅本地"
+        }
+    );
 }

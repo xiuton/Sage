@@ -96,20 +96,14 @@ impl ModelConfig {
 impl<B: Backend> Model<B> {
     pub fn forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         let [batch_size, seq_len] = input.dims();
-        let device = &self.embedding.devices()[0];
+        let device = input.device();
 
         // Token embeddings
         let token_embeddings = self.embedding.forward(input);
 
-        // Position embeddings
-        let mut pos_ids: Vec<i32> = Vec::with_capacity(batch_size * seq_len);
-        for _ in 0..batch_size {
-            for i in 0..seq_len {
-                pos_ids.push(i as i32);
-            }
-        }
-        let positions = Tensor::<B, 1, Int>::from_ints(pos_ids.as_slice(), device)
-            .reshape([batch_size, seq_len]);
+        // Position embeddings - 使用 arange 创建位置索引
+        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+        let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
         let pos_embeddings = self.pos_embedding.forward(positions);
 
         let mut x = token_embeddings + pos_embeddings;

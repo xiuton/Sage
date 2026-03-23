@@ -3,6 +3,7 @@ use crate::tokenizer::Tokenizer;
 use burn::prelude::*;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{SeedableRng, rngs::StdRng};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug)]
 pub struct GenerateOptions {
@@ -18,6 +19,23 @@ pub struct GenerateOptions {
     pub stop_sequences: Vec<String>,
 }
 
+impl Default for GenerateOptions {
+    fn default() -> Self {
+        Self {
+            max_new_tokens: 100,
+            temperature: 1.0,
+            top_k: 50,
+            top_p: 0.9,
+            repetition_penalty: 1.0,
+            punctuation_penalty: 1.0,
+            seed: None,
+            context_len: 512,
+            stop_on_user: false,
+            stop_sequences: Vec::new(),
+        }
+    }
+}
+
 pub fn generate<B: Backend>(
     model: &Model<B>,
     tokenizer: &Tokenizer,
@@ -25,11 +43,38 @@ pub fn generate<B: Backend>(
     options: &GenerateOptions,
     device: &B::Device,
 ) -> String {
+    // 边界情况处理
+    if options.max_new_tokens == 0 {
+        return tokenizer.encode(prompt).iter()
+            .filter_map(|&id| tokenizer.char_for_id(id))
+            .collect::<String>();
+    }
+
     let mut tokens = tokenizer.encode(prompt);
+    
+    // 如果输入为空，添加 BOS token
+    if tokens.is_empty() {
+        tokens.push(tokenizer.bos_id);
+    }
+
     let mut rng = match options.seed {
         Some(seed) => StdRng::seed_from_u64(seed),
         None => StdRng::from_entropy(),
     };
+
+    // 预计算停止序列的token IDs
+    let user_token_ids = if options.stop_on_user {
+        tokenizer.encode("<user>")
+    } else {
+        Vec::new()
+    };
+    let stop_sequence_ids: Vec<Vec<usize>> = options.stop_sequences
+        .iter()
+        .map(|seq| tokenizer.encode(seq))
+        .collect();
+
+    // 使用 HashSet 优化重复惩罚检查
+    let mut seen_tokens: HashSet<usize> = tokens.iter().copied().collect();
 
     for _ in 0..options.max_new_tokens {
         let window_start = tokens.len().saturating_sub(options.context_len.max(1));
@@ -77,7 +122,7 @@ pub fn generate<B: Backend>(
 
         // Top-K / Top-P sampling
         let mut indexed_probs: Vec<(usize, f32)> = probs_vec.into_iter().enumerate().collect();
-        indexed_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        indexed_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut candidates = indexed_probs;
         candidates.truncate(options.top_k.min(candidates.len()).max(1));
@@ -98,7 +143,7 @@ pub fn generate<B: Backend>(
         let mut weights: Vec<f32> = candidates.iter().map(|&(_, p)| p).collect();
         if options.repetition_penalty > 1.0 {
             for (idx, (token_id, _)) in candidates.iter().enumerate() {
-                if tokens.contains(token_id) {
+                if seen_tokens.contains(token_id) {
                     weights[idx] /= options.repetition_penalty;
                 }
             }
@@ -129,26 +174,35 @@ pub fn generate<B: Backend>(
         };
 
         tokens.push(sampled_idx);
+        seen_tokens.insert(sampled_idx);
 
         // Check stop conditions
         if sampled_idx == tokenizer.eos_id {
             break;
         }
 
-        // Check if generated text contains stop sequences
-        let current_text = tokenizer.decode(&tokens);
-        
+        // Check if generated tokens contain stop sequences
+        let tokens_len = tokens.len();
+
         // Check for "<user>" sequence if stop_on_user is enabled
-        if options.stop_on_user && current_text.contains("<user>") {
-            break;
+        if options.stop_on_user && tokens_len >= user_token_ids.len() {
+            let end = tokens_len;
+            let start = end - user_token_ids.len();
+            if tokens[start..end] == user_token_ids {
+                break;
+            }
         }
 
         // Check custom stop sequences
         let mut should_stop = false;
-        for stop_seq in &options.stop_sequences {
-            if current_text.contains(stop_seq) {
-                should_stop = true;
-                break;
+        for stop_seq_ids in &stop_sequence_ids {
+            if tokens_len >= stop_seq_ids.len() {
+                let end = tokens_len;
+                let start = end - stop_seq_ids.len();
+                if tokens[start..end] == *stop_seq_ids {
+                    should_stop = true;
+                    break;
+                }
             }
         }
         if should_stop {
