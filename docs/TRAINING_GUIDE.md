@@ -603,12 +603,42 @@ cargo run --release --bin infer -- \
 
 **启动API服务器：**
 ```bash
-# 启动API服务器（默认端口8000）
+# 启动API服务器（默认端口8000，CPU后端）
 cargo run --release --bin api_server -- \
     --model-dir ./tmp/your_model \
     --use-best \
     --port 8000
+
+# 使用GPU后端加速推理
+cargo run --release --bin api_server -- \
+    --model-dir ./tmp/your_model \
+    --use-best \
+    --backend gpu \
+    --port 8000
+
+# 使用INT8量化优化
+cargo run --release --bin api_server -- \
+    --model-dir ./tmp/your_model \
+    --use-best \
+    --quantize \
+    --port 8000
+
+# 同时使用GPU和量化
+cargo run --release --bin api_server -- \
+    --model-dir ./tmp/your_model \
+    --use-best \
+    --backend gpu \
+    --quantize \
+    --port 8000
 ```
+
+**API服务器参数说明：**
+- `--model-dir`：模型目录路径
+- `--use-best`：使用最佳模型权重
+- `--port`：服务器端口（默认8000）
+- `--backend`：推理后端（`cpu` 或 `gpu`，默认 `cpu`）
+- `--quantize`：启用INT8量化优化
+- `--context-len`：上下文长度（默认跟随模型配置）
 
 #### Docker容器部署
 
@@ -651,55 +681,289 @@ docker-compose up -d sage-api-gpu
 
 **API接口说明：**
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/api/infer` | POST | 模型推理接口 |
-| `/api/health` | GET | 健康检查接口 |
-| `/api/model-info` | GET | 获取模型信息 |
+| 端点 | 方法 | 描述 | 认证 |
+|------|------|------|------|
+| `/v1/chat/completions` | POST | Chat Completion接口（OpenAI标准） | 需要 |
+| `/v1/batch-chat/completions` | POST | 批量Chat Completion接口 | 需要 |
+| `/v1/async-chat/completions` | POST | 异步Chat Completion接口 | 需要 |
+| `/api/task/:task_id` | GET | 查询任务状态 | 需要 |
+| `/api/health` | GET | 健康检查接口 | 不需要 |
+| `/api/model-info` | GET | 获取模型信息 | 需要 |
 
-**推理接口示例：**
+### 认证机制
+
+API使用Bearer Token认证，通过环境变量 `SAGE_API_KEY` 配置。如果未配置API密钥，则所有接口都不需要认证。
+
+**使用示例：**
 ```bash
-# 使用curl调用API
-curl -X POST http://localhost:8000/api/infer \
+# 设置API密钥环境变量
+export SAGE_API_KEY="your-secret-key"
+
+# 使用API密钥调用接口
+curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-key" \
   -d '{
-    "prompt": "什么是深度学习？",
-    "num_tokens": 100,
+    "model": "sage-model",
+    "messages": [
+      {"role": "user", "content": "什么是深度学习？"}
+    ]
+  }'
+```
+
+### Chat Completion接口（OpenAI标准）
+
+**请求示例（普通模式）：**
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-key" \
+  -d '{
+    "model": "sage-model",
+    "messages": [
+      {"role": "system", "content": "你是一个助手"},
+      {"role": "user", "content": "什么是深度学习？"}
+    ],
     "temperature": 0.7,
+    "max_tokens": 100,
+    "top_p": 0.9,
+    "top_k": 10
+  }'
+```
+
+**请求示例（流式输出）：**
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-key" \
+  -d '{
+    "model": "sage-model",
+    "messages": [
+      {"role": "system", "content": "你是一个助手"},
+      {"role": "user", "content": "什么是深度学习？"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100,
+    "top_p": 0.9,
     "top_k": 10,
-    "top_p": 0.9
+    "stream": true
+  }'
+```
+
+**流式输出响应说明：**
+流式输出使用Server-Sent Events (SSE)格式，每个token生成后立即返回，格式如下：
+```
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-model","choices":[{"index":0,"message":{"role":"assistant","content":"深"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-model","choices":[{"index":0,"message":{"role":"assistant","content":"深度学习"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-model","choices":[{"index":0,"message":{"role":"assistant","content":"深度学习是"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-model","choices":[{"index":0,"message":{"role":"assistant","content":"深度学习是机器学习的一个分支"},"finish_reason":"stop"}]}
+```
+
+**响应示例：**
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1677858242,
+  "model": "sage-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "深度学习是机器学习的一个分支，使用多层神经网络来模拟人脑的学习过程..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 80,
+    "total_tokens": 100
+  }
+}
+```
+
+### 批量Chat Completion接口
+
+**请求示例：**
+```bash
+curl -X POST http://localhost:8000/v1/batch-chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-key" \
+  -d '{
+    "requests": [
+      {
+        "model": "sage-model",
+        "messages": [{"role": "user", "content": "什么是人工智能？"}],
+        "max_tokens": 50
+      },
+      {
+        "model": "sage-model",
+        "messages": [{"role": "user", "content": "什么是机器学习？"}],
+        "max_tokens": 50
+      }
+    ]
   }'
 ```
 
 **响应示例：**
 ```json
 {
-  "response": "深度学习是机器学习的一个分支，使用多层神经网络来模拟人脑的学习过程...",
-  "prompt": "什么是深度学习？",
-  "num_tokens": 100,
-  "duration_ms": 456
+  "responses": [
+    {
+      "id": "chatcmpl-124",
+      "object": "chat.completion",
+      "created": 1677858243,
+      "model": "sage-model",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "人工智能是计算机科学的一个分支..."
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 15,
+        "completion_tokens": 35,
+        "total_tokens": 50
+      }
+    },
+    {
+      "id": "chatcmpl-125",
+      "object": "chat.completion",
+      "created": 1677858244,
+      "model": "sage-model",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "机器学习是人工智能的一个分支..."
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 16,
+        "completion_tokens": 34,
+        "total_tokens": 50
+      }
+    }
+  ],
+  "total_duration_ms": 920,
+  "request_count": 2
 }
 ```
 
-**健康检查：**
+### 异步Chat Completion接口
+
+**请求示例：**
+```bash
+curl -X POST http://localhost:8000/v1/async-chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-key" \
+  -d '{
+    "model": "sage-model",
+    "messages": [{"role": "user", "content": "什么是深度学习？"}],
+    "max_tokens": 200
+  }'
+```
+
+**响应示例：**
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "Pending",
+  "result": null,
+  "error": null
+}
+```
+
+### 任务状态查询接口
+
+**请求示例：**
+```bash
+curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: Bearer your-secret-key"
+```
+
+**响应示例：**
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "Completed",
+  "result": {
+    "id": "chatcmpl-126",
+    "object": "chat.completion",
+    "created": 1677858245,
+    "model": "sage-model",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "深度学习是机器学习的一个分支..."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 20,
+      "completion_tokens": 180,
+      "total_tokens": 200
+    }
+  },
+  "error": null,
+  "created_at": 1000,
+  "started_at": 1500,
+  "completed_at": 2700
+}
+```
+
+### 健康检查
+
 ```bash
 curl http://localhost:8000/api/health
 ```
 
-**获取模型信息：**
+### 获取模型信息
+
 ```bash
-curl http://localhost:8000/api/model-info
+curl -X GET http://localhost:8000/api/model-info \
+  -H "Authorization: Bearer your-secret-key"
 ```
 
-**API参数说明：**
-- `prompt`：输入提示文本（必填）
-- `num_tokens`：生成的最大token数（可选，默认50）
+**API参数说明（OpenAI标准）：**
+- `model`：模型名称（可选，默认"sage-model"）
+- `messages`：消息数组（必填），包含role和content字段
+  - `role`：消息角色（system、user、assistant）
+  - `content`：消息内容
+- `max_tokens`：生成的最大token数（可选，默认50）
 - `temperature`：采样温度（可选，默认0.8）
-- `top_k`：top-k采样参数（可选，默认10）
 - `top_p`：top-p采样参数（可选，默认0.9）
-- `repetition_penalty`：重复惩罚（可选，默认1.1）
-- `punctuation_penalty`：标点符号惩罚（可选，默认1.3）
+- `top_k`：top-k采样参数（可选，默认10）
+- `n`：生成的回复数量（可选，默认1）
+- `stop`：停止序列（可选）
+- `presence_penalty`：存在惩罚（可选）
+- `frequency_penalty`：频率惩罚（可选）
 - `seed`：随机种子（可选）
+
+**批量推理限制：**
+- 最大批量大小：100个请求
+- 批量请求不能为空
+
+**异步任务状态：**
+- `Pending`：任务等待处理
+- `Running`：任务正在处理中
+- `Completed`：任务处理完成
+- `Failed`：任务处理失败
 
 #### 批量推理
 ```bash
@@ -777,6 +1041,6 @@ cargo run --release --bin infer -- \
 
 ---
 
-**更新日期：** 2026-03-23  
-**版本：** v1.0  
+**更新日期：** 2026-03-24  
+**版本：** v1.1  
 **作者：** Sage团队

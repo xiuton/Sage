@@ -10,6 +10,7 @@ use burn::{
 };
 
 use crate::data::TextBatch;
+use crate::quantization::QuantizableModule;
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
@@ -40,6 +41,8 @@ pub struct ModelConfig {
     pub max_seq_len: usize,
     #[config(default = 0.1)]
     pub dropout: f64,
+    #[config(default = false)]
+    pub quantized: bool,
 }
 
 impl ModelConfig {
@@ -76,6 +79,7 @@ impl ModelConfig {
             vocab_size: 1000,
             max_seq_len: 256,
             dropout: 0.1,
+            quantized: false,
         }
     }
 
@@ -89,6 +93,7 @@ impl ModelConfig {
             vocab_size: 1000,
             max_seq_len: 512,
             dropout: 0.1,
+            quantized: false,
         }
     }
 }
@@ -114,6 +119,10 @@ impl<B: Backend> Model<B> {
 
         // Final head for language modeling
         self.output_head.forward(x)
+    }
+    
+    pub fn quantize(&self) -> Self {
+        self.clone()
     }
 
     pub fn num_params(&self) -> usize {

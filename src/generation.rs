@@ -36,65 +36,90 @@ impl Default for GenerateOptions {
     }
 }
 
-pub fn generate<B: Backend>(
-    model: &Model<B>,
-    tokenizer: &Tokenizer,
-    prompt: &str,
-    options: &GenerateOptions,
-    device: &B::Device,
-) -> String {
-    // 边界情况处理
-    if options.max_new_tokens == 0 {
-        return tokenizer.encode(prompt).iter()
-            .filter_map(|&id| tokenizer.char_for_id(id))
-            .collect::<String>();
+pub struct GenerationState<'a, B: Backend> {
+    model: &'a Model<B>,
+    tokenizer: &'a Tokenizer,
+    tokens: Vec<usize>,
+    rng: StdRng,
+    user_token_ids: Vec<usize>,
+    stop_sequence_ids: Vec<Vec<usize>>,
+    seen_tokens: HashSet<usize>,
+    options: &'a GenerateOptions,
+    device: &'a B::Device,
+    generated_tokens: usize,
+    stopped: bool,
+}
+
+impl<'a, B: Backend> GenerationState<'a, B> {
+    pub fn new(
+        model: &'a Model<B>,
+        tokenizer: &'a Tokenizer,
+        prompt: &str,
+        options: &'a GenerateOptions,
+        device: &'a B::Device,
+    ) -> Self {
+        let mut tokens = tokenizer.encode(prompt);
+        
+        if tokens.is_empty() {
+            tokens.push(tokenizer.bos_id);
+        }
+
+        let rng = match options.seed {
+            Some(seed) => StdRng::seed_from_u64(seed),
+            None => StdRng::from_entropy(),
+        };
+
+        let user_token_ids = if options.stop_on_user {
+            tokenizer.encode("<user>")
+        } else {
+            Vec::new()
+        };
+
+        let stop_sequence_ids: Vec<Vec<usize>> = options.stop_sequences
+            .iter()
+            .map(|seq| tokenizer.encode(seq))
+            .collect();
+
+        let seen_tokens: HashSet<usize> = tokens.iter().copied().collect();
+
+        Self {
+            model,
+            tokenizer,
+            tokens,
+            rng,
+            user_token_ids,
+            stop_sequence_ids,
+            seen_tokens,
+            options,
+            device,
+            generated_tokens: 0,
+            stopped: false,
+        }
     }
 
-    let mut tokens = tokenizer.encode(prompt);
-    
-    // 如果输入为空，添加 BOS token
-    if tokens.is_empty() {
-        tokens.push(tokenizer.bos_id);
-    }
+    pub fn next_token(&mut self) -> Option<String> {
+        if self.stopped || self.generated_tokens >= self.options.max_new_tokens {
+            return None;
+        }
 
-    let mut rng = match options.seed {
-        Some(seed) => StdRng::seed_from_u64(seed),
-        None => StdRng::from_entropy(),
-    };
-
-    // 预计算停止序列的token IDs
-    let user_token_ids = if options.stop_on_user {
-        tokenizer.encode("<user>")
-    } else {
-        Vec::new()
-    };
-    let stop_sequence_ids: Vec<Vec<usize>> = options.stop_sequences
-        .iter()
-        .map(|seq| tokenizer.encode(seq))
-        .collect();
-
-    // 使用 HashSet 优化重复惩罚检查
-    let mut seen_tokens: HashSet<usize> = tokens.iter().copied().collect();
-
-    for _ in 0..options.max_new_tokens {
-        let window_start = tokens.len().saturating_sub(options.context_len.max(1));
-        let window_tokens = &tokens[window_start..];
+        let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
+        let window_tokens = &self.tokens[window_start..];
+        
         let input = Tensor::<B, 1, Int>::from_ints(
             window_tokens
                 .iter()
                 .map(|&t| t as i32)
                 .collect::<Vec<_>>()
                 .as_slice(),
-            device,
+            self.device,
         )
         .unsqueeze::<2>();
 
-        let output = model.forward(input);
+        let output = self.model.forward(input);
         let [_, seq_len, _] = output.dims();
 
-        // Get logits for the last token: [1, 1, vocab_size]
         let last_token_logits =
-            output.slice([0..1, (seq_len - 1)..seq_len, 0..tokenizer.vocab_size]);
+            output.slice([0..1, (seq_len - 1)..seq_len, 0..self.tokenizer.vocab_size]);
 
         let mut logits_vec: Vec<f32> = last_token_logits
             .to_data()
@@ -102,7 +127,7 @@ pub fn generate<B: Backend>(
             .unwrap()
             .to_vec();
 
-        let temperature = options.temperature.max(1.0e-5);
+        let temperature = self.options.temperature.max(1.0e-5);
         for v in logits_vec.iter_mut() {
             *v /= temperature;
         }
@@ -117,23 +142,22 @@ pub fn generate<B: Backend>(
         let probs_vec: Vec<f32> = if exp_sum > 0.0 {
             logits_vec.into_iter().map(|v| v / exp_sum).collect()
         } else {
-            vec![1.0 / tokenizer.vocab_size as f32; tokenizer.vocab_size]
+            vec![1.0 / self.tokenizer.vocab_size as f32; self.tokenizer.vocab_size]
         };
 
-        // Top-K / Top-P sampling
         let mut indexed_probs: Vec<(usize, f32)> = probs_vec.into_iter().enumerate().collect();
         indexed_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut candidates = indexed_probs;
-        candidates.truncate(options.top_k.min(candidates.len()).max(1));
+        candidates.truncate(self.options.top_k.min(candidates.len()).max(1));
 
-        if options.top_p > 0.0 && options.top_p < 1.0 {
+        if self.options.top_p > 0.0 && self.options.top_p < 1.0 {
             let mut cum = 0.0f32;
             let mut cut = 0usize;
             for (_, p) in candidates.iter() {
                 cum += *p;
                 cut += 1;
-                if cum >= options.top_p {
+                if cum >= self.options.top_p {
                     break;
                 }
             }
@@ -141,74 +165,102 @@ pub fn generate<B: Backend>(
         }
 
         let mut weights: Vec<f32> = candidates.iter().map(|&(_, p)| p).collect();
-        if options.repetition_penalty > 1.0 {
+        if self.options.repetition_penalty > 1.0 {
             for (idx, (token_id, _)) in candidates.iter().enumerate() {
-                if seen_tokens.contains(token_id) {
-                    weights[idx] /= options.repetition_penalty;
+                if self.seen_tokens.contains(token_id) {
+                    weights[idx] /= self.options.repetition_penalty;
                 }
             }
         }
 
-        if options.punctuation_penalty > 1.0 {
-            let last_is_punct = tokens
+        if self.options.punctuation_penalty > 1.0 {
+            let last_is_punct = self.tokens
                 .last()
-                .map(|&id| tokenizer.is_punctuation_token(id))
+                .map(|&id| self.tokenizer.is_punctuation_token(id))
                 .unwrap_or(false);
 
             for (idx, (token_id, _)) in candidates.iter().enumerate() {
-                let is_punct = tokenizer.is_punctuation_token(*token_id);
+                let is_punct = self.tokenizer.is_punctuation_token(*token_id);
                 if is_punct {
-                    weights[idx] /= options.punctuation_penalty;
+                    weights[idx] /= self.options.punctuation_penalty;
                     if last_is_punct {
-                        weights[idx] /= options.punctuation_penalty;
+                        weights[idx] /= self.options.punctuation_penalty;
                     }
                 }
             }
         }
+        
         let indices: Vec<usize> = candidates.iter().map(|&(i, _)| i).collect();
 
-        // Sample from the top-k distribution
         let sampled_idx = match WeightedIndex::new(&weights) {
-            Ok(dist) => indices[dist.sample(&mut rng)],
+            Ok(dist) => indices[dist.sample(&mut self.rng)],
             Err(_) => indices[0],
         };
 
-        tokens.push(sampled_idx);
-        seen_tokens.insert(sampled_idx);
+        let token_char = self.tokenizer.char_for_id(sampled_idx)?;
+        self.tokens.push(sampled_idx);
+        self.seen_tokens.insert(sampled_idx);
+        self.generated_tokens += 1;
 
         // Check stop conditions
-        if sampled_idx == tokenizer.eos_id {
-            break;
+        if sampled_idx == self.tokenizer.eos_id {
+            self.stopped = true;
+            return Some(token_char.to_string());
         }
 
-        // Check if generated tokens contain stop sequences
-        let tokens_len = tokens.len();
+        let tokens_len = self.tokens.len();
 
-        // Check for "<user>" sequence if stop_on_user is enabled
-        if options.stop_on_user && tokens_len >= user_token_ids.len() {
+        if !self.user_token_ids.is_empty() && tokens_len >= self.user_token_ids.len() {
             let end = tokens_len;
-            let start = end - user_token_ids.len();
-            if tokens[start..end] == user_token_ids {
-                break;
+            let start = end - self.user_token_ids.len();
+            if self.tokens[start..end] == self.user_token_ids {
+                self.stopped = true;
             }
         }
 
-        // Check custom stop sequences
-        let mut should_stop = false;
-        for stop_seq_ids in &stop_sequence_ids {
-            if tokens_len >= stop_seq_ids.len() {
-                let end = tokens_len;
-                let start = end - stop_seq_ids.len();
-                if tokens[start..end] == *stop_seq_ids {
-                    should_stop = true;
-                    break;
+        if !self.stopped {
+            for stop_seq_ids in &self.stop_sequence_ids {
+                if tokens_len >= stop_seq_ids.len() {
+                    let end = tokens_len;
+                    let start = end - stop_seq_ids.len();
+                    if self.tokens[start..end] == *stop_seq_ids {
+                        self.stopped = true;
+                        break;
+                    }
                 }
             }
         }
-        if should_stop {
-            break;
-        }
+
+        Some(token_char.to_string())
     }
 
-    tokenizer.decode(&tokens)
+    pub fn get_full_text(&self) -> String {
+        self.tokenizer.decode(&self.tokens)
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stopped || self.generated_tokens >= self.options.max_new_tokens
+    }
+}
+
+pub fn generate<B: Backend>(
+    model: &Model<B>,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> String {
+    if options.max_new_tokens == 0 {
+        return tokenizer.encode(prompt).iter()
+            .filter_map(|&id| tokenizer.char_for_id(id))
+            .collect::<String>();
+    }
+
+    let mut state = GenerationState::new(model, tokenizer, prompt, options, device);
+    
+    while !state.is_stopped() {
+        state.next_token();
+    }
+    
+    state.get_full_text()
 }

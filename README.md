@@ -11,10 +11,12 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，支持
 - 分词器支持：字符级 + BPE（Byte Pair Encoding）
 - 训练产物持久化（配置、Tokenizer、模型权重、checkpoint、best 模型）
 - 大语料流式训练（落盘 token cache，或不落盘边读边训）
-- **GPU 加速训练**（WGPU 后端支持）
+- **GPU 加速训练和推理**（WGPU 后端支持）
 - **快速开发模式**（3轮训练 + 优化参数，适合测试和迭代）
 - **可中断训练**（Ctrl+C 优雅关闭并保存检查点）
 - **可选进度条**（可禁用 TUI 显示以获得清洁日志）
+- **流式输出支持**（SSE Server-Sent Events）
+- **INT8 量化优化**（减小模型体积，提升推理速度）
 
 > 目标：提供一个“可跑通、可扩展、可继续工程化”的 Rust 大模型训练最小闭环。
 
