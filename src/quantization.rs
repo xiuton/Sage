@@ -1,7 +1,4 @@
-use burn::{
-    prelude::*,
-    tensor::{Tensor, backend::Backend},
-};
+use burn::tensor::backend::Backend;
 
 pub trait QuantizableModule<B: Backend> {
     fn quantize(&self) -> Self;

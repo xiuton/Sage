@@ -10,7 +10,6 @@ use burn::{
 };
 
 use crate::data::TextBatch;
-use crate::quantization::QuantizableModule;
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {

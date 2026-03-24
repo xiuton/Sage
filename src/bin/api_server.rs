@@ -186,7 +186,7 @@ struct AppState {
     tasks: Arc<Mutex<HashMap<String, AsyncTask>>>,
     task_queue: Arc<Mutex<VecDeque<String>>>,
     task_sender: mpsc::Sender<String>,
-    backend: String,
+    _backend: String,
 }
 
 #[tokio::main]
@@ -271,7 +271,7 @@ async fn main() {
         tasks: tasks.clone(),
         task_queue: task_queue.clone(),
         task_sender,
-        backend,
+        _backend: backend,
     });
 
     // 启动后台任务处理器
@@ -367,7 +367,7 @@ async fn infer_handler(
     };
 
     // 根据后端类型选择设备
-    let (reply, duration_ms) = match &state.model {
+    let (reply, _duration_ms) = match &state.model {
         ModelBackend::Cpu(model) => {
             let device = NdArrayDevice::Cpu;
             let model = model.lock().unwrap();
