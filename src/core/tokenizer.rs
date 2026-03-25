@@ -232,13 +232,9 @@ impl Tokenizer {
                     let token_text = &text[*start..*end];
 
                     // 检查token是否包含标记序列
-                    if token_text.contains("<user>") {
-                        in_assistant = false;
-                    } else if token_text.contains("</user>") {
-                        in_assistant = false;
-                    } else if token_text.contains("<assistant>") {
+                    if token_text.contains("<assistant>") {
                         in_assistant = true;
-                    } else if token_text.contains("</assistant>") {
+                    } else if token_text.contains("<user>") || token_text.contains("</user>") || token_text.contains("</assistant>") {
                         in_assistant = false;
                     }
 

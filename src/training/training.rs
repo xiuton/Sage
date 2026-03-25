@@ -17,9 +17,9 @@ use std::{
     time::Instant,
 };
 
-use crate::data::{MmapTextDataset, TextBatcher, TextDataset};
-use crate::model::{Model, ModelConfig};
-use crate::tokenizer::Tokenizer;
+use crate::{MmapTextDataset, TextBatch, TextBatcher, TextDataset};
+use crate::core::model::{Model, ModelConfig};
+use crate::core::tokenizer::Tokenizer;
 
 #[derive(Config)]
 pub struct TrainingConfig {
@@ -39,69 +39,71 @@ pub struct TrainingConfig {
     pub no_progress: bool,
 }
 
-fn run_training<B: AutodiffBackend>(
-    artifact_dir: &str,
-    config: &TrainingConfig,
-    device: &B::Device,
-    tokenizer: &Tokenizer,
+struct TrainingContext<B: AutodiffBackend> {
+    artifact_dir: String,
+    config: TrainingConfig,
+    device: B::Device,
+    tokenizer: Arc<Tokenizer>,
     init_model: Option<Model<B>>,
-    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<crate::data::TextBatch<B>>>,
-    dataloader_valid: Arc<dyn burn::data::dataloader::DataLoader<crate::data::TextBatch<B::InnerBackend>>>,
+    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<TextBatch<B>>>,
+    dataloader_valid: Arc<dyn burn::data::dataloader::DataLoader<TextBatch<B::InnerBackend>>>,
     total_items: usize,
-) {
-    std::fs::create_dir_all(artifact_dir).ok();
-    config
-        .save(format!("{}/config.json", artifact_dir))
+}
+
+fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
+    std::fs::create_dir_all(&context.artifact_dir).ok();
+    context.config
+        .save(format!("{}/config.json", context.artifact_dir))
         .expect("Config should be saved");
 
-    tokenizer
-        .save(&format!("{}/tokenizer.json", artifact_dir))
+    context.tokenizer
+        .save(&format!("{}/tokenizer.json", context.artifact_dir))
         .expect("Tokenizer should be saved");
 
-    B::seed(config.seed);
+    B::seed(context.config.seed);
 
     println!(
         "批量大小: {}, 序列长度: {}",
-        config.batch_size, config.model.max_seq_len
+        context.config.batch_size, context.config.model.max_seq_len
     );
-    println!("工作线程数: {}", config.num_workers);
-    println!("总训练样本数: {}", total_items);
+    println!("工作线程数: {}", context.config.num_workers);
+    println!("总训练样本数: {}", context.total_items);
 
-    let mut learner_builder = LearnerBuilder::new(artifact_dir)
+    let mut learner_builder = LearnerBuilder::new(&context.artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
-        .devices(vec![device.clone()])
-        .num_epochs(config.num_epochs);
+        .devices(vec![context.device.clone()])
+        .num_epochs(context.config.num_epochs);
 
-    if !config.no_progress {
+    if !context.config.no_progress {
         learner_builder = learner_builder.summary();
     }
 
     let learner = learner_builder.build(
-        init_model.unwrap_or_else(|| config.model.init::<B>(device)),
-        config.optimizer.init(),
-        config.lr,
+        context.init_model.unwrap_or_else(|| context.config.model.init::<B>(&context.device)),
+        context.config.optimizer.init(),
+        context.config.lr,
     );
 
     let start_time = Instant::now();
-    let model_trained = learner.fit(dataloader_train, dataloader_valid);
+    let model_trained = learner.fit(context.dataloader_train, context.dataloader_valid);
     let elapsed = start_time.elapsed();
 
     model_trained
-        .save_file(format!("{}/model", artifact_dir), &CompactRecorder::new())
+        .save_file(format!("{}/model", context.artifact_dir), &CompactRecorder::new())
         .expect("Model should be saved");
 
-    if let Some(best_epoch) = find_best_epoch(Path::new(artifact_dir)) {
-        let from = Path::new(artifact_dir)
+    if let Some(best_epoch) = find_best_epoch(Path::new(&context.artifact_dir)) {
+        let from = Path::new(&context.artifact_dir)
             .join("checkpoint")
             .join(format!("model-{}.mpk", best_epoch));
-        let to = Path::new(artifact_dir).join("best_model.mpk");
+        let to = Path::new(&context.artifact_dir).join("best_model.mpk");
         let _ = fs::copy(from, to);
     }
 
-    print_training_stats(elapsed, total_items, config.num_epochs, artifact_dir);
+    print_training_stats(elapsed, context.total_items, context.config.num_epochs, &context.artifact_dir);
 }
 
 fn print_training_stats(elapsed: std::time::Duration, total_items: usize, num_epochs: usize, artifact_dir: &str) {
@@ -165,16 +167,17 @@ pub fn train<B: AutodiffBackend>(
             config.model.max_seq_len,
         ));
 
-    run_training(
-        artifact_dir,
-        &config,
-        &device,
-        tokenizer,
+    let context = TrainingContext {
+        artifact_dir: artifact_dir.to_string(),
+        config,
+        device,
+        tokenizer: Arc::new(tokenizer.clone()),
         init_model,
         dataloader_train,
         dataloader_valid,
-        n_tokens,
-    );
+        total_items: n_tokens,
+    };
+    run_training(context);
 }
 
 pub fn train_from_cache<B: AutodiffBackend>(
@@ -214,16 +217,17 @@ pub fn train_from_cache<B: AutodiffBackend>(
         .num_workers(config.num_workers)
         .build(dataset_test);
 
-    run_training(
-        artifact_dir,
-        &config,
-        &device,
-        tokenizer,
+    let context = TrainingContext {
+        artifact_dir: artifact_dir.to_string(),
+        config,
+        device,
+        tokenizer: Arc::new(tokenizer.clone()),
         init_model,
         dataloader_train,
         dataloader_valid,
-        n_tokens,
-    );
+        total_items: n_tokens,
+    };
+    run_training(context);
 }
 
 pub fn train_with_loaders<B: AutodiffBackend>(
@@ -231,23 +235,24 @@ pub fn train_with_loaders<B: AutodiffBackend>(
     config: TrainingConfig,
     device: B::Device,
     tokenizer: &Tokenizer,
-    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<crate::data::TextBatch<B>>>,
+    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<TextBatch<B>>>,
     dataloader_valid: Arc<
-        dyn burn::data::dataloader::DataLoader<crate::data::TextBatch<B::InnerBackend>>,
+        dyn burn::data::dataloader::DataLoader<TextBatch<B::InnerBackend>>,
     >,
     init_model: Option<Model<B>>,
 ) {
     let total_items = dataloader_train.num_items();
-    run_training(
-        artifact_dir,
-        &config,
-        &device,
-        tokenizer,
+    let context = TrainingContext {
+        artifact_dir: artifact_dir.to_string(),
+        config,
+        device,
+        tokenizer: Arc::new(tokenizer.clone()),
         init_model,
         dataloader_train,
         dataloader_valid,
         total_items,
-    );
+    };
+    run_training(context);
 }
 
 fn find_best_epoch(artifact_dir: &Path) -> Option<usize> {

@@ -978,7 +978,7 @@ cargo run --release --bin infer -- \
 ### 3. 性能优化
 
 **模型优化：**
-- **量化**：使用INT8/INT4量化减小模型体积（未来支持）
+- **量化**：支持INT8动态量化和静态量化，减小模型体积并提高推理速度
 - **剪枝**：移除不重要的权重（未来支持）
 - **蒸馏**：知识蒸馏减小模型大小（未来支持）
 
@@ -992,7 +992,46 @@ cargo run --release --bin infer -- \
 - **GPU加速**：在生产环境使用GPU加速推理
 - **内存管理**：优化内存使用减少资源消耗
 
-### 4. 监控和维护
+### 4. 量化评估
+
+**性能测试：**
+```bash
+# 运行量化性能基准测试
+cargo run --release --bin benchmark
+```
+
+**精度评估：**
+```bash
+# 运行量化精度评估
+cargo run --release --bin accuracy_eval
+```
+
+**评估指标：**
+- **性能提升**：量化模型相对于原始模型的加速比
+- **精度损失**：量化模型与原始模型的输出相似度
+- **内存节省**：量化模型的内存占用减少比例
+
+**测试结果示例：**
+```
+=== 量化性能测试 ===
+配置文件: config.toml
+模型文件: sage_model.burn
+
+=== CPU性能测试 ===
+测试提示: 今天天气很好，我们去
+------------------------
+原始模型 (10次推理): 10.5s
+动态量化模型 (10次推理): 6.2s
+静态量化模型 (10次推理): 5.8s
+动态量化加速比: 1.7x
+静态量化加速比: 1.8x
+
+=== 量化精度评估 ===
+完全匹配率: 95.00% (19/20)
+字符匹配率: 98.75%
+```
+
+### 5. 监控和维护
 
 **性能监控：**
 - 监控推理延迟和吞吐量
@@ -1027,6 +1066,208 @@ cargo run --release --bin infer -- \
 - **持续监控**：关注训练过程，及时发现和解决问题
 - **定期评估**：使用验证集和人工评估确保模型质量
 
+### 💡 已实现功能（v1.1）
+
+#### 性能优化
+- **KV缓存**：实现高效的KV缓存机制，显著提升推理速度
+- **懒加载**：支持模型权重懒加载，减少内存占用
+- **性能监控**：集成性能监控系统，实时跟踪推理延迟和吞吐量
+- **量化优化**：支持INT8动态量化和静态量化，减小模型体积并提高推理速度
+
+#### API功能增强
+- **异步处理**：支持异步推理任务，提高并发处理能力
+- **批处理支持**：实现批量推理接口，提高吞吐量
+- **流式输出**：支持Server-Sent Events流式输出
+- **模型管理接口**：完整实现模型加载、卸载、切换功能
+  - `GET /api/models` - 列出所有加载的模型
+  - `POST /api/models` - 加载新模型
+  - `DELETE /api/models/:model_id` - 卸载指定模型
+  - `POST /api/models/:model_id/activate` - 切换活动模型
+  - `POST /api/models/:model_id/reload` - 热更新模型
+  - `POST /api/models/download` - 下载模型
+  - `POST /api/models/:model_id/update` - 更新模型
+- **推理参数增强**：添加presence_penalty和frequency_penalty参数，支持更细粒度的生成控制
+
+#### 模型扩展性
+- **多架构支持**：支持Transformer、Llama、Mistral、Phi等模型架构
+- **模型微调**：支持LoRA和QLoRA参数高效微调
+- **模型导出**：支持将模型导出为ONNX和GGUF格式
+- **命令行工具**：提供`export`二进制文件，支持模型导出
+  ```bash
+  cargo run --bin export -- --model-dir ./models --output model.onnx --format onnx
+  ```
+
+#### 部署优化
+- **Docker支持**：提供完整的Docker部署配置
+  - `Dockerfile` - CPU版本构建文件
+  - `Dockerfile.gpu` - GPU版本构建文件
+  - `docker-compose.yml` - Docker Compose配置
+- **系统服务**：支持systemd服务管理
+- **健康检查**：提供API健康检查接口
+- **模型自动下载**：支持模型自动下载和更新
+
+### 📚 资源推荐
+- **Burn框架文档**：https://burn-rs.github.io/
+- **Rust深度学习社区**：https://github.com/burn-rs/burn
+- **中文NLP资源**：各种开源中文语料库和工具
+
+### 🛠️ 功能使用指南
+
+#### 模型管理接口使用
+
+##### 1. 列出所有模型
+```bash
+curl -X GET http://localhost:8000/api/models \
+  -H "Authorization: Bearer your-api-key"
+```
+
+##### 2. 加载新模型
+```bash
+curl -X POST http://localhost:8000/api/models \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model_id": "my-custom-model",
+    "model_dir": "./models/custom-model"
+  }'
+```
+
+##### 3. 切换活动模型
+```bash
+curl -X POST http://localhost:8000/api/models/my-custom-model/activate \
+  -H "Authorization: Bearer your-api-key"
+```
+
+##### 4. 热更新模型
+```bash
+curl -X POST http://localhost:8000/api/models/my-custom-model/reload \
+  -H "Authorization: Bearer your-api-key"
+```
+
+##### 5. 卸载模型
+```bash
+curl -X DELETE http://localhost:8000/api/models/my-custom-model \
+  -H "Authorization: Bearer your-api-key"
+```
+
+##### 6. 下载模型
+```bash
+curl -X POST http://localhost:8000/api/models/download \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model_id": "downloaded-model",
+    "url": "https://example.com/models/model.mpk"
+  }'
+```
+
+##### 7. 更新模型
+```bash
+curl -X POST http://localhost:8000/api/models/my-model/update \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/models/model_v2.mpk"
+  }'
+```
+
+#### Docker部署使用
+
+##### 1. 使用docker-compose启动
+```bash
+# 修改docker-compose.yml中的API密钥
+# 然后启动服务
+docker-compose up -d
+```
+
+##### 2. 构建并运行CPU版本
+```bash
+docker build -t sage-api:cpu -f Dockerfile .
+docker run -p 8000:8000 -v ./models:/app/models sage-api:cpu
+```
+
+##### 3. 构建并运行GPU版本（需要NVIDIA Docker）
+```bash
+docker build -t sage-api:gpu -f Dockerfile.gpu .
+docker run --runtime=nvidia -p 8001:8000 -v ./models:/app/models sage-api:gpu
+```
+
+#### Systemd服务管理
+
+##### 1. 安装服务
+```bash
+# 复制服务文件到systemd目录
+sudo cp deploy/sage-api.service /etc/systemd/system/
+
+# 修改服务文件中的用户和路径
+sudo nano /etc/systemd/system/sage-api.service
+
+# 重新加载systemd配置
+sudo systemctl daemon-reload
+```
+
+##### 2. 管理服务
+```bash
+# 启动服务
+sudo systemctl start sage-api
+
+# 设置开机自启
+sudo systemctl enable sage-api
+
+# 查看服务状态
+sudo systemctl status sage-api
+
+# 停止服务
+sudo systemctl stop sage-api
+
+# 重启服务
+sudo systemctl restart sage-api
+```
+
+##### 3. 查看日志
+```bash
+# 查看实时日志
+sudo journalctl -u sage-api -f
+
+# 查看最近日志
+sudo journalctl -u sage-api --since "1 hour ago"
+```
+
+#### 模型导出使用
+
+##### 1. 导出为ONNX格式
+```bash
+cargo run --bin export -- \
+  --model-dir ./models/my-model \
+  --output ./exports/model.onnx \
+  --format onnx
+```
+
+##### 2. 导出为GGUF格式
+```bash
+cargo run --bin export -- \
+  --model-dir ./models/my-model \
+  --output ./exports/model.gguf \
+  --format gguf
+```
+
+#### 增强的推理参数使用
+
+在API请求中使用新增的参数：
+```json
+{
+  "model": "sage-model",
+  "messages": [{"role": "user", "content": "测试消息"}],
+  "max_tokens": 50,
+  "temperature": 0.8,
+  "top_k": 10,
+  "top_p": 0.9,
+  "presence_penalty": 0.1,
+  "frequency_penalty": 0.1
+}
+```
+
+
 ### 💡 未来展望
 - **更大模型**：支持更大规模的模型训练
 - **多模态支持**：扩展到图像、音频等多模态数据
@@ -1034,13 +1275,8 @@ cargo run --release --bin infer -- \
 - **量化和优化**：提供模型压缩和推理加速
 - **更多训练模式**：支持指令微调、强化学习等高级训练方法
 
-### 📚 资源推荐
-- **Burn框架文档**：https://burn-rs.github.io/
-- **Rust深度学习社区**：https://github.com/burn-rs/burn
-- **中文NLP资源**：各种开源中文语料库和工具
-
 ---
 
-**更新日期：** 2026-03-24  
+**更新日期：** 2026-03-25  
 **版本：** v1.1  
 **作者：** Sage团队

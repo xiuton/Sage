@@ -6,7 +6,8 @@ use sage::{
     model::ModelConfig,
     streaming::{SftInput, StreamingSftDataLoader},
     tokenizer::Tokenizer,
-    training::{self, TrainingConfig},
+    train, train_from_cache, train_with_loaders,
+    TrainingConfig,
 };
 use serde::Deserialize;
 use std::{
@@ -1086,7 +1087,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     items_total,
                 });
 
-                training::train_with_loaders::<Autodiff<B>>(
+                train_with_loaders::<Autodiff<B>>(
                     &args.artifact_dir,
                     training_config,
                     device,
@@ -1099,7 +1100,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 let (tokens_path, mask_path) =
                     build_token_cache_stream(&args, &tokenizer).expect("Should build token cache");
 
-                training::train_from_cache::<Autodiff<B>>(
+                train_from_cache::<Autodiff<B>>(
                     &args.artifact_dir,
                     training_config,
                     device,
@@ -1132,7 +1133,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     (tokens, mask)
                 };
 
-            training::train::<Autodiff<B>>(
+            train::<Autodiff<B>>(
                 &args.artifact_dir,
                 training_config,
                 device,

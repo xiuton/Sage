@@ -6,6 +6,10 @@
 
 - `train`：训练
 - `infer`：推理/对话
+- `api_server`：API 服务器（模型管理、推理服务）
+- `accuracy_eval`：模型准确率评估工具
+- `benchmark`：性能基准测试工具
+- `export`：模型导出工具
 - `gen_sft`：生成 SFT jsonl 数据（测试/压测用）
 
 相关文档：
@@ -427,9 +431,145 @@ cargo run --release --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 -
 
 ---
 
-## 5) 常见问题
+## 5) api_server（API 服务器）
 
-### 5.1 为什么会出现大量标点？
+运行：
+
+```bash
+cargo run --release --bin api_server -- [OPTIONS]
+```
+
+API 服务器提供 HTTP REST API 接口，支持模型管理和推理服务。
+
+### 5.1 参数说明
+
+- `--port <PORT>`：服务器端口（默认 `8000`）
+- `--host <HOST>`：服务器地址（默认 `0.0.0.0`）
+- `--model-dir <MODEL_DIR>`：模型存储目录（默认 `./models`）
+- `--log-level <LOG_LEVEL>`：日志级别（可选：`debug`, `info`, `warn`, `error`，默认 `info`）
+
+### 5.2 API 接口列表
+
+#### 模型管理接口
+- `GET /api/models` - 获取模型列表
+- `POST /api/models` - 加载模型
+- `DELETE /api/models/:model_id` - 卸载模型
+- `POST /api/models/:model_id/activate` - 激活模型
+- `POST /api/models/:model_id/reload` - 重新加载模型
+- `POST /api/models/download` - 下载模型
+
+#### 推理接口
+- `POST /api/generate` - 生成文本
+- `GET /api/model-info` - 获取当前模型信息
+- `GET /api/health` - 健康检查
+
+### 5.3 使用示例
+
+```bash
+# 启动 API 服务器
+cargo run --release --bin api_server -- --port 8080 --model-dir ./my_models
+
+# 使用 curl 测试 API
+curl http://localhost:8080/api/health
+curl -X POST http://localhost:8080/api/models -H "Content-Type: application/json" -d '{"model_id":"my_model","model_dir":"./models/my_model"}'
+curl -X POST http://localhost:8080/api/generate -H "Content-Type: application/json" -d '{"prompt":"你好，请介绍一下你自己","max_length":100}'
+```
+
+---
+
+## 6) accuracy_eval（模型准确率评估工具）
+
+运行：
+
+```bash
+cargo run --release --bin accuracy_eval -- [OPTIONS]
+```
+
+用于评估模型在测试数据集上的准确率和性能指标。
+
+### 6.1 参数说明
+
+- `--model-dir <MODEL_DIR>`：模型目录路径（必填）
+- `--test-data <TEST_DATA>`：测试数据文件路径（必填）
+- `--batch-size <BATCH_SIZE>`：批处理大小（默认 `32`）
+- `--use-best`：优先加载 `best_model.mpk`
+- `--metrics <METRICS>`：评估指标（可选：`accuracy`, `perplexity`, `all`，默认 `all`）
+
+### 6.2 使用示例
+
+```bash
+# 评估模型准确率和困惑度
+cargo run --release --bin accuracy_eval -- --model-dir ./models/my_model --test-data test_data.jsonl --metrics all
+
+# 使用最优模型评估
+cargo run --release --bin accuracy_eval -- --model-dir ./models/my_model --test-data test_data.jsonl --use-best --metrics accuracy
+```
+
+---
+
+## 7) benchmark（性能基准测试工具）
+
+运行：
+
+```bash
+cargo run --release --bin benchmark -- [OPTIONS]
+```
+
+用于测试模型在不同硬件和配置下的性能表现。
+
+### 7.1 参数说明
+
+- `--model-dir <MODEL_DIR>`：模型目录路径（必填）
+- `--prompt <PROMPT>`：测试提示词（默认 `"测试性能基准"`）
+- `--max-length <MAX_LENGTH>`：最大生成长度（默认 `100`）
+- `--iterations <ITERATIONS>`：测试迭代次数（默认 `10`）
+- `--backend <BACKEND>`：后端（`cpu` 或 `gpu`，默认 `cpu`）
+
+### 7.2 使用示例
+
+```bash
+# CPU 性能测试
+cargo run --release --bin benchmark -- --model-dir ./models/my_model --prompt "性能测试" --max-length 200 --iterations 20
+
+# GPU 性能测试
+cargo run --release --bin benchmark -- --model-dir ./models/my_model --backend gpu --iterations 50
+```
+
+---
+
+## 8) export（模型导出工具）
+
+运行：
+
+```bash
+cargo run --release --bin export -- [OPTIONS]
+```
+
+用于将模型导出为不同格式，便于部署和集成。
+
+### 8.1 参数说明
+
+- `--model-dir <MODEL_DIR>`：模型目录路径（必填）
+- `--output <OUTPUT>`：输出文件路径（必填）
+- `--format <FORMAT>`：导出格式（可选：`onnx`, `torch`, `safetensors`，默认 `onnx`）
+- `--use-best`：使用最优模型导出
+- `--quantize`：启用模型量化（减小模型大小）
+
+### 8.2 使用示例
+
+```bash
+# 导出为 ONNX 格式
+cargo run --release --bin export -- --model-dir ./models/my_model --output model.onnx --format onnx
+
+# 导出最优模型并量化
+cargo run --release --bin export -- --model-dir ./models/my_model --output model_quantized.onnx --use-best --quantize
+```
+
+---
+
+## 9) 常见问题
+
+### 9.1 为什么会出现大量标点？
 
 小模型 + 字符级 tokenizer + 语料风格会导致标点容易被高概率采样。可以通过：
 
@@ -438,11 +578,11 @@ cargo run --release --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 -
 - 增大 `--repetition-penalty`
 - 使用更多真实 SFT 数据训练
 
-### 5.2 为什么 `--context-len` 不能超过 `max_seq_len`？
+### 9.2 为什么 `--context-len` 不能超过 `max_seq_len`？
 
 因为位置 embedding 只为 `max_seq_len` 个位置训练/初始化，超过会越界。infer 会自动截断，但如果你确实需要更长上下文，请在训练时提高 `--max-seq-len` 并重新训练。
 
-### 5.3 Windows 下遇到 LNK1104 无法写入 infer.exe？
+### 9.3 Windows 下遇到 LNK1104 无法写入 infer.exe？
 
 这是 Windows 常见的文件锁问题：之前运行的 exe 进程未完全退出，或被杀软/索引占用。
 

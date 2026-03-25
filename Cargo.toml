@@ -25,3 +25,15 @@ tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 tower = { version = "0.4", features = ["make"] }
 async-stream = "0.3"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[[bin]]
+name = "api_server"
+path = "src/bin/api_server.rs"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"

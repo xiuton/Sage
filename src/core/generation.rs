@@ -1,5 +1,7 @@
-use crate::model::Model;
-use crate::tokenizer::Tokenizer;
+use crate::core::kv_cache::KVCache;
+use crate::core::model::Model;
+use crate::quantization::quantization::QuantizedModel;
+use crate::core::tokenizer::Tokenizer;
 use burn::prelude::*;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{SeedableRng, rngs::StdRng};
@@ -13,6 +15,8 @@ pub struct GenerateOptions {
     pub top_p: f32,
     pub repetition_penalty: f32,
     pub punctuation_penalty: f32,
+    pub presence_penalty: f32,
+    pub frequency_penalty: f32,
     pub seed: Option<u64>,
     pub context_len: usize,
     pub stop_on_user: bool,
@@ -28,6 +32,8 @@ impl Default for GenerateOptions {
             top_p: 0.9,
             repetition_penalty: 1.0,
             punctuation_penalty: 1.0,
+            presence_penalty: 0.0,
+            frequency_penalty: 0.0,
             seed: None,
             context_len: 512,
             stop_on_user: false,
@@ -36,23 +42,29 @@ impl Default for GenerateOptions {
     }
 }
 
+pub enum ModelType<'a, B: Backend> {
+    Normal(&'a Model<B>),
+    Quantized(&'a QuantizedModel<B>),
+}
+
 pub struct GenerationState<'a, B: Backend> {
-    model: &'a Model<B>,
+    model: ModelType<'a, B>,
     tokenizer: &'a Tokenizer,
     tokens: Vec<usize>,
     rng: StdRng,
     user_token_ids: Vec<usize>,
     stop_sequence_ids: Vec<Vec<usize>>,
     seen_tokens: HashSet<usize>,
-    options: &'a GenerateOptions,
+    options: GenerateOptions,
     device: &'a B::Device,
     generated_tokens: usize,
     stopped: bool,
+    kv_cache: Option<KVCache<B>>,
 }
 
 impl<'a, B: Backend> GenerationState<'a, B> {
     pub fn new(
-        model: &'a Model<B>,
+        model: ModelType<'a, B>,
         tokenizer: &'a Tokenizer,
         prompt: &str,
         options: &'a GenerateOptions,
@@ -90,10 +102,11 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             user_token_ids,
             stop_sequence_ids,
             seen_tokens,
-            options,
+            options: options.clone(),
             device,
             generated_tokens: 0,
             stopped: false,
+            kv_cache: Some(KVCache::new()),
         }
     }
 
@@ -115,7 +128,16 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         )
         .unsqueeze::<2>();
 
-        let output = self.model.forward(input);
+        let output = match &self.model {
+            ModelType::Normal(model) => {
+                if let Some(kv_cache) = &mut self.kv_cache {
+                    model.forward_with_cache(input, Some(kv_cache))
+                } else {
+                    model.forward(input)
+                }
+            },
+            ModelType::Quantized(model) => model.forward(input),
+        };
         let [_, seq_len, _] = output.dims();
 
         let last_token_logits =
@@ -245,6 +267,26 @@ impl<'a, B: Backend> GenerationState<'a, B> {
 
 pub fn generate<B: Backend>(
     model: &Model<B>,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> String {
+    generate_with_model_type(ModelType::Normal(model), tokenizer, prompt, options, device)
+}
+
+pub fn generate_quantized<B: Backend>(
+    model: &QuantizedModel<B>,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> String {
+    generate_with_model_type(ModelType::Quantized(model), tokenizer, prompt, options, device)
+}
+
+fn generate_with_model_type<B: Backend>(
+    model: ModelType<'_, B>,
     tokenizer: &Tokenizer,
     prompt: &str,
     options: &GenerateOptions,

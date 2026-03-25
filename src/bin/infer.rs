@@ -5,7 +5,7 @@ use clap::Parser;
 use sage::{
     generation::{GenerateOptions, generate},
     tokenizer::Tokenizer,
-    training::TrainingConfig,
+    TrainingConfig,
 };
 use std::io::{self, Write};
 
@@ -67,6 +67,8 @@ impl Args {
             top_p: self.top_p,
             repetition_penalty: self.repetition_penalty,
             punctuation_penalty: self.punctuation_penalty,
+            presence_penalty: 0.0,
+            frequency_penalty: 0.0,
             seed: self.seed,
             context_len,
             stop_on_user: self.stop_on_user,
@@ -197,7 +199,7 @@ fn main() {
     } else if let Some(ref prompt) = args.prompt {
         println!("--- 模型生成 ---");
         let input_text = if args.chat {
-            format_chat_prefix(&prompt)
+            format_chat_prefix(prompt)
         } else {
             prompt.clone()
         };

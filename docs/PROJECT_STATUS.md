@@ -22,14 +22,30 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 
 ### 2.1 工程结构
 
-- 库化组织：核心逻辑在 `src/`，二进制入口在 `src/bin/`
-- 三个可执行程序：
+- **模块化组织**：采用功能模块化的目录结构
+  - `src/core/`：核心模型和推理功能（模型定义、分词器、生成算法、KV缓存）
+  - `src/training/`：训练相关功能（训练器、流式数据加载、LoRA支持）
+  - `src/inference/`：推理相关功能（懒加载模型）
+  - `src/data/`：数据处理功能（数据集、批处理器）
+  - `src/api/`：API服务器功能
+  - `src/tools/`：工具类功能（模型下载、导出）
+  - `src/utils/`：通用工具函数（错误处理、日志系统、性能监控）
+  - `src/quantization/`：量化功能
+- **七个可执行程序**：
   - `train`：训练入口（LM/SFT）
   - `infer`：推理入口（续写/Chat/交互）
+  - `api_server`：API 服务器（模型管理、推理服务）
+  - `accuracy_eval`：模型准确率评估工具
+  - `benchmark`：性能基准测试工具
+  - `export`：模型导出工具
   - `gen_sft`：生成 SFT JSONL（测试/压测）
-- 文档体系：
-  - [README.md](README.md)
+- **文档体系**：
+  - [README.md](../README.md)
   - [COMMANDS.md](COMMANDS.md)
+  - [DATA_FORMAT.md](DATA_FORMAT.md)
+  - [TRAINING_DEPLOYMENT.md](TRAINING_DEPLOYMENT.md)
+  - [TRAINING_GUIDE.md](TRAINING_GUIDE.md)
+  - [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
   - 本文件 [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ### 2.2 模型（Transformer LM）
@@ -98,6 +114,37 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 - GPU后端：支持 WGPU 训练和推理（`--backend gpu`）
 - CPU后端：NdArray（`--backend cpu`，默认）
 - 自动工作线程配置：基于 CPU 核心数优化数据加载并行度
+
+### 2.8 API 服务器与模型管理
+
+- **API 服务器**：提供 HTTP REST API 接口
+  - 模型管理：加载、卸载、激活、重新加载模型
+  - 推理服务：文本生成 API
+  - 健康检查接口
+- **模型下载功能**：支持从远程 URL 下载模型
+  - 自动管理模型存储目录
+  - 支持模型版本管理
+
+### 2.9 评估与工具链
+
+- **模型评估工具**：支持准确率和性能指标评估
+  - `accuracy_eval`：评估模型在测试数据集上的表现
+  - 支持多种评估指标（准确率、困惑度等）
+- **性能基准测试**：测试模型在不同硬件和配置下的性能
+  - `benchmark`：测量推理速度和资源消耗
+  - 支持 CPU 和 GPU 后端
+- **模型导出工具**：支持多种格式导出
+  - `export`：导出为 ONNX、Torch、Safetensors 等格式
+  - 支持模型量化以减小体积
+
+### 2.10 核心功能模块
+
+- **KV 缓存**：优化推理性能
+- **懒加载**：按需加载模型，减少内存占用
+- **日志系统**：完善的日志记录和监控
+- **LoRA 支持**：低秩适应训练
+- **量化功能**：模型压缩和优化
+- **性能监控**：实时监控训练和推理性能
 
 ---
 

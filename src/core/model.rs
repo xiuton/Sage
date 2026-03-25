@@ -9,7 +9,9 @@ use burn::{
     train::{ClassificationOutput, TrainOutput, TrainStep, ValidStep},
 };
 
-use crate::data::TextBatch;
+use crate::TextBatch;
+use crate::core::kv_cache::KVCache;
+use crate::quantization::quantization::QuantizationMode;
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
@@ -99,6 +101,10 @@ impl ModelConfig {
 
 impl<B: Backend> Model<B> {
     pub fn forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+        self.forward_with_cache(input, None)
+    }
+
+    pub fn forward_with_cache(&self, input: Tensor<B, 2, Int>, kv_cache: Option<&mut KVCache<B>>) -> Tensor<B, 3> {
         let [batch_size, seq_len] = input.dims();
         let device = input.device();
 
@@ -112,16 +118,25 @@ impl<B: Backend> Model<B> {
 
         let mut x = token_embeddings + pos_embeddings;
 
-        x = self
-            .transformer_encoder
-            .forward(TransformerEncoderInput::new(x));
+        // 如果提供了KV缓存，使用缓存进行推理
+        if let Some(_kv_cache) = kv_cache {
+            // 在实际实现中，这里需要修改TransformerEncoder的forward方法来支持KV缓存
+            // 由于burn库的限制，我们暂时使用标准的forward方法
+            x = self
+                .transformer_encoder
+                .forward(TransformerEncoderInput::new(x));
+        } else {
+            x = self
+                .transformer_encoder
+                .forward(TransformerEncoderInput::new(x));
+        }
 
         // Final head for language modeling
         self.output_head.forward(x)
     }
     
-    pub fn quantize(&self) -> Self {
-        self.clone()
+    pub fn quantize(&self) -> crate::quantization::quantization::QuantizedModel<B> {
+        crate::quantization::quantization::QuantizedModel::new(self, QuantizationMode::Dynamic)
     }
 
     pub fn num_params(&self) -> usize {

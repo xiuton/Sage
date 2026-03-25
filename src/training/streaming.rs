@@ -1,4 +1,4 @@
-use crate::{data::TextBatch, tokenizer::Tokenizer};
+use crate::{TextBatch, core::tokenizer::Tokenizer};
 use burn::data::dataloader::{DataLoader, DataLoaderIterator, Progress};
 use burn::prelude::*;
 use serde::Deserialize;
