@@ -1,6 +1,7 @@
-use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::{ndarray::{NdArray}, wgpu::Wgpu};
 use burn::config::Config;
 use burn::module::Module;
+use burn::prelude::Backend;
 use clap::Parser;
 use sage::{
     generation::{GenerateOptions, generate},
@@ -8,6 +9,7 @@ use sage::{
     TrainingConfig,
 };
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -56,6 +58,15 @@ struct Args {
 
     #[arg(long, use_value_delimiter = true)]
     stop_sequence: Vec<String>,
+
+    #[arg(long, default_value_t = false)]
+    stream: bool,
+
+    #[arg(long, default_value_t = 50)]
+    stream_speed: u64,
+
+    #[arg(long, default_value = "cpu")]
+    backend: String,
 }
 
 impl Args {
@@ -98,9 +109,8 @@ fn extract_assistant_reply(full: &str) -> String {
     full[start..start + end].trim().to_string()
 }
 
-fn main() {
-    let args = Args::parse();
-    let device = NdArrayDevice::Cpu;
+fn run_inference<B: Backend>(args: &Args) {
+    let device = B::Device::default();
 
     println!("正在加载模型...");
     let config_path = format!("{}/config.json", args.model_dir);
@@ -155,7 +165,7 @@ fn main() {
 
     let tokenizer = Tokenizer::load(&tokenizer_path).unwrap();
     let model = model_config
-        .init::<NdArray>(&device)
+        .init::<B>(&device)
         .load_file(&model_path, &burn::record::CompactRecorder::new(), &device)
         .unwrap();
     println!("模型加载完成。\n");
@@ -186,14 +196,62 @@ fn main() {
             };
 
             let gen_options = args.gen_options(context_len);
-            let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
-            if args.chat {
-                let reply = extract_assistant_reply(&generated);
-                println!("助手: {}\n", reply);
-                history.push_str(&reply);
-                history.push('\n');
+            
+            if args.stream {
+                // 流式输出
+                println!("助手: ");
+                io::stdout().flush().unwrap();
+                
+                let mut state = sage::generation::GenerationState::new(
+                    sage::generation::ModelType::Normal(&model),
+                    &tokenizer,
+                    &input_text,
+                    &gen_options,
+                    &device,
+                );
+                
+                let mut generated_text = String::new();
+                let token_interval = if args.stream_speed > 0 {
+                    Duration::from_millis(1000 / args.stream_speed)
+                } else {
+                    Duration::ZERO
+                };
+                let mut last_token_time = Instant::now();
+                
+                while !state.is_stopped() {
+                    if let Some(token_char) = state.next_token() {
+                        // 速度控制
+                        if !token_interval.is_zero() {
+                            let elapsed = last_token_time.elapsed();
+                            if elapsed < token_interval {
+                                std::thread::sleep(token_interval - elapsed);
+                            }
+                        }
+                        
+                        print!("{}", token_char);
+                        io::stdout().flush().unwrap();
+                        generated_text.push_str(&token_char);
+                        last_token_time = Instant::now();
+                    }
+                }
+                println!("\n");
+                
+                if args.chat {
+                    let reply = extract_assistant_reply(&generated_text);
+                    history.push_str(&reply);
+                    history.push('\n');
+                }
             } else {
-                println!("生成结果: \"{}\"\n", generated);
+                // 一次性输出
+                let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
+                if args.chat {
+                    let reply = extract_assistant_reply(&generated);
+                    println!("助手: {}\n", reply);
+                    history.push_str(&reply);
+                    history.push('\n');
+                } else {
+                    println!("生成结果: \"{}\"\n", generated);
+                }
             }
         }
     } else if let Some(ref prompt) = args.prompt {
@@ -204,15 +262,74 @@ fn main() {
             prompt.clone()
         };
         let gen_options = args.gen_options(context_len);
-        let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
-        if args.chat {
-            println!("用户: \"{}\"", prompt);
-            println!("助手: \"{}\"\n", extract_assistant_reply(&generated));
+        
+        if args.stream {
+            // 流式输出
+            if args.chat {
+                println!("用户: \"{}\"", prompt);
+                print!("助手: ");
+            } else {
+                println!("提示词: \"{}\"", prompt);
+                print!("生成结果: ");
+            }
+            io::stdout().flush().unwrap();
+            
+            let mut state = sage::generation::GenerationState::new(
+                sage::generation::ModelType::Normal(&model),
+                &tokenizer,
+                &input_text,
+                &gen_options,
+                &device,
+            );
+            
+            let token_interval = if args.stream_speed > 0 {
+                Duration::from_millis(1000 / args.stream_speed)
+            } else {
+                Duration::ZERO
+            };
+            let mut last_token_time = Instant::now();
+            
+            while !state.is_stopped() {
+                if let Some(token_char) = state.next_token() {
+                    // 速度控制
+                    if !token_interval.is_zero() {
+                        let elapsed = last_token_time.elapsed();
+                        if elapsed < token_interval {
+                            std::thread::sleep(token_interval - elapsed);
+                        }
+                    }
+                    
+                    print!("{}", token_char);
+                    io::stdout().flush().unwrap();
+                    last_token_time = Instant::now();
+                }
+            }
+            println!("\n");
         } else {
-            println!("提示词: \"{}\"", prompt);
-            println!("生成结果: \"{}\"\n", generated);
+            // 一次性输出
+            let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
+            if args.chat {
+                println!("用户: \"{}\"", prompt);
+                println!("助手: \"{}\"\n", extract_assistant_reply(&generated));
+            } else {
+                println!("提示词: \"{}\"", prompt);
+                println!("生成结果: \"{}\"\n", generated);
+            }
         }
     } else {
         println!("错误：请提供一个提示词 (使用 --prompt) 或进入交互模式 (使用 --interactive)。");
+    }
+}
+
+fn main() {
+    let args = Args::parse();
+
+    match args.backend.as_str() {
+        "cpu" => run_inference::<NdArray>(&args),
+        "gpu" => run_inference::<Wgpu>(&args),
+        _ => {
+            eprintln!("错误：不支持的后端 '{}'，请使用 'cpu' 或 'gpu'", args.backend);
+            std::process::exit(1);
+        }
     }
 }
