@@ -15,7 +15,7 @@ struct Args {
     #[arg(long)]
     prompt: Option<String>,
 
-    #[arg(short = 'n', long, default_value_t = 50)]
+    #[arg(short = 'n', long, default_value_t = 500)]
     num_tokens: usize,
 
     #[arg(short = 't', long, default_value_t = 0.8)]
