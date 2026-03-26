@@ -1059,16 +1059,6 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     // 初始化自动微分模型（与实际训练使用相同的后端类型）
                     let test_model = test_model_config_clone.init::<Autodiff<B>>(&test_device_clone);
                     test_model.num_params(); // 确保模型完全初始化
-                    
-                    // 创建测试用的输入张量（模拟实际训练的内存使用情况）
-                    // 形状: [batch_size, seq_len]
-                    let test_inputs = burn::tensor::Tensor::<Autodiff<B>, 2, burn::tensor::Int>::zeros(
-                        [batch_size, test_model_config_clone.max_seq_len],
-                        &test_device_clone,
-                    );
-                    
-                    // 执行前向传播（模拟实际训练）
-                    let _output = test_model.forward(test_inputs);
                 });
                 
                 match test_result.join() {
