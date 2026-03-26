@@ -187,7 +187,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
    - CPU后端：NdArray（`--backend cpu`，默认）
 3. **更大的模型配置** ✅ **已完成**
    - 已提供多个预设 config（~1M、~10M、~30M）按硬件选择
-   - `--model-size` 参数支持：`default`、`10m`、`30m`
+   - `--model-size` 参数支持：`default`、`10m`、`30m`、`100m`、`1b`、`3b`、`671b`
 
 ---
 

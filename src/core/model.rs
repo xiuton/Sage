@@ -97,6 +97,62 @@ impl ModelConfig {
             quantized: false,
         }
     }
+
+    /// 创建约0.1B参数的模型配置
+    pub fn small_100m() -> Self {
+        Self {
+            d_model: 1024,
+            n_layers: 16,
+            n_heads: 16,
+            d_ff: 4096,
+            vocab_size: 1000,
+            max_seq_len: 1024,
+            dropout: 0.1,
+            quantized: false,
+        }
+    }
+
+    /// 创建约1B参数的模型配置
+    pub fn medium_1b() -> Self {
+        Self {
+            d_model: 1536,
+            n_layers: 24,
+            n_heads: 24,
+            d_ff: 6144,
+            vocab_size: 1000,
+            max_seq_len: 1536,
+            dropout: 0.1,
+            quantized: false,
+        }
+    }
+
+    /// 创建约3B参数的模型配置
+    pub fn large_3b() -> Self {
+        Self {
+            d_model: 2048,
+            n_layers: 32,
+            n_heads: 32,
+            d_ff: 8192,
+            vocab_size: 1000,
+            max_seq_len: 2048,
+            dropout: 0.1,
+            quantized: false,
+        }
+    }
+
+    /// 创建约671B参数的模型配置
+    pub fn huge_671b() -> Self {
+        Self {
+            d_model: 16384,
+            n_layers: 128,
+            n_heads: 128,
+            d_ff: 65536,
+            vocab_size: 1000,
+            max_seq_len: 8192,
+            dropout: 0.1,
+            quantized: false,
+        }
+    }
 }
 
 impl<B: Backend> Model<B> {

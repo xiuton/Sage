@@ -221,7 +221,7 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--no-progress`：禁用进度条和TUI显示，输出更清洁的日志。适合重定向输出或CI/CD环境。
 - `--tui`：强制启用TUI进度显示（注意：在Windows PowerShell中可能不工作，建议使用Windows Terminal或VS Code终端）
 - `--backend <BACKEND>`：训练后端选择，可选值为 `cpu` 或 `gpu`（默认 `cpu`）。GPU后端需要支持WGPU的显卡。
-- `--model-size <MODEL_SIZE>`：模型大小配置，可选值为 `default`（约1M参数）、`10m`（约10M参数）、`30m`（约30M参数）。默认 `default`。更大的模型需要更多内存和训练时间，但可能获得更好的效果。
+- `--model-size <MODEL_SIZE>`：模型大小配置，可选值为 `default`（约1M参数）、`10m`（约10M参数）、`30m`（约30M参数）、`100m`（约0.1B参数）、`1b`（约1B参数）、`3b`（约3B参数）、`671b`（约671B参数）。默认 `default`。更大的模型需要更多内存和训练时间，但可能获得更好的效果。
 - `--training-mode <TRAINING_MODE>`：训练模式，可选值为 `general`（通用对话）、`code`（代码生成）、`math`（数学推理）。默认 `general`。不同模式会使用不同的对话模板优化特定场景。
 - `--force-tui`：强制启用TUI进度显示，即使在可能不支持的环境中。注意：在某些终端中可能导致显示问题。
 

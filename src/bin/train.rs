@@ -1,6 +1,6 @@
 use burn::backend::{Autodiff, ndarray::NdArray, wgpu::Wgpu};
 use burn::module::Module;
-use burn::optim::AdamConfig;
+use burn::optim::{AdamConfig, Optimizer};
 use burn::prelude::Backend;
 use sage::{
     model::ModelConfig,
@@ -113,8 +113,8 @@ struct Args {
     #[arg(long, default_value = "cpu", value_name = "cpu|gpu")]
     backend: String,
 
-    /// Model size configuration: default (1M), 10m, 30m
-    #[arg(long, default_value = "default", value_name = "default|10m|30m")]
+    /// Model size configuration: default (1M), 10m, 30m, 100m, 1b, 3b, 671b
+    #[arg(long, default_value = "default", value_name = "default|10m|30m|100m|1b|3b|671b")]
     model_size: String,
 
     /// Training mode: general, code, math
@@ -770,6 +770,22 @@ fn count_sft_records_stream(args: &Args) -> io::Result<usize> {
 }
 
 fn main() {
+    // 在程序入口处立即设置环境变量，确保在任何burn代码执行前生效
+    unsafe {
+        // 禁用实验日志记录器（在burn 0.14.0中，这个环境变量需要在任何burn代码执行前设置）
+        std::env::set_var("BURN_EXPERIMENT_LOGGER_DISABLED", "1");
+
+        // 设置环境变量改善Burn TUI显示
+        std::env::set_var("BURN_TUI_NO_CLEAR", "1");
+        std::env::set_var("TERM", "xterm-256color");
+        std::env::set_var("BURN_TUI_ENABLED", "1");
+        std::env::set_var("BURN_TUI_FORCE", "1");
+        std::env::set_var("WGPU_LOG", "off");
+
+        // 设置日志级别
+        std::env::set_var("RUST_LOG", "burn_train=info,wgpu_core=off,burn_core=off");
+    }
+
     let mut args = Args::parse();
 
     // For ultra_quick mode, automatically limit data to 100 records for very fast testing
@@ -788,21 +804,6 @@ fn main() {
         std::process::exit(130);
     })
     .expect("Error setting Ctrl+C handler");
-
-    // 设置环境变量改善Burn TUI显示
-    unsafe {
-        std::env::set_var("BURN_TUI_NO_CLEAR", "1");
-        std::env::set_var("TERM", "xterm-256color");
-        std::env::set_var("BURN_TUI_ENABLED", "1");
-        std::env::set_var("BURN_TUI_FORCE", "1");
-        std::env::set_var("WGPU_LOG", "off");
-
-        // 禁用burn框架的实验日志记录器，解决Windows下file logger安装失败的问题
-        std::env::set_var("BURN_EXPERIMENT_LOGGER_DISABLED", "1");
-
-        // 设置日志级别
-        std::env::set_var("RUST_LOG", "burn_train=info,wgpu_core=off,burn_core=off");
-    }
 
     // 初始化日志
     env_logger::init();
@@ -847,6 +848,22 @@ fn main() {
             println!("使用约30M参数的模型配置");
             ModelConfig::medium_30m()
         }
+        "100m" => {
+            println!("使用约0.1B参数的模型配置");
+            ModelConfig::small_100m()
+        }
+        "1b" => {
+            println!("使用约1B参数的模型配置");
+            ModelConfig::medium_1b()
+        }
+        "3b" => {
+            println!("使用约3B参数的模型配置");
+            ModelConfig::large_3b()
+        }
+        "671b" => {
+            println!("使用约671B参数的模型配置");
+            ModelConfig::huge_671b()
+        }
         _ => {
             println!("使用默认模型配置（约1M参数）");
             ModelConfig::new()
@@ -890,7 +907,17 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
     model_config.max_seq_len = args.max_seq_len;
 
     let model_init = model_config.init::<B>(&device);
-    println!("模型参数总量: {} (约 0.001B)", model_init.num_params());
+    let num_params = model_init.num_params();
+    let params_str = if num_params >= 1_000_000_000 {
+        format!("约 {:.3}B", num_params as f64 / 1_000_000_000.0)
+    } else if num_params >= 1_000_000 {
+        format!("约 {:.3}M", num_params as f64 / 1_000_000.0)
+    } else if num_params >= 1_000 {
+        format!("约 {:.3}K", num_params as f64 / 1_000.0)
+    } else {
+        format!("{}", num_params)
+    };
+    println!("模型参数总量: {} ({})", num_params, params_str);
 
     // 4. 训练流程
     let model_path = format!("{}/model.mpk", args.artifact_dir);
@@ -913,7 +940,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         };
         // 根据后端类型优化批处理大小
         training_config.batch_size = if args.backend == "gpu" {
-            // GPU优化：更大的批处理大小以提高利用率
+            // GPU优化：保持用户指定的批量大小，不强制最小值
             if args.ultra_quick {
                 4
             } else if args.quick_dev {
@@ -921,7 +948,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             } else if args.fast {
                 (args.batch_size * 4).min(256)
             } else {
-                args.batch_size.max(32)
+                args.batch_size
             }
         } else {
             // CPU保持原有逻辑
@@ -984,6 +1011,96 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             println!("  - 学习率: {:.6}", training_config.lr);
             println!("  - 工作线程数: {}", training_config.num_workers);
             println!("  - 高性能GPU模式已启用");
+            
+            // GPU显存自动调整
+            println!("开始自动检测GPU显存并调整配置...");
+            
+            // 创建一个测试用的小模型来检测显存
+            let original_batch_size = training_config.batch_size;
+            let original_seq_len = model_config.max_seq_len;
+            
+            // 按照用户要求的顺序生成批量大小和序列长度组合
+            // 先生成所有可能的组合序列
+            let mut configs = Vec::new();
+            let mut seq_len = original_seq_len;
+            
+            while seq_len >= 2 {
+                let mut batch_size = original_batch_size;
+                while batch_size >= 2 {
+                    configs.push((batch_size, seq_len));
+                    batch_size /= 2;
+                }
+                seq_len /= 2;
+            }
+            
+            println!("生成的配置组合: {:?}", configs);
+            
+            // 按顺序尝试每个配置
+            let mut selected_batch_size = original_batch_size;
+            let mut selected_seq_len = original_seq_len;
+            let mut found_valid_config = false;
+            
+            for (batch_size, seq_len) in configs {
+                println!(
+                    "尝试使用配置: 批量大小 = {}, 序列长度 = {}",
+                    batch_size, seq_len
+                );
+                
+                // 创建新的模型配置，确保使用当前尝试的序列长度
+                let mut test_model_config = training_config.model.clone();
+                test_model_config.max_seq_len = seq_len;
+                
+                // 在循环内部克隆变量，避免移动问题
+                let test_device_clone = device.clone();
+                let test_model_config_clone = test_model_config;
+                
+                // 使用线程来测试内存分配，避免主程序崩溃
+                let test_result = std::thread::spawn(move || {
+                    // 初始化自动微分模型（与实际训练使用相同的后端类型）
+                    let test_model = test_model_config_clone.init::<Autodiff<B>>(&test_device_clone);
+                    test_model.num_params(); // 确保模型完全初始化
+                    
+                    // 创建测试用的输入张量（模拟实际训练的内存使用情况）
+                    // 形状: [batch_size, seq_len]
+                    let test_inputs = burn::tensor::Tensor::<Autodiff<B>, 2, burn::tensor::Int>::zeros(
+                        [batch_size, test_model_config_clone.max_seq_len],
+                        &test_device_clone,
+                    );
+                    
+                    // 执行前向传播（模拟实际训练）
+                    let _output = test_model.forward(test_inputs);
+                });
+                
+                match test_result.join() {
+                    Ok(_) => {
+                        println!("✓ 内存分配成功");
+                        selected_batch_size = batch_size;
+                        selected_seq_len = seq_len;
+                        found_valid_config = true;
+                        break;
+                    }
+                    Err(_) => {
+                        println!("✗ 内存不足，尝试下一个配置...");
+                    }
+                }
+            }
+            
+            // 如果没有找到有效配置，使用最小配置
+            if !found_valid_config {
+                println!("未找到有效配置，使用最小配置");
+                selected_batch_size = 1;
+                selected_seq_len = 1;
+            }
+            
+            // 更新配置为调整后的值
+            training_config.batch_size = selected_batch_size;
+            model_config.max_seq_len = selected_seq_len;
+            training_config.model.max_seq_len = selected_seq_len;
+            
+            println!(
+                "自动调整后配置: 批量大小 = {}, 序列长度 = {}",
+                selected_batch_size, selected_seq_len
+            );
         }
 
         // 默认启用TUI，除非明确禁用或使用快速模式
@@ -1072,8 +1189,8 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 let dataloader_train = Arc::new(StreamingSftDataLoader::<Autodiff<B>> {
                     tokenizer: Arc::clone(&tok),
                     device: device.clone(),
-                    batch_size: args.batch_size,
-                    seq_len: args.max_seq_len,
+                    batch_size: training_config.batch_size,
+                    seq_len: training_config.model.max_seq_len,
                     input: input_train,
                     items_total,
                 });
@@ -1081,8 +1198,8 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 let dataloader_valid = Arc::new(StreamingSftDataLoader::<B> {
                     tokenizer: Arc::clone(&tok),
                     device: device_clone,
-                    batch_size: args.batch_size,
-                    seq_len: args.max_seq_len,
+                    batch_size: training_config.batch_size,
+                    seq_len: training_config.model.max_seq_len,
                     input: input_valid,
                     items_total,
                 });

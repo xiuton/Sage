@@ -58,7 +58,7 @@ cargo run --release --bin train -- \
 - `--artifact-dir`：模型保存目录
 - `--use-bpe`：启用BPE分词器
 - `--bpe-vocab-size`：BPE词表大小（建议10000-50000）
-- `--model-size`：模型大小（10m/30m）
+- `--model-size`：模型大小（10m/30m/100m/1b/3b/671b）
 
 ### 3. 增量训练
 
@@ -466,7 +466,7 @@ Out of memory
 **解决方案：**
 - **减小批量大小**：`--batch-size 8`
 - **减小序列长度**：`--max-seq-len 128`
-- **使用更小的模型**：`--model-size 10m`
+- **使用更小的模型**：`--model-size 10m`（或更大模型：`--model-size 30m/100m/1b/3b/671b`）
 - **调整学习率**：可能需要同时调整学习率
 
 ### 3. 训练速度慢

@@ -52,6 +52,11 @@ struct TrainingContext<B: AutodiffBackend> {
 
 fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
     std::fs::create_dir_all(&context.artifact_dir).ok();
+    
+    // 创建实验日志目录，避免文件记录器安装失败
+    std::fs::create_dir_all(format!("{}/train", context.artifact_dir)).ok();
+    std::fs::create_dir_all(format!("{}/valid", context.artifact_dir)).ok();
+    
     context.config
         .save(format!("{}/config.json", context.artifact_dir))
         .expect("Config should be saved");
@@ -62,48 +67,58 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
 
     B::seed(context.config.seed);
 
+    let batch_size = context.config.batch_size;
+    let seq_len = context.config.model.max_seq_len;
+    
+    // 更新配置为调整后的值
+    let mut adjusted_context = context;
+    adjusted_context.config.batch_size = batch_size;
+    adjusted_context.config.model.max_seq_len = seq_len;
+    
     println!(
-        "批量大小: {}, 序列长度: {}",
-        context.config.batch_size, context.config.model.max_seq_len
+        "最终使用配置: 批量大小 = {}, 序列长度 = {}",
+        batch_size, seq_len
     );
-    println!("工作线程数: {}", context.config.num_workers);
-    println!("总训练样本数: {}", context.total_items);
+    println!("工作线程数: {}", adjusted_context.config.num_workers);
+    println!("总训练样本数: {}", adjusted_context.total_items);
 
-    let mut learner_builder = LearnerBuilder::new(&context.artifact_dir)
+    // 直接使用调整后的配置进行训练
+    let mut learner_builder = LearnerBuilder::new(&adjusted_context.artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
-        .devices(vec![context.device.clone()])
-        .num_epochs(context.config.num_epochs);
+        .devices(vec![adjusted_context.device.clone()])
+        .num_epochs(adjusted_context.config.num_epochs)
+        .with_application_logger(None);
 
-    if !context.config.no_progress {
+    if !adjusted_context.config.no_progress {
         learner_builder = learner_builder.summary();
     }
 
     let learner = learner_builder.build(
-        context.init_model.unwrap_or_else(|| context.config.model.init::<B>(&context.device)),
-        context.config.optimizer.init(),
-        context.config.lr,
+        adjusted_context.init_model.unwrap_or_else(|| adjusted_context.config.model.init::<B>(&adjusted_context.device)),
+        adjusted_context.config.optimizer.init(),
+        adjusted_context.config.lr,
     );
 
     let start_time = Instant::now();
-    let model_trained = learner.fit(context.dataloader_train, context.dataloader_valid);
+    let model_trained = learner.fit(adjusted_context.dataloader_train, adjusted_context.dataloader_valid);
     let elapsed = start_time.elapsed();
 
     model_trained
-        .save_file(format!("{}/model", context.artifact_dir), &CompactRecorder::new())
+        .save_file(format!("{}/model", adjusted_context.artifact_dir), &CompactRecorder::new())
         .expect("Model should be saved");
 
-    if let Some(best_epoch) = find_best_epoch(Path::new(&context.artifact_dir)) {
-        let from = Path::new(&context.artifact_dir)
+    if let Some(best_epoch) = find_best_epoch(Path::new(&adjusted_context.artifact_dir)) {
+        let from = Path::new(&adjusted_context.artifact_dir)
             .join("checkpoint")
             .join(format!("model-{}.mpk", best_epoch));
-        let to = Path::new(&context.artifact_dir).join("best_model.mpk");
+        let to = Path::new(&adjusted_context.artifact_dir).join("best_model.mpk");
         let _ = fs::copy(from, to);
     }
 
-    print_training_stats(elapsed, context.total_items, context.config.num_epochs, &context.artifact_dir);
+    print_training_stats(elapsed, adjusted_context.total_items, adjusted_context.config.num_epochs, &adjusted_context.artifact_dir);
 }
 
 fn print_training_stats(elapsed: std::time::Duration, total_items: usize, num_epochs: usize, artifact_dir: &str) {
