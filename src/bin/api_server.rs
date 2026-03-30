@@ -658,6 +658,9 @@ async fn infer_handler(
         start_time,
         prompt_tokens,
         completion_tokens,
+        1, // batch_size
+        formatted_prompt.len(), // sequence_length
+        0, // model_parameters (简化实现)
     );
     
     log_info!("性能指标: 推理时间={:.2}ms, 速度={:.2} tokens/s", 
@@ -915,6 +918,9 @@ async fn batch_infer_handler(
         start_time,
         total_prompt_tokens,
         total_completion_tokens,
+        responses.len(), // batch_size
+        0, // sequence_length (简化实现)
+        0, // model_parameters (简化实现)
     );
     
     log_info!("批量推理完成，总耗时: {}ms, 平均速度={:.2} tokens/s", 

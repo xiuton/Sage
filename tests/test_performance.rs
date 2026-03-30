@@ -15,7 +15,7 @@ fn test_record_inference() {
     let start_time = Instant::now();
     
     // 记录一个推理
-    let metrics = monitor.record_inference("/test/endpoint", start_time, 100, 50);
+    let metrics = monitor.record_inference("/test/endpoint", start_time, 100, 50, 1, 0, 0);
     
     assert_eq!(metrics.prompt_tokens, 100);
     assert_eq!(metrics.completion_tokens, 50);
@@ -27,8 +27,8 @@ fn test_get_average_metrics() {
     let monitor = PerformanceMonitor::new();
     
     // 记录多次推理
-    monitor.record_inference("/test/endpoint", Instant::now(), 100, 50);
-    monitor.record_inference("/test/endpoint", Instant::now(), 200, 100);
+    monitor.record_inference("/test/endpoint", Instant::now(), 100, 50, 1, 0, 0);
+    monitor.record_inference("/test/endpoint", Instant::now(), 200, 100, 1, 0, 0);
     
     let avg_metrics = monitor.get_average_metrics("/test/endpoint").unwrap();
     
@@ -41,8 +41,8 @@ fn test_get_average_metrics() {
 fn test_get_all_metrics() {
     let monitor = PerformanceMonitor::new();
     
-    monitor.record_inference("/endpoint1", Instant::now(), 100, 50);
-    monitor.record_inference("/endpoint2", Instant::now(), 200, 100);
+    monitor.record_inference("/endpoint1", Instant::now(), 100, 50, 1, 0, 0);
+    monitor.record_inference("/endpoint2", Instant::now(), 200, 100, 1, 0, 0);
     
     let all_metrics = monitor.get_all_metrics();
     
@@ -56,7 +56,7 @@ fn test_get_all_metrics() {
 fn test_clear_metrics() {
     let monitor = PerformanceMonitor::new();
     
-    monitor.record_inference("/test/endpoint", Instant::now(), 100, 50);
+    monitor.record_inference("/test/endpoint", Instant::now(), 100, 50, 1, 0, 0);
     assert!(!monitor.get_all_metrics().is_empty());
     
     monitor.clear_metrics();

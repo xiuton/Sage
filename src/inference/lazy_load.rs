@@ -40,7 +40,7 @@ impl<B: Backend> LazyModel<B> {
                     .map_err(|e| {
                         let error_msg = format!("模型加载失败: {}", e);
                         log::error!("{}", error_msg);
-                        SageError::ModelLoadingError(error_msg)
+                        SageError::model_loading(error_msg, Some(model_path.clone()))
                     })
                     .unwrap();
                 let load_duration = start_time.elapsed();
