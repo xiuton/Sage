@@ -17,6 +17,7 @@ pub use inference::lazy_load;
 pub use training::lora;
 pub use training::streaming;
 pub use training::training::*;
+pub use training::vram_probe::{probe_first_fitting_config, probe_training_step_fits};
 pub use tools::export;
 pub use tools::model_download;
 pub use utils::error::*;

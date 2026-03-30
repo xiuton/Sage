@@ -1,12 +1,17 @@
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::io::Write;
 use std::sync::Once;
+use std::env;
 
 static INIT_LOGGER: Once = Once::new();
 
 pub fn init_logger() {
     INIT_LOGGER.call_once(|| {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        let log_level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+        let env_filter = env_logger::Env::default().default_filter_or(&log_level);
+        
+        let mut binding = env_logger::Builder::from_env(env_filter);
+        let builder = binding
             .format(|buf, record| {
                 writeln!(
                     buf,
@@ -15,8 +20,16 @@ pub fn init_logger() {
                     record.target(),
                     record.args()
                 )
-            })
-            .init();
+            });
+        
+        // 在Windows上使用更健壮的日志配置，避免文件锁定问题
+        match builder.try_init() {
+            Ok(()) => {}
+            Err(e) => {
+                warn!("日志初始化失败: {}", e);
+                warn!("继续运行，但日志可能不完整");
+            }
+        }
     });
 }
 

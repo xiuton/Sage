@@ -36,36 +36,38 @@ struct SftMessage {
 }
 
 fn sft_template(prompt: &str, response: &str) -> String {
-    let estimated_len = 4 + "用户：".len() + prompt.len() + 1 + "助手：".len() + response.len() + 2;
+    let estimated_len = 4 + "<user>".len() + prompt.len() + "</user>".len() + "<assistant>".len() + response.len() + "</assistant>".len() + 6;
     let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
-    out.push_str("用户：");
+    out.push_str("<s>\n<user>");
     out.push_str(prompt);
-    out.push('\n');
-    out.push_str("助手：");
+    out.push_str("</user>\n<assistant>");
     out.push_str(response);
+    out.push_str("</assistant>");
     out.push('\u{0003}');
     out.push('\n');
     out
 }
 
 fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
-    let estimated_len: usize = messages.iter().map(|m| m.content.len() + 10).sum();
+    let estimated_len: usize = messages.iter().map(|m| m.content.len() + 20).sum();
     let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
+    out.push_str("<s>\n");
 
     let mut has_assistant = false;
     for m in messages {
         match m.role.as_str() {
             "user" => {
-                out.push_str("用户：");
+                out.push_str("<user>");
                 out.push_str(&m.content);
-                out.push('\n');
+                out.push_str("</user>\n");
             }
             "assistant" => {
                 has_assistant = true;
-                out.push_str("助手：");
+                out.push_str("<assistant>");
                 out.push_str(&m.content);
+                out.push_str("</assistant>");
                 out.push('\u{0003}');
                 out.push('\n');
             }
@@ -363,7 +365,13 @@ impl<B: Backend> Iterator for StreamingSftIterator<B> {
             TensorData::new(targets_flat, [self.loader.batch_size, self.loader.seq_len]),
             &self.loader.device,
         );
-        Some(TextBatch { inputs, targets })
+        // 创建全1的mask，表示所有位置都参与训练
+        let mask_data = vec![1u8; self.loader.batch_size * self.loader.seq_len];
+        let mask = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(mask_data, [self.loader.batch_size, self.loader.seq_len]),
+            &self.loader.device,
+        );
+        Some(TextBatch { inputs, targets, mask })
     }
 }
 

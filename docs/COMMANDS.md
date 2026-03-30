@@ -60,6 +60,18 @@ cargo run --release --bin train -- [OPTIONS]
 cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --artifact-dir ./tmp/lm_cn --num-epochs 5 --max-seq-len 64
 ```
 
+**A4. 分布式训练（多GPU）**
+
+```bash
+cargo run --release --bin train -- --sft-jsonl sft_data.jsonl --artifact-dir ./tmp/distributed_model --distributed --devices 0,1 --backend gpu --num-epochs 50 --batch-size 16 --force
+```
+
+**A5. DPO偏好对齐训练**
+
+```bash
+cargo run --release --bin train -- --dpo --dpo-jsonl dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+```
+
 **A2. 目录语料训练（限制读取大小 + 快速验证 - 预训练）**
 
 ```bash
@@ -224,6 +236,11 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--model-size <MODEL_SIZE>`：模型大小配置，可选值为 `default`（约1M参数）、`10m`（约10M参数）、`30m`（约30M参数）、`100m`（约0.1B参数）、`1b`（约1B参数）、`3b`（约3B参数）、`671b`（约671B参数）。默认 `default`。更大的模型需要更多内存和训练时间，但可能获得更好的效果。
 - `--training-mode <TRAINING_MODE>`：训练模式，可选值为 `general`（通用对话）、`code`（代码生成）、`math`（数学推理）。默认 `general`。不同模式会使用不同的对话模板优化特定场景。
 - `--force-tui`：强制启用TUI进度显示，即使在可能不支持的环境中。注意：在某些终端中可能导致显示问题。
+- `--distributed`：启用分布式训练模式。使用多GPU进行数据并行训练。
+- `--devices <DEVICES>`：指定使用的GPU设备ID列表（逗号分隔，如 `0,1,2`）。仅在启用 `--distributed` 时有效。
+- `--dpo`：启用DPO偏好对齐训练模式。使用偏好数据进行训练。
+- `--dpo-jsonl <DPO_JSONL>`：DPO训练数据文件路径。每行包含 `prompt`、`chosen`、`rejected` 字段。
+- `--dpo-beta <DPO_BETA>`：DPO损失的beta参数（默认 `0.1`）。控制偏好对齐的强度。
 
 补充说明：
 

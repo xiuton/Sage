@@ -6,12 +6,24 @@
 
 ## 目录
 
-1. [训练方式](#训练方式)
-2. [语料获取](#语料获取)
-3. [实际训练流程](#实际训练流程)
-4. [训练参数调整](#训练参数调整)
-5. [模型评估与优化](#模型评估与优化)
-6. [常见问题排查](#常见问题排查)
+1. [训练阶段说明（正式 / 非正式）](#训练阶段说明正式--非正式)
+2. [训练方式](#训练方式)
+3. [语料获取](#语料获取)
+4. [实际训练流程](#实际训练流程)
+5. [训练参数调整](#训练参数调整)
+6. [模型评估与优化](#模型评估与优化)
+7. [常见问题排查](#常见问题排查)
+
+## 训练阶段说明（正式 / 非正式）
+
+Sage 里存在两类容易混淆的概念：
+
+- **GPU 显存自动探测**：在默认开启时，会针对多组 batch/序列长度执行 **单次** 前向+反向以估算显存，**不**经过 Burn `Learner`，**没有** epoch 训练日志与训练 TUI。  
+- **正式训练**：进入 `Learner::fit` 之后，按 epoch 使用 DataLoader 迭代数据、记录指标、保存 checkpoint。
+
+`--quick-dev` / `--ultra-quick` 仍是 **正式 Learner 训练**，只是轮次与数据量压到极小，用于冒烟测试。
+
+**完整时间线、日志如何区分、相关参数**（如 `--no-auto-vram`）请单独阅读：**[TRAINING_PHASES.md](TRAINING_PHASES.md)**。
 
 ## 训练方式
 
@@ -77,6 +89,51 @@ cargo run --release --bin train -- \
 **参数说明：**
 - `--continue`：从现有模型继续训练
 - `--resume-epoch <epoch>`：从特定轮次恢复训练
+
+### 4. DPO偏好对齐训练
+
+使用偏好对齐数据进行DPO训练：
+
+```bash
+# DPO训练
+cargo run --release --bin train -- \
+    --dpo \
+    --dpo-jsonl data/dpo_data.jsonl \
+    --artifact-dir ./tmp/dpo_model \
+    --dpo-beta 0.1 \
+    --num-epochs 30 \
+    --batch-size 16 \
+    --backend gpu \
+    --force
+```
+
+**参数说明：**
+- `--dpo`：启用DPO训练模式
+- `--dpo-jsonl`：DPO训练数据文件路径
+- `--dpo-beta`：DPO损失的beta参数（默认0.1）
+- DPO数据格式：包含`prompt`、`chosen`、`rejected`三个字段
+
+### 5. 分布式训练
+
+使用多GPU进行分布式训练：
+
+```bash
+# 分布式训练
+cargo run --release --bin train -- \
+    --sft-jsonl data/your_corpus.jsonl \
+    --artifact-dir ./tmp/distributed_model \
+    --distributed \
+    --devices 0,1 \
+    --num-epochs 50 \
+    --batch-size 16 \
+    --backend gpu \
+    --force
+```
+
+**参数说明：**
+- `--distributed`：启用分布式训练模式
+- `--devices`：指定使用的GPU设备ID（逗号分隔）
+- 每个GPU会自动分配batch_size的训练任务
 
 ## 语料获取
 

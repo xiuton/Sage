@@ -1,14 +1,16 @@
 use burn::backend::{Autodiff, ndarray::NdArray, wgpu::Wgpu};
 use burn::module::Module;
-use burn::optim::{AdamConfig, Optimizer};
+use burn::optim::AdamConfig;
 use burn::prelude::Backend;
 use sage::{
     model::ModelConfig,
+    probe_first_fitting_config,
     streaming::{SftInput, StreamingSftDataLoader},
     tokenizer::Tokenizer,
-    train, train_from_cache, train_with_loaders,
+    train, train_from_cache, train_with_loaders, train_dpo,
     TrainingConfig,
 };
+use sage::training::dpo::{DPOConfig, load_dpo_jsonl};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -18,7 +20,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -58,8 +60,9 @@ struct Args {
     #[arg(long, default_value_t = 50)]
     num_epochs: usize,
 
-    #[arg(long, default_value_t = 32)]
-    batch_size: usize,
+    /// 每步训练的物理 batch。可写多次 `--batch-size`，**以最后一次为准**（默认 32）。
+    #[arg(long = "batch-size", action = ArgAction::Append)]
+    batch_sizes: Vec<usize>,
 
     #[arg(long, default_value_t = 1.0e-4)]
     lr: f64,
@@ -124,6 +127,46 @@ struct Args {
     /// Force enable TUI progress display even in environments that might not support it
     #[arg(long, default_value_t = false)]
     force_tui: bool,
+
+    /// 禁用 GPU 自动显存探测；按 `--batch-size` 与 `--max-seq-len` 原样训练（可配合 `--gradient-accumulation`）。
+    #[arg(long, default_value_t = false)]
+    no_auto_vram: bool,
+
+    /// 梯度累积步数（Hugging Face 风格：等效 batch ≈ batch_size × 该值）。
+    /// 使用 `--no-auto-vram` 或 CPU 时生效；GPU 自动探测成功时会按等效 batch 自动计算并写入配置。
+    #[arg(long, default_value_t = 1)]
+    gradient_accumulation: usize,
+    
+    /// 启用分布式训练
+    #[arg(long, default_value_t = false)]
+    distributed: bool,
+    
+    /// 指定使用的设备列表，格式: "cpu,gpu:0,gpu:1"
+    #[arg(long, value_name = "cpu,gpu:0,gpu:1")]
+    devices: Option<String>,
+    
+    /// DPO训练模式
+    #[arg(long, default_value_t = false)]
+    dpo: bool,
+    
+    /// DPO beta参数
+    #[arg(long, default_value_t = 0.1)]
+    dpo_beta: f64,
+    
+    /// DPO KL散度权重
+    #[arg(long, default_value_t = 0.1)]
+    dpo_kl_weight: f64,
+    
+    /// DPO数据文件路径
+    #[arg(long, value_name = "path/to/dpo_data.jsonl")]
+    dpo_data: Option<String>,
+}
+
+impl Args {
+    /// 解析后的 batch 大小：`--batch-size` 最后一次出现，未指定时为 32。
+    fn batch_size(&self) -> usize {
+        self.batch_sizes.last().copied().unwrap_or(32)
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -932,7 +975,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             println!("启用快速开发模式：1轮训练，超小批量(4)，超高学习率，适合快速验证");
         }
         println!("未发现已训练模型，开始正式训练...");
-        let mut training_config = TrainingConfig::new(model_config.clone(), AdamConfig::new());
+        let mut training_config = TrainingConfig::create(model_config.clone(), AdamConfig::new());
         training_config.num_epochs = if args.ultra_quick || args.quick_dev {
             1
         } else {
@@ -946,9 +989,9 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             } else if args.quick_dev {
                 8
             } else if args.fast {
-                (args.batch_size * 4).min(256)
+                (args.batch_size() * 4).min(256)
             } else {
-                args.batch_size
+                args.batch_size()
             }
         } else {
             // CPU保持原有逻辑
@@ -957,9 +1000,9 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             } else if args.quick_dev {
                 4
             } else if args.fast {
-                (args.batch_size * 2).min(128)
+                (args.batch_size() * 2).min(128)
             } else {
-                args.batch_size
+                args.batch_size()
             }
         };
 
@@ -980,116 +1023,125 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             args.lr
         };
 
-        // 根据后端类型优化并行工作线程数
+        // 数据加载线程数：
+        // - CPU：多线程 batch（burn BatchDataLoader::multi_thread）可提升吞吐。
+        // - GPU(WGPU)：batcher 在子线程里创建 GPU 张量会与 WGPU 设备/队列线程模型冲突，首步训练常直接 panic（exit 101）。必须 num_workers=0。
         let cpu_cores = num_cpus::get();
-        let optimal_workers = if args.backend == "gpu" {
-            // GPU模式下：更多工作线程用于数据预处理，避免GPU等待
-            if args.fast {
-                cpu_cores.max(12)
-            } else {
-                cpu_cores.max(8)
-            }
+        let optimal_workers_cpu = if args.fast {
+            cpu_cores.max(8)
         } else {
-            // CPU模式下：保持平衡以避免过度竞争
-            if args.fast {
-                cpu_cores.max(8)
-            } else {
-                cpu_cores.max(4)
-            }
+            cpu_cores.max(4)
         };
-        training_config.num_workers = args.num_workers.max(optimal_workers);
+
+        if args.backend == "gpu" {
+            if args.num_workers != 0 {
+                println!(
+                    "提示: GPU(WGPU) 训练时数据加载已固定为单线程（num_workers=0）。\
+                     多线程 DataLoader 会在子线程创建 WGPU 张量，易导致训练启动崩溃；已忽略 --num-workers {}。",
+                    args.num_workers
+                );
+            }
+            training_config.num_workers = 0;
+        } else {
+            training_config.num_workers = args.num_workers.max(optimal_workers_cpu);
+        }
+
+        training_config.gradient_accumulation_steps = args.gradient_accumulation.max(1);
 
         println!(
-            "使用 {} 个工作线程进行数据加载",
+            "数据加载线程数（burn DataLoader workers）: {}",
             training_config.num_workers
         );
 
-        // GPU性能优化提示
+        // GPU：可选的显存探测（一步前向+反向）+ 梯度累积以保持等效 batch
         if args.backend == "gpu" {
             println!("GPU优化配置:");
-            println!("  - 批处理大小: {}", training_config.batch_size);
+            println!("  - 目标/物理批处理大小: {}", training_config.batch_size);
             println!("  - 学习率: {:.6}", training_config.lr);
             println!("  - 工作线程数: {}", training_config.num_workers);
             println!("  - 高性能GPU模式已启用");
-            
-            // GPU显存自动调整
-            println!("开始自动检测GPU显存并调整配置...");
-            
-            // 创建一个测试用的小模型来检测显存
-            let original_batch_size = training_config.batch_size;
-            let original_seq_len = model_config.max_seq_len;
-            
-            // 按照用户要求的顺序生成批量大小和序列长度组合
-            // 先生成所有可能的组合序列
-            let mut configs = Vec::new();
-            let mut seq_len = original_seq_len;
-            
-            while seq_len >= 2 {
-                let mut batch_size = original_batch_size;
-                while batch_size >= 2 {
-                    configs.push((batch_size, seq_len));
-                    batch_size /= 2;
-                }
-                seq_len /= 2;
-            }
-            
-            println!("生成的配置组合: {:?}", configs);
-            
-            // 按顺序尝试每个配置
-            let mut selected_batch_size = original_batch_size;
-            let mut selected_seq_len = original_seq_len;
-            let mut found_valid_config = false;
-            
-            for (batch_size, seq_len) in configs {
+
+            if args.no_auto_vram {
+                println!("已禁用自动显存探测（--no-auto-vram），使用命令行 batch / seq / 梯度累积。");
+            } else {
                 println!(
-                    "尝试使用配置: 批量大小 = {}, 序列长度 = {}",
-                    batch_size, seq_len
+                    "\n\
+                     --- GPU 显存探测（不是正式训练） ---\n\
+                     本阶段仅重复「单次前向 + 反向」以估算显存，不会启动 Burn 的 Learner，\n\
+                     因此没有训练 TUI、也没有 epoch 日志；若长时间无输出，多为 WGPU 首次编译内核。\n\
+                     探测结束后才会进入正式训练（届时将出现进度 / TUI）。\n\
+                     ------------------------------------"
                 );
-                
-                // 创建新的模型配置，确保使用当前尝试的序列长度
-                let mut test_model_config = training_config.model.clone();
-                test_model_config.max_seq_len = seq_len;
-                
-                // 在循环内部克隆变量，避免移动问题
-                let test_device_clone = device.clone();
-                let test_model_config_clone = test_model_config;
-                
-                // 使用线程来测试内存分配，避免主程序崩溃
-                let test_result = std::thread::spawn(move || {
-                    // 初始化自动微分模型（与实际训练使用相同的后端类型）
-                    let test_model = test_model_config_clone.init::<Autodiff<B>>(&test_device_clone);
-                    test_model.num_params(); // 确保模型完全初始化
-                });
-                
-                match test_result.join() {
-                    Ok(_) => {
-                        println!("✓ 内存分配成功");
-                        selected_batch_size = batch_size;
-                        selected_seq_len = seq_len;
-                        found_valid_config = true;
+                let effective_batch = training_config.batch_size.max(1);
+                let original_seq_len = model_config.max_seq_len.max(1);
+
+                println!("开始自动探测 GPU：对每组 (物理 batch, seq_len) 执行一步前向+反向…");
+
+                let mut configs = Vec::new();
+                let mut seq_len = original_seq_len;
+                while seq_len >= 1 {
+                    let mut batch_size = effective_batch;
+                    loop {
+                        configs.push((batch_size, seq_len));
+                        if batch_size == 1 {
+                            break;
+                        }
+                        batch_size /= 2;
+                    }
+                    if seq_len == 1 {
                         break;
                     }
-                    Err(_) => {
-                        println!("✗ 内存不足，尝试下一个配置...");
+                    seq_len /= 2;
+                }
+
+                println!("尝试顺序（由大到小）: {} 组配置", configs.len());
+
+                let found = probe_first_fitting_config::<Autodiff<B>>(
+                    &device,
+                    &training_config.model,
+                    &configs,
+                );
+
+                match found {
+                    Some((micro, sl)) => {
+                        let accum = effective_batch.saturating_add(micro - 1) / micro.max(1);
+                        let accum = accum.max(1);
+                        let effective_approx = micro.saturating_mul(accum);
+
+                        training_config.batch_size = micro;
+                        model_config.max_seq_len = sl;
+                        training_config.model.max_seq_len = sl;
+                        training_config.gradient_accumulation_steps = accum;
+
+                        println!("");
+                        println!("🎯 找到合适的显存配置！");
+                        println!("==========================================");
+                        println!("  物理 batch = {}", micro);
+                        println!("  序列长度 = {}", sl);
+                        println!("  梯度累积 = {}", accum);
+                        println!("  等效 batch ≈ {}", effective_approx);
+                        println!("==========================================");
+                        println!("");
+                        println!("💡 显存探测阶段已完成，即将进入正式训练...");
+                        println!("🔥 接下来将显示 Burn 训练 TUI 和完整的 epoch 训练日志");
+                        println!("⏳ 正在准备数据加载器，请稍候...");
+                        println!("");
+                    }
+                    None => {
+                        eprintln!(
+                            "错误: 所有候选配置均无法在 GPU 上完成一步训练（前向+反向）。\
+                             请减小 --batch-size / --max-seq-len，使用更小的 --model-size，\
+                             改用 --backend cpu，或先使用 --no-auto-vram 手动调参。"
+                        );
+                        std::process::exit(1);
                     }
                 }
             }
-            
-            // 如果没有找到有效配置，使用最小配置
-            if !found_valid_config {
-                println!("未找到有效配置，使用最小配置");
-                selected_batch_size = 1;
-                selected_seq_len = 1;
-            }
-            
-            // 更新配置为调整后的值
-            training_config.batch_size = selected_batch_size;
-            model_config.max_seq_len = selected_seq_len;
-            training_config.model.max_seq_len = selected_seq_len;
-            
+        } else {
+            // CPU：仅应用用户指定的梯度累积
             println!(
-                "自动调整后配置: 批量大小 = {}, 序列长度 = {}",
-                selected_batch_size, selected_seq_len
+                "CPU 后端: 梯度累积步数 = {}",
+                training_config.gradient_accumulation_steps
             );
         }
 
@@ -1100,6 +1152,32 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         if args.tui || args.force_tui {
             training_config.no_progress = false;
             println!("强制启用TUI进度显示");
+        }
+
+        // 设置分布式训练配置
+        training_config.distributed = args.distributed;
+        if args.distributed {
+            if let Some(devices_str) = &args.devices {
+                training_config.devices = devices_str.split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+            }
+            println!("分布式训练已启用");
+            if !training_config.devices.is_empty() {
+                println!("使用设备: {:?}", training_config.devices);
+            }
+        }
+        
+        // 设置DPO训练配置
+        if args.dpo {
+            let dpo_config = DPOConfig {
+                beta: args.dpo_beta,
+                use_kl_regularization: true,
+                kl_weight: args.dpo_kl_weight,
+            };
+            training_config.dpo_config = Some(dpo_config);
+            println!("DPO训练已启用");
+            println!("DPO参数: beta={}, kl_weight={}", args.dpo_beta, args.dpo_kl_weight);
         }
 
         println!(
@@ -1129,6 +1207,32 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         } else {
             None
         };
+        
+        // 优化器状态将通过 burn 的检查点机制自动恢复
+        let init_optimizer = None;
+
+        // DPO训练模式
+        if args.dpo {
+            println!("启动DPO训练...");
+            
+            // 加载DPO数据
+            let dpo_data_path = args.dpo_data.as_deref().expect("DPO训练需要指定 --dpo-data");
+            let dpo_items = load_dpo_jsonl(dpo_data_path).expect("加载DPO数据失败");
+            
+            println!("加载了 {} 条DPO数据", dpo_items.len());
+            
+            // 启动DPO训练
+            train_dpo::<Autodiff<B>>(
+                &args.artifact_dir,
+                training_config,
+                device,
+                &tokenizer,
+                dpo_items,
+                init_model,
+            );
+            
+            return;
+        }
 
         if args.stream {
             if args.stream_direct {
@@ -1202,6 +1306,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     dataloader_train,
                     dataloader_valid,
                     init_model,
+                    init_optimizer,
                 );
             } else {
                 let (tokens_path, mask_path) =
@@ -1215,6 +1320,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     &tokens_path,
                     &mask_path,
                     init_model,
+                    init_optimizer,
                 );
             }
         } else {
@@ -1248,6 +1354,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 tokens,
                 mask,
                 init_model,
+                init_optimizer,
             );
         }
     } else {

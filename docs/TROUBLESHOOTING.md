@@ -319,7 +319,193 @@ cargo run --release --bin train -- --backend cpu [其他参数]
 
 ---
 
-## 12) 流式数据加载问题
+## 12) 分布式训练问题
+
+### 12.1 分布式训练启动失败
+
+#### 现象
+- 使用 `--distributed` 参数时训练无法启动
+- 报错：`No available GPU devices found` 或类似设备错误
+
+#### 原因
+- 指定的 GPU 设备不可用或不存在
+- WGPU 后端无法检测到 GPU
+
+#### 解决方案
+1) 检查可用的 GPU 设备：
+```bash
+# 使用系统工具检查 GPU
+# Windows: 使用任务管理器查看 GPU
+# Linux: nvidia-smi
+# macOS: system_profiler SPDisplaysDataType
+```
+
+2) 确保指定的设备 ID 有效：
+```bash
+# 尝试使用单个设备测试
+cargo run --release --bin train -- --distributed --devices 0 --backend gpu ...
+```
+
+3) 如果没有可用 GPU，使用 CPU 后端：
+```bash
+cargo run --release --bin train -- --backend cpu ...
+```
+
+### 12.2 分布式训练内存不足
+
+#### 现象
+- 分布式训练时出现显存不足错误
+- 报错：`Not enough memory left`
+
+#### 原因
+- 每个 GPU 分配的批量大小太大
+- 模型在多 GPU 上的内存占用超过可用显存
+
+#### 解决方案
+1) 降低批量大小：
+```bash
+--batch-size 8  # 而非默认的 32
+```
+
+2) 使用更小的模型配置：
+```bash
+--model-size 10m  # 而非默认的 30m
+```
+
+3) 减少序列长度：
+```bash
+--max-seq-len 128  # 而非默认的 256
+```
+
+---
+
+## 13) DPO训练问题
+
+### 13.1 DPO数据格式错误
+
+#### 现象
+- 使用 `--dpo` 参数时出现数据解析错误
+- 报错：`Missing field 'prompt'` 或 `Missing field 'chosen'`
+
+#### 原因
+- DPO 数据文件格式不正确
+- 缺少必要的 `prompt`、`chosen`、`rejected` 字段
+
+#### 解决方案
+1) 验证 DPO 数据格式：
+```json
+{
+  "prompt": "你是谁？",
+  "chosen": "我是一个用 Rust 训练出来的小模型。",
+  "rejected": "我不知道。"
+}
+```
+
+2) 使用 `--sft-max-records` 限制读取数量进行测试：
+```bash
+--dpo-jsonl dpo_data.jsonl --sft-max-records 100
+```
+
+### 13.2 DPO训练不稳定
+
+#### 现象
+- DPO 训练时损失波动很大
+- 模型生成质量下降
+
+#### 原因
+- beta 参数设置不当
+- 偏好数据质量问题
+
+#### 解决方案
+1) 调整 beta 参数：
+```bash
+--dpo-beta 0.05  # 更小的 beta 值
+```
+
+2) 确保偏好数据质量良好：
+- `chosen` 和 `rejected` 的差异要有意义
+- 避免极端的偏好差异
+
+---
+
+## 14) 多模态训练问题
+
+### 14.1 图像编码器错误
+
+#### 现象
+- 多模态训练时出现图像编码错误
+- 报错：`Failed to process image`
+
+#### 原因
+- 图像格式不支持
+- 图像尺寸不符合要求
+
+#### 解决方案
+1) 确保使用支持的图像格式（JPEG、PNG）
+2) 调整图像尺寸参数：
+```bash
+--image-size 224  # 设置合适的图像尺寸
+```
+
+### 14.2 多模态融合错误
+
+#### 现象
+- 多模态融合层出现维度不匹配错误
+- 报错：`Shape mismatch`
+
+#### 原因
+- 文本特征和图像特征维度不匹配
+
+#### 解决方案
+1) 检查模型配置，确保多模态配置正确
+2) 确保图像编码器输出维度与文本特征维度兼容
+
+---
+
+## 15) 量化相关问题
+
+### 15.1 量化模型加载失败
+
+#### 现象
+- 加载量化模型时出现错误
+- 报错：`Failed to load quantized model`
+
+#### 原因
+- 量化模型文件损坏
+- 量化配置不匹配
+
+#### 解决方案
+1) 重新生成量化模型
+2) 验证量化配置是否正确
+
+### 15.2 量化精度损失
+
+#### 现象
+- 量化后模型生成质量明显下降
+- 输出内容不连贯或语义错误
+
+#### 原因
+- 量化参数设置不当
+- 模型结构不适合量化
+
+#### 解决方案
+1) 尝试不同的量化模式：
+```bash
+# INT8 量化（精度更高）
+--quantize-mode int8
+
+# 动态量化（速度更快）
+--quantize-mode dynamic
+```
+
+2) 对于关键层禁用量化：
+```bash
+--no-quantize-output
+```
+
+---
+
+## 16) 流式数据加载问题
 
 ### 12.1 流式加载速度慢
 

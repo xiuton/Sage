@@ -6,10 +6,11 @@
 
 ## 0) 总览
 
-Sage 目前支持两类训练目标：
+Sage 目前支持三类训练目标：
 
 1. **LM（Language Modeling / 续写）**：从纯文本中学习预测下一个 token。
 2. **SFT（Supervised Fine-Tuning / 指令微调）**：从对话/问答数据中学习“用户提问 → 助手回答”。
+3. **DPO（Direct Preference Optimization / 偏好对齐）**：从偏好数据中学习区分好回复和坏回复。
 
 ---
 
@@ -165,6 +166,40 @@ Sage 会把 SFT 数据转换成内部模板文本进行训练：
 - 去掉乱码与极长重复行
 - 统一换行（`\r\n` → `\n`）
 - 尽量不要把多个领域混在同一个超大文件里（可用目录分组）
+
+---
+
+## 3) DPO：偏好对齐数据
+
+### 3.1 DPO 训练命令
+
+```bash
+cargo run --release --bin train -- --dpo --dpo-jsonl dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+```
+
+### 3.2 DPO 数据格式
+
+DPO 训练需要包含偏好信息的数据，每行一个 JSON 对象，包含以下字段：
+
+```json
+{
+  "prompt": "你是谁？",
+  "chosen": "我是一个用 Rust 训练出来的小模型。",
+  "rejected": "我不知道。"
+}
+```
+
+字段说明：
+- `prompt`：用户输入/问题
+- `chosen`：偏好的回复（更好的回答）
+- `rejected`：被拒绝的回复（较差的回答）
+
+### 3.3 数据质量建议
+
+- 确保 `chosen` 和 `rejected` 的差异有意义
+- 偏好应该基于相同的 prompt
+- 避免极端的偏好差异（例如一个非常好，一个完全无关）
+- 偏好应该反映真实的用户偏好
 
 ---
 

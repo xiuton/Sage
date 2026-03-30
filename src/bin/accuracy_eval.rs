@@ -37,10 +37,10 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
         .expect("Failed to load model");
     
     // 加载量化模型（动态量化）
-    let quantized_model_dynamic = QuantizedModel::new(&original_model, QuantizationMode::Dynamic);
+    let quantized_model_dynamic = QuantizedModel::new(original_model.clone(), QuantizationMode::Dynamic);
     
-    // 加载量化模型（静态量化）
-    let quantized_model_static = QuantizedModel::new(&original_model, QuantizationMode::Static);
+    // 加载量化模型（INT8量化）
+    let quantized_model_int8 = QuantizedModel::new(original_model.clone(), QuantizationMode::Int8);
     
     let tokenizer = Tokenizer::new("");
     
@@ -57,7 +57,7 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     let mut original_results = HashMap::new();
     let mut dynamic_results = HashMap::new();
-    let mut static_results = HashMap::new();
+    let mut int8_results = HashMap::new();
     
     // 获取原始模型结果
     for prompt in &test_prompts {
@@ -77,16 +77,16 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     println!("\n" );
     
-    // 获取静态量化模型结果
+    // 获取INT8量化模型结果
     for prompt in &test_prompts {
-        let response = sage::generation::generate_quantized(&quantized_model_static, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
-        println!("静态量化 - \"{}\": {}", prompt, response);
-        static_results.insert(*prompt, response);
+        let response = sage::generation::generate_quantized(&quantized_model_int8, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
+        println!("INT8量化 - \"{}\": {}", prompt, response);
+        int8_results.insert(*prompt, response);
     }
     
     println!("\n=== 精度评估结果 ===");
     evaluate_accuracy(&original_results, &dynamic_results, "动态量化");
-    evaluate_accuracy(&original_results, &static_results, "静态量化");
+    evaluate_accuracy(&original_results, &int8_results, "INT8量化");
 }
 
 fn evaluate_gpu_accuracy(config: &TrainingConfig, model_path: &str) {
@@ -99,10 +99,10 @@ fn evaluate_gpu_accuracy(config: &TrainingConfig, model_path: &str) {
         .expect("Failed to load model");
     
     // 加载量化模型（动态量化）
-    let quantized_model_dynamic = QuantizedModel::new(&original_model, QuantizationMode::Dynamic);
+    let quantized_model_dynamic = QuantizedModel::new(original_model.clone(), QuantizationMode::Dynamic);
     
-    // 加载量化模型（静态量化）
-    let quantized_model_static = QuantizedModel::new(&original_model, QuantizationMode::Static);
+    // 加载量化模型（INT8量化）
+    let quantized_model_int8 = QuantizedModel::new(original_model.clone(), QuantizationMode::Int8);
     
     let tokenizer = Tokenizer::new("");
     
@@ -119,7 +119,7 @@ fn evaluate_gpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     let mut original_results = HashMap::new();
     let mut dynamic_results = HashMap::new();
-    let mut static_results = HashMap::new();
+    let mut int8_results = HashMap::new();
     
     // 获取原始模型结果
     for prompt in &test_prompts {
@@ -139,16 +139,16 @@ fn evaluate_gpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     println!("\n" );
     
-    // 获取静态量化模型结果
+    // 获取INT8量化模型结果
     for prompt in &test_prompts {
-        let response = sage::generation::generate_quantized(&quantized_model_static, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
-        println!("静态量化 - \"{}\": {}", prompt, response);
-        static_results.insert(*prompt, response);
+        let response = sage::generation::generate_quantized(&quantized_model_int8, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
+        println!("INT8量化 - \"{}\": {}", prompt, response);
+        int8_results.insert(*prompt, response);
     }
     
     println!("\n=== 精度评估结果 ===");
     evaluate_accuracy(&original_results, &dynamic_results, "动态量化");
-    evaluate_accuracy(&original_results, &static_results, "静态量化");
+    evaluate_accuracy(&original_results, &int8_results, "INT8量化");
 }
 
 fn evaluate_accuracy(original_results: &HashMap<&str, String>, quantized_results: &HashMap<&str, String>, quant_type: &str) {

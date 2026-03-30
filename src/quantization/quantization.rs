@@ -1,125 +1,93 @@
 use burn::{
-    tensor::{backend::Backend, Tensor, Int},
+    prelude::*,
+    tensor::backend::Backend,
 };
 
-pub trait QuantizableModule<B: Backend> {
-    fn quantize(&self) -> Self;
-}
-
+/// 量化模式
 #[derive(Debug, Clone)]
 pub enum QuantizationMode {
+    /// 动态量化（仅权重量化）
     Dynamic,
-    Static,
+    /// INT8量化
+    Int8,
+    /// INT4量化
+    Int4,
 }
 
-pub struct QuantizationConfig {
-    pub bits: usize,
-    pub enable: bool,
+/// 量化参数
+#[derive(Debug, Clone)]
+pub struct QuantizationParams {
     pub mode: QuantizationMode,
+    pub group_size: usize,
+    pub zero_point: bool,
 }
 
-impl Default for QuantizationConfig {
+impl Default for QuantizationParams {
     fn default() -> Self {
         Self {
-            bits: 8,
-            enable: false,
             mode: QuantizationMode::Dynamic,
+            group_size: 128,
+            zero_point: true,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+/// 量化模型
 pub struct QuantizedModel<B: Backend> {
-    pub model: crate::model::Model<B>,
-    pub scale: f32,
-    pub zero_point: f32,
+    pub model: crate::core::model::Model<B>,
     pub mode: QuantizationMode,
-}
-
-impl<B: Backend> burn::module::Module<B> for QuantizedModel<B> {
-    type Record = crate::model::ModelRecord<B>;
-    
-    fn visit<V: burn::module::ModuleVisitor<B>>(&self, visitor: &mut V) {
-        self.model.visit(visitor);
-    }
-    
-    fn collect_devices(&self, devices: Vec<<B as burn::prelude::Backend>::Device>) -> Vec<<B as burn::prelude::Backend>::Device> {
-        self.model.collect_devices(devices)
-    }
-    
-    fn fork(self, device: &<B as burn::prelude::Backend>::Device) -> Self {
-        Self {
-            model: self.model.fork(device),
-            scale: self.scale,
-            zero_point: self.zero_point,
-            mode: self.mode,
-        }
-    }
-    
-    fn to_device(self, device: &<B as burn::prelude::Backend>::Device) -> Self {
-        Self {
-            model: self.model.to_device(device),
-            scale: self.scale,
-            zero_point: self.zero_point,
-            mode: self.mode,
-        }
-    }
-    
-    fn map<Mapper>(self, mapper: &mut Mapper) -> Self
-    where
-        Mapper: burn::module::ModuleMapper<B>,
-    {
-        Self {
-            model: self.model.map(mapper),
-            scale: self.scale,
-            zero_point: self.zero_point,
-            mode: self.mode,
-        }
-    }
-    
-    fn load_record(self, record: Self::Record) -> Self {
-        Self {
-            model: self.model.load_record(record),
-            scale: self.scale,
-            zero_point: self.zero_point,
-            mode: self.mode,
-        }
-    }
-    
-    fn into_record(self) -> Self::Record {
-        self.model.into_record()
-    }
 }
 
 impl<B: Backend> QuantizedModel<B> {
-    pub fn new(model: &crate::model::Model<B>, mode: QuantizationMode) -> Self {
-        let scale = 0.1;
-        let zero_point = 128.0;
-        
+    pub fn new(model: crate::core::model::Model<B>, mode: QuantizationMode) -> Self {
         Self {
-            model: model.clone(),
-            scale,
-            zero_point,
+            model,
             mode,
         }
     }
     
     pub fn forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
-        match self.mode {
-            QuantizationMode::Dynamic => {
-                self.dynamic_quantize_forward(input)
-            }
-            QuantizationMode::Static => {
-                self.static_quantize_forward(input)
-            }
-        }
-    }
-    
-    fn dynamic_quantize_forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+        // 简化实现：直接调用原始模型
         self.model.forward(input)
     }
+}
+
+/// 量化工具函数
+pub mod utils {
+    use super::*;
     
-    fn static_quantize_forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
-        self.model.forward(input)
+    /// 计算模型大小（MB）
+    pub fn calculate_model_size<B: Backend>(model: &crate::core::model::Model<B>) -> f64 {
+        let mut total_bytes = 0.0;
+        
+        // 简化的模型大小计算
+        total_bytes += model.vocab_size() as f64 * model.d_model() as f64 * 4.0;
+        total_bytes += model.max_seq_len() as f64 * model.d_model() as f64 * 4.0;
+        total_bytes += model.d_model() as f64 * model.d_model() as f64 * model.n_layers() as f64 * 4.0;
+        total_bytes += model.d_model() as f64 * model.vocab_size() as f64 * 4.0;
+        
+        total_bytes / (1024.0 * 1024.0)
+    }
+    
+    /// 计算量化后模型大小（MB）
+    pub fn calculate_quantized_size<B: Backend>(model: &QuantizedModel<B>, mode: QuantizationMode) -> f64 {
+        let mut total_bytes = 0.0;
+        
+        // 嵌入层大小不变
+        total_bytes += model.model.vocab_size() as f64 * model.model.d_model() as f64 * 4.0;
+        total_bytes += model.model.max_seq_len() as f64 * model.model.d_model() as f64 * 4.0;
+        
+        // 计算量化后的权重大小
+        let weight_bytes = match mode {
+            QuantizationMode::Dynamic => 4.0,  // float32
+            QuantizationMode::Int8 => 1.0,     // int8
+            QuantizationMode::Int4 => 0.5,     // int4 (位打包)
+        };
+        
+        // 简化计算
+        total_bytes += model.model.d_model() as f64 * model.model.d_model() as f64 * model.model.n_layers() as f64 * weight_bytes;
+        total_bytes += model.model.d_model() as f64 * model.model.vocab_size() as f64 * weight_bytes;
+        
+        total_bytes / (1024.0 * 1024.0)
     }
 }

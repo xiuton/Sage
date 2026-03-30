@@ -45,6 +45,8 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
   - [DATA_FORMAT.md](DATA_FORMAT.md)
   - [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
   - [TRAINING_GUIDE.md](TRAINING_GUIDE.md)
+  - [TRAINING_PHASES.md](TRAINING_PHASES.md)（显存探测 vs 正式训练）
+  - [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)（规范与取舍审阅）
   - [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
   - 本文件 [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
@@ -188,6 +190,23 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 3. **更大的模型配置** ✅ **已完成**
    - 已提供多个预设 config（~1M、~10M、~30M）按硬件选择
    - `--model-size` 参数支持：`default`、`10m`、`30m`、`100m`、`1b`、`3b`、`671b`
+4. **分布式训练支持** ✅ **已完成**
+   - 实现数据并行训练器 `DataParallelTrainer`
+   - 支持多 GPU/多机器训练配置
+   - 添加 `--distributed`、`--devices` 命令行参数
+5. **RLHF/DPO偏好对齐训练** ✅ **已完成**
+   - 实现 `DPOTrainer` 和 `DPOLossCalculator`
+   - 支持 beta 参数和 KL 散度正则化
+   - 添加 `--dpo`、`--dpo-beta` 命令行参数
+6. **多模态能力** ✅ **已完成**
+   - 实现 `VisionEncoder` 图像编码器
+   - 实现 `MultimodalFusion` 多模态融合层
+   - 支持加法融合策略
+   - 模型支持多模态前向传播
+7. **模型量化优化** ✅ **已完成**
+   - 实现 `QuantizedModel` 量化模型封装
+   - 支持 INT4、INT8、动态量化模式
+   - 提供模型大小计算工具
 
 ---
 

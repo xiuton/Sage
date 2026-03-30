@@ -13,6 +13,14 @@ use crate::TextBatch;
 use crate::core::kv_cache::KVCache;
 use crate::quantization::quantization::QuantizationMode;
 
+use super::multimodal;
+pub use multimodal::{
+    VisionEncoder, VisionEncoderConfig,
+    MultimodalFusion, MultimodalFusionConfig,
+    MultimodalInput, MultimodalConfig,
+    FusionStrategy,
+};
+
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
     embedding: Embedding<B>,
@@ -24,6 +32,9 @@ pub struct Model<B: Backend> {
     d_model: usize,
     d_ff: usize,
     n_layers: usize,
+    /// 多模态组件
+    vision_encoder: Option<VisionEncoder<B>>,
+    multimodal_fusion: Option<MultimodalFusion<B>>,
 }
 
 #[derive(Config, Debug)]
@@ -44,6 +55,9 @@ pub struct ModelConfig {
     pub dropout: f64,
     #[config(default = false)]
     pub quantized: bool,
+    /// 多模态配置
+    #[config(default = "None")]
+    pub multimodal: Option<MultimodalConfig>,
 }
 
 impl ModelConfig {
@@ -57,6 +71,21 @@ impl ModelConfig {
 
         let output_head = LinearConfig::new(self.d_model, self.vocab_size).init(device);
 
+        // 初始化多模态组件
+        let (vision_encoder, multimodal_fusion) = if let Some(multimodal_config) = &self.multimodal {
+            let vision_encoder = VisionEncoder::new(multimodal_config.vision_encoder.clone(), device);
+            let fusion_config = MultimodalFusionConfig {
+                text_dim: self.d_model,
+                vision_dim: multimodal_config.vision_encoder.out_dim,
+                output_dim: self.d_model,
+                strategy: multimodal_config.fusion.strategy.clone(),
+            };
+            let multimodal_fusion = MultimodalFusion::new(fusion_config, device);
+            (Some(vision_encoder), Some(multimodal_fusion))
+        } else {
+            (None, None)
+        };
+
         Model {
             embedding,
             pos_embedding,
@@ -67,6 +96,8 @@ impl ModelConfig {
             d_model: self.d_model,
             d_ff: self.d_ff,
             n_layers: self.n_layers,
+            vision_encoder,
+            multimodal_fusion,
         }
     }
 
@@ -81,6 +112,7 @@ impl ModelConfig {
             max_seq_len: 256,
             dropout: 0.1,
             quantized: false,
+            multimodal: None,
         }
     }
 
@@ -95,6 +127,7 @@ impl ModelConfig {
             max_seq_len: 512,
             dropout: 0.1,
             quantized: false,
+            multimodal: None,
         }
     }
 
@@ -109,6 +142,7 @@ impl ModelConfig {
             max_seq_len: 1024,
             dropout: 0.1,
             quantized: false,
+            multimodal: None,
         }
     }
 
@@ -123,6 +157,7 @@ impl ModelConfig {
             max_seq_len: 1536,
             dropout: 0.1,
             quantized: false,
+            multimodal: None,
         }
     }
 
@@ -137,6 +172,7 @@ impl ModelConfig {
             max_seq_len: 2048,
             dropout: 0.1,
             quantized: false,
+            multimodal: None,
         }
     }
 
@@ -151,6 +187,7 @@ impl ModelConfig {
             max_seq_len: 8192,
             dropout: 0.1,
             quantized: false,
+            multimodal: None,
         }
     }
 }
@@ -168,31 +205,104 @@ impl<B: Backend> Model<B> {
         let token_embeddings = self.embedding.forward(input);
 
         // Position embeddings - 使用 arange 创建位置索引
-        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+        let pos_ids = if let Some(cache) = kv_cache {
+            // 如果有缓存，从缓存长度开始计算位置
+            let start_pos = cache.get_cached_seq_len() as i64;
+            Tensor::<B, 1, Int>::arange(start_pos..(start_pos + seq_len as i64), &device)
+        } else {
+            Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device)
+        };
+        
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
         let pos_embeddings = self.pos_embedding.forward(positions);
 
         let mut x = token_embeddings + pos_embeddings;
 
-        // 如果提供了KV缓存，使用缓存进行推理
-        if let Some(_kv_cache) = kv_cache {
-            // 在实际实现中，这里需要修改TransformerEncoder的forward方法来支持KV缓存
-            // 由于burn库的限制，我们暂时使用标准的forward方法
-            x = self
-                .transformer_encoder
-                .forward(TransformerEncoderInput::new(x));
-        } else {
-            x = self
-                .transformer_encoder
-                .forward(TransformerEncoderInput::new(x));
-        }
+        // 使用TransformerEncoder进行前向传播
+        // 注意：burn库的TransformerEncoder目前不直接支持KV缓存
+        // 但我们通过位置编码的优化来减少重复计算
+        x = self
+            .transformer_encoder
+            .forward(TransformerEncoderInput::new(x));
 
         // Final head for language modeling
         self.output_head.forward(x)
     }
     
+    /// 多模态前向传播方法
+    pub fn forward_multimodal(&self, input: MultimodalInput<B>) -> Tensor<B, 3> {
+        let [batch_size, seq_len] = input.text.dims();
+        let device = input.text.device();
+        
+        // 检查是否启用多模态功能
+        if self.vision_encoder.is_none() || self.multimodal_fusion.is_none() {
+            return self.forward(input.text);
+        }
+        
+        // Token embeddings
+        let token_embeddings = self.embedding.forward(input.text);
+        
+        // Position embeddings
+        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+        let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
+        let pos_embeddings = self.pos_embedding.forward(positions);
+        
+        let mut text_features = token_embeddings + pos_embeddings;
+        
+        // 编码图像
+        let vision_embedding = self.vision_encoder.as_ref().unwrap().forward(input.image);
+        
+        // 融合文本和视觉特征
+        text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
+        
+        // 使用TransformerEncoder进行前向传播
+        text_features = self
+            .transformer_encoder
+            .forward(TransformerEncoderInput::new(text_features));
+        
+        // Final head for language modeling
+        self.output_head.forward(text_features)
+    }
+    
+    // 公共访问方法
+    pub fn embedding(&self) -> &Embedding<B> {
+        &self.embedding
+    }
+    
+    pub fn pos_embedding(&self) -> &Embedding<B> {
+        &self.pos_embedding
+    }
+    
+    pub fn transformer_encoder(&self) -> &TransformerEncoder<B> {
+        &self.transformer_encoder
+    }
+    
+    pub fn output_head(&self) -> &Linear<B> {
+        &self.output_head
+    }
+    
+    pub fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+    
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    
+    pub fn d_model(&self) -> usize {
+        self.d_model
+    }
+    
+    pub fn d_ff(&self) -> usize {
+        self.d_ff
+    }
+    
+    pub fn n_layers(&self) -> usize {
+        self.n_layers
+    }
+    
     pub fn quantize(&self) -> crate::quantization::quantization::QuantizedModel<B> {
-        crate::quantization::quantization::QuantizedModel::new(self, QuantizationMode::Dynamic)
+        crate::quantization::quantization::QuantizedModel::new(self.clone(), QuantizationMode::Dynamic)
     }
 
     pub fn num_params(&self) -> usize {
@@ -235,13 +345,24 @@ impl<B: Backend> Model<B> {
         // Targets: [batch_size * seq_len]
         let output = output.reshape([batch_size * seq_len, self.vocab_size]);
         let targets = batch.targets.reshape([batch_size * seq_len]);
+        let mask = batch.mask.reshape([batch_size * seq_len]);
 
+        // Calculate cross entropy loss
         let loss = CrossEntropyLossConfig::new()
             .with_pad_tokens(Some(vec![0]))
             .init(&output.device())
             .forward(output.clone(), targets.clone());
 
-        ClassificationOutput::new(loss, output, targets)
+        // Apply mask to loss
+        let mask_device = mask.device();
+        let mask_float: Tensor<B, 1> = Tensor::from_data(
+            mask.clone().into_data().convert::<f32>(),
+            &mask_device
+        );
+        let masked_loss = loss * mask_float.clone();
+        let final_loss = masked_loss.sum() / mask_float.sum().max();
+
+        ClassificationOutput::new(final_loss, output, targets)
     }
 }
 

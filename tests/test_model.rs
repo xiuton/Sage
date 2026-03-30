@@ -13,6 +13,7 @@ fn test_model_config() {
         n_heads: 8,
         dropout: 0.1,
         quantized: false,
+        multimodal: None,
     };
     
     assert_eq!(config.vocab_size, 1000);
@@ -36,6 +37,7 @@ fn test_model_init() {
         n_heads: 4,
         dropout: 0.1,
         quantized: false,
+        multimodal: None,
     };
     
     let model = config.init::<NdArray>(&device);
@@ -58,6 +60,7 @@ fn test_model_config_with_quantized() {
         n_heads: 4,
         dropout: 0.1,
         quantized: true,
+        multimodal: None,
     };
     
     assert!(config.quantized);
@@ -75,6 +78,7 @@ fn test_forward_with_cache() {
         n_heads: 4,
         dropout: 0.1,
         quantized: false,
+        multimodal: None,
     };
     
     let model = config.init::<NdArray>(&device);

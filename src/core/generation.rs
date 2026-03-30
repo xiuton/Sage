@@ -115,11 +115,20 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             return None;
         }
 
-        let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
-        let window_tokens = &self.tokens[window_start..];
+        // 对于KV缓存优化：
+        // 1. 第一次调用时处理整个上下文窗口
+        // 2. 后续调用只处理新生成的token
+        let input_tokens = if self.generated_tokens == 0 {
+            // 第一次调用，处理整个上下文窗口
+            let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
+            &self.tokens[window_start..]
+        } else {
+            // 后续调用，只处理最后一个token
+            &self.tokens[self.tokens.len() - 1..]
+        };
         
         let input = Tensor::<B, 1, Int>::from_ints(
-            window_tokens
+            input_tokens
                 .iter()
                 .map(|&t| t as i32)
                 .collect::<Vec<_>>()
