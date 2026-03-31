@@ -174,7 +174,7 @@ Sage 会把 SFT 数据转换成内部模板文本进行训练：
 ### 3.1 DPO 训练命令
 
 ```bash
-cargo run --release --bin train -- --dpo --dpo-jsonl dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
 ```
 
 ### 3.2 DPO 数据格式

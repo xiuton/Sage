@@ -1217,7 +1217,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             
             // 加载DPO数据
             let dpo_data_path = args.dpo_data.as_deref().expect("DPO训练需要指定 --dpo-data");
-            let dpo_items = load_dpo_jsonl(dpo_data_path).expect("加载DPO数据失败");
+            let dpo_items = load_dpo_jsonl(dpo_data_path, &tokenizer).expect("加载DPO数据失败");
             
             println!("加载了 {} 条DPO数据", dpo_items.len());
             

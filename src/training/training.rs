@@ -1,6 +1,6 @@
 use burn::{
     config::Config,
-    data::{dataloader::DataLoaderBuilder, dataset::InMemDataset},
+    data::{dataloader::{batcher::Batcher, DataLoaderBuilder, Dataset}, dataset::InMemDataset},
     optim::{AdamConfig, adaptor::OptimizerAdaptor},
     prelude::*,
     record::CompactRecorder,
@@ -408,14 +408,20 @@ pub fn train_dpo<B: AutodiffBackend>(
         device.clone(),
     );
     
-    // 创建数据加载器
-    let batcher = DPOBatcher::new(device, 256, 256); // 可配置的最大长度
-    let dataset = InMemDataset::new(dpo_items);
-    let dataloader = DataLoaderBuilder::new(batcher)
-        .batch_size(config.batch_size)
-        .shuffle(42)
-        .num_workers(config.num_workers)
-        .build(dataset);
+    // 创建批次处理器（使用GPU显存探测的序列长度）
+    let batcher = DPOBatcher::new(
+        device.clone(), 
+        config.model.max_seq_len, 
+        config.model.max_seq_len
+    );
+    
+    println!("数据项数量: {}", dpo_items.len());
+    
+    // 使用GPU显存探测的批次大小
+    let batch_size = config.batch_size.min(dpo_items.len());
+    println!("使用批次大小: {}", batch_size);
+    println!("使用序列长度: {}", config.model.max_seq_len);
+    println!("学习率: {}", config.lr);
     
     println!("开始DPO训练...");
     
@@ -426,16 +432,20 @@ pub fn train_dpo<B: AutodiffBackend>(
         let mut total_loss = 0.0;
         let mut batch_count = 0;
         
-        for batch in dataloader.iter() {
-            let loss = trainer.train_batch(batch);
-            let loss_value: f32 = loss.to_data().to_vec().unwrap()[0];
+        for chunk in dpo_items.chunks(batch_size) {
+            let batch_items = chunk.to_vec();
+            
+            // 创建批次
+            let batch = batcher.batch(batch_items);
+            
+            // 训练批次（传递学习率）
+            let loss_value = trainer.train_batch(batch, config.lr);
             
             total_loss += loss_value;
             batch_count += 1;
             
             if !config.no_progress {
-                println!("  Batch {} - Loss: {:.6}", 
-                         batch_count, loss_value);
+                println!("  Batch {} - Loss: {:.6}", batch_count, loss_value);
             }
         }
         
