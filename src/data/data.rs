@@ -192,8 +192,8 @@ pub struct TextBatch<B: Backend> {
     pub mask: Tensor<B, 2, Int>,
 }
 
-impl<B: Backend> Batcher<TextItem, TextBatch<B>> for TextBatcher<B> {
-    fn batch(&self, items: Vec<TextItem>) -> TextBatch<B> {
+impl<B: Backend> Batcher<B, TextItem, TextBatch<B>> for TextBatcher<B> {
+    fn batch(&self, items: Vec<TextItem>, _device: &B::Device) -> TextBatch<B> {
         let batch_size = items.len();
         let seq_len = items.first().map(|v| v.input.len()).unwrap_or(0);
 

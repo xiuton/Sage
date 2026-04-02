@@ -1,7 +1,7 @@
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn::prelude::*;
 use sage::{
-    model::ModelConfig,
+    core::model::ModelConfig,
     tokenizer::Tokenizer,
     training::training::TrainingConfig as TrainConfig,
     training::dpo::{DPOConfig, DPOItem, DPOBatch},
@@ -106,28 +106,25 @@ fn test_dpo_training_integration() {
     
     // 创建模拟DPO数据
     let _dpo_item = DPOItem {
-        prompt: vec![1, 2, 3],
-        chosen: vec![4, 5, 6],
-        rejected: vec![7, 8, 9],
-        prompt_mask: vec![1, 1, 1],
-        chosen_mask: vec![1, 1, 1],
-        rejected_mask: vec![1, 1, 1],
+        full_chosen: vec![1, 2, 3, 4, 5, 6],
+        full_rejected: vec![1, 2, 3, 7, 8, 9],
+        chosen_mask: vec![0, 0, 0, 1, 1, 1],
+        rejected_mask: vec![0, 0, 0, 1, 1, 1],
+        prompt_len: 3,
     };
     
     // 测试DPO批次创建（简化实现）
     let batch = DPOBatch {
-        prompt: Tensor::<NdArray, 2, Int>::zeros([1, 3], &device),
-        chosen: Tensor::<NdArray, 2, Int>::zeros([1, 3], &device),
-        rejected: Tensor::<NdArray, 2, Int>::zeros([1, 3], &device),
-        prompt_mask: Tensor::<NdArray, 2>::zeros([1, 3], &device),
-        chosen_mask: Tensor::<NdArray, 2>::zeros([1, 3], &device),
-        rejected_mask: Tensor::<NdArray, 2>::zeros([1, 3], &device),
+        full_chosen: Tensor::<NdArray, 2, Int>::zeros([1, 6], &device),
+        full_rejected: Tensor::<NdArray, 2, Int>::zeros([1, 6], &device),
+        chosen_mask: Tensor::<NdArray, 2, Int>::zeros([1, 6], &device),
+        rejected_mask: Tensor::<NdArray, 2, Int>::zeros([1, 6], &device),
+        prompt_len: 3,
     };
     
     // 验证批次数据形状正确
-    assert_eq!(batch.prompt.dims(), [1, 3]);
-    assert_eq!(batch.chosen.dims(), [1, 3]);
-    assert_eq!(batch.rejected.dims(), [1, 3]);
+    assert_eq!(batch.full_chosen.dims(), [1, 6]);
+    assert_eq!(batch.full_rejected.dims(), [1, 6]);
 }
 
 /// 训练配置集成测试

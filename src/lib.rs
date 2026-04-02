@@ -23,3 +23,4 @@ pub use tools::model_download;
 pub use utils::error::*;
 pub use utils::logger;
 pub use utils::performance;
+pub use utils::metrics;

@@ -140,7 +140,10 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         let output = match &self.model {
             ModelType::Normal(model) => {
                 if let Some(kv_cache) = &mut self.kv_cache {
-                    model.forward_with_cache(input, Some(kv_cache))
+                    let output = model.forward_with_cache(input, Some(kv_cache));
+                    // 更新缓存序列长度
+                    kv_cache.set_cached_seq_len(kv_cache.get_cached_seq_len() + input_tokens.len());
+                    output
                 } else {
                     model.forward(input)
                 }

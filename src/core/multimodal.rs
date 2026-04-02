@@ -36,7 +36,7 @@ impl Default for VisionEncoderConfig {
 #[derive(Module, Debug)]
 pub struct VisionEncoder<B: Backend> {
     conv_layers: Vec<Conv2d<B>>,
-    batch_norms: Option<Vec<BatchNorm<B, 4>>>,
+    batch_norms: Option<Vec<BatchNorm<B>>>,
     relu: Relu,
     output_projection: Linear<B>,
 }

@@ -6,7 +6,7 @@ use burn::{
     },
     prelude::*,
     tensor::backend::AutodiffBackend,
-    train::{ClassificationOutput, TrainOutput, TrainStep, ValidStep},
+    train::{ClassificationOutput, TrainOutput, TrainStep},
 };
 
 use crate::TextBatch;
@@ -364,17 +364,48 @@ impl<B: Backend> Model<B> {
 
         ClassificationOutput::new(final_loss, output, targets)
     }
+
+    /// 计算验证损失（专门用于验证阶段，不涉及自动微分）
+    /// 返回 f64 类型的损失值，便于记录和统计
+    pub fn compute_validation_loss(&self, batch: TextBatch<B>) -> f64 {
+        let [batch_size, seq_len] = batch.inputs.dims();
+        let output = self.forward(batch.inputs);
+
+        // Reshape output and targets for CrossEntropyLoss
+        let output = output.reshape([batch_size * seq_len, self.vocab_size]);
+        let targets = batch.targets.reshape([batch_size * seq_len]);
+        let mask = batch.mask.reshape([batch_size * seq_len]);
+
+        // Calculate cross entropy loss
+        let loss = CrossEntropyLossConfig::new()
+            .with_pad_tokens(Some(vec![0]))
+            .init(&output.device())
+            .forward(output.clone(), targets.clone());
+
+        // Apply mask to loss
+        let mask_device = mask.device();
+        let mask_float: Tensor<B, 1> = Tensor::from_data(
+            mask.clone().into_data().convert::<f32>(),
+            &mask_device
+        );
+        let masked_loss = loss * mask_float.clone();
+        let final_loss = masked_loss.sum() / mask_float.sum().max();
+
+        // 转换为 f64 - 通过 to_data 然后读取
+        let loss_data = final_loss.into_data();
+        let loss_slice = loss_data.as_slice::<f32>();
+        loss_slice.map(|s| s[0] as f64).unwrap_or(0.0)
+    }
 }
 
-impl<B: AutodiffBackend> TrainStep<TextBatch<B>, ClassificationOutput<B>> for Model<B> {
-    fn step(&self, batch: TextBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
+impl<B: AutodiffBackend> TrainStep for Model<B> {
+    type Input = TextBatch<B>;
+    type Output = ClassificationOutput<B>;
+
+    fn step(&self, batch: <Model<B> as TrainStep>::Input) -> TrainOutput<<Model<B> as TrainStep>::Output> {
         let item = self.forward_step(batch);
         TrainOutput::new(self, item.loss.backward(), item)
     }
 }
 
-impl<B: Backend> ValidStep<TextBatch<B>, ClassificationOutput<B>> for Model<B> {
-    fn step(&self, batch: TextBatch<B>) -> ClassificationOutput<B> {
-        self.forward_step(batch)
-    }
-}
+

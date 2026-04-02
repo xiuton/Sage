@@ -172,13 +172,35 @@ pub struct StreamingSftDataLoader<B: Backend> {
     pub items_total: usize,
 }
 
-impl<B: Backend> DataLoader<TextBatch<B>> for StreamingSftDataLoader<B> {
+impl<B: Backend> DataLoader<B, TextBatch<B>> for StreamingSftDataLoader<B> {
     fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<TextBatch<B>> + 'a> {
         Box::new(StreamingSftIterator::<B>::new(self.clone()))
     }
 
     fn num_items(&self) -> usize {
         self.items_total
+    }
+
+    fn to_device(&self, device: &B::Device) -> Arc<dyn DataLoader<B, TextBatch<B>> + 'static> {
+        Arc::new(StreamingSftDataLoader {
+            tokenizer: self.tokenizer.clone(),
+            device: device.clone(),
+            batch_size: self.batch_size,
+            seq_len: self.seq_len,
+            input: self.input.clone(),
+            items_total: self.items_total,
+        })
+    }
+
+    fn slice(&self, _offset: usize, length: usize) -> Arc<dyn DataLoader<B, TextBatch<B>> + 'static> {
+        Arc::new(StreamingSftDataLoader {
+            tokenizer: self.tokenizer.clone(),
+            device: self.device.clone(),
+            batch_size: self.batch_size,
+            seq_len: self.seq_len,
+            input: self.input.clone(),
+            items_total: length,
+        })
     }
 }
 

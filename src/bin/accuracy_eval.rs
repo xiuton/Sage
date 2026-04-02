@@ -1,6 +1,5 @@
 use burn::prelude::*;
 use burn_ndarray::NdArrayDevice;
-use burn_wgpu::Wgpu;
 use sage::{
     quantization::quantization::{QuantizationMode, QuantizedModel},
     tokenizer::Tokenizer,
@@ -21,10 +20,6 @@ fn main() {
     // 测试CPU精度
     println!("\n=== CPU精度评估 ===");
     evaluate_cpu_accuracy(&config, model_path);
-    
-    // 测试GPU精度
-    println!("\n=== GPU精度评估 ===");
-    evaluate_gpu_accuracy(&config, model_path);
 }
 
 fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
@@ -33,68 +28,6 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
     // 加载原始模型
     let original_model = config.model
         .init::<burn_ndarray::NdArray>(&device)
-        .load_file(model_path, &burn::record::CompactRecorder::new(), &device)
-        .expect("Failed to load model");
-    
-    // 加载量化模型（动态量化）
-    let quantized_model_dynamic = QuantizedModel::new(original_model.clone(), QuantizationMode::Dynamic);
-    
-    // 加载量化模型（INT8量化）
-    let quantized_model_int8 = QuantizedModel::new(original_model.clone(), QuantizationMode::Int8);
-    
-    let tokenizer = Tokenizer::new("");
-    
-    let test_prompts = vec![
-        "今天天气很好，我们去",
-        "人工智能的发展前景",
-        "如何学习编程",
-        "中国的历史文化",
-        "计算机科学的未来",
-    ];
-    
-    println!("测试样本数: {}", test_prompts.len());
-    println!("-" );
-    
-    let mut original_results = HashMap::new();
-    let mut dynamic_results = HashMap::new();
-    let mut int8_results = HashMap::new();
-    
-    // 获取原始模型结果
-    for prompt in &test_prompts {
-        let response = sage::generation::generate(&original_model, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
-        println!("原始模型 - \"{}\": {}", prompt, response);
-        original_results.insert(*prompt, response);
-    }
-    
-    println!("\n" );
-    
-    // 获取动态量化模型结果
-    for prompt in &test_prompts {
-        let response = sage::generation::generate_quantized(&quantized_model_dynamic, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
-        println!("动态量化 - \"{}\": {}", prompt, response);
-        dynamic_results.insert(*prompt, response);
-    }
-    
-    println!("\n" );
-    
-    // 获取INT8量化模型结果
-    for prompt in &test_prompts {
-        let response = sage::generation::generate_quantized(&quantized_model_int8, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
-        println!("INT8量化 - \"{}\": {}", prompt, response);
-        int8_results.insert(*prompt, response);
-    }
-    
-    println!("\n=== 精度评估结果 ===");
-    evaluate_accuracy(&original_results, &dynamic_results, "动态量化");
-    evaluate_accuracy(&original_results, &int8_results, "INT8量化");
-}
-
-fn evaluate_gpu_accuracy(config: &TrainingConfig, model_path: &str) {
-    let device = <Wgpu as Backend>::Device::default();
-    
-    // 加载原始模型
-    let original_model = config.model
-        .init::<Wgpu>(&device)
         .load_file(model_path, &burn::record::CompactRecorder::new(), &device)
         .expect("Failed to load model");
     

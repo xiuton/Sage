@@ -1,14 +1,12 @@
+
 use burn::{
     config::Config,
-    data::{dataloader::{batcher::Batcher, DataLoaderBuilder, Dataset}, dataset::InMemDataset},
-    optim::{AdamConfig, adaptor::OptimizerAdaptor},
+    data::{dataloader::{batcher::Batcher, DataLoaderBuilder}},
+    module::AutodiffModule,
+    optim::{AdamConfig, adaptor::OptimizerAdaptor, Optimizer, GradientsParams, GradientsAccumulator},
     prelude::*,
     record::CompactRecorder,
     tensor::backend::AutodiffBackend,
-    train::{
-        LearnerBuilder,
-        metric::{LearningRateMetric, LossMetric},
-    },
 };
 
 use crate::training::distributed::{DistributedConfig, train_parallel, get_available_devices, create_device};
@@ -18,14 +16,13 @@ use std::{
     fs,
     path::Path,
     sync::Arc,
-    time::Instant,
 };
 
 use crate::{MmapTextDataset, TextBatch, TextBatcher, TextDataset};
 use crate::core::model::{Model, ModelConfig};
 use crate::core::tokenizer::Tokenizer;
 
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct TrainingConfig {
     pub model: ModelConfig,
     pub optimizer: AdamConfig,
@@ -80,9 +77,9 @@ struct TrainingContext<B: AutodiffBackend> {
     device: B::Device,
     tokenizer: Arc<Tokenizer>,
     init_model: Option<Model<B>>,
-    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam<B::InnerBackend>, Model<B>, B>>,
-    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<TextBatch<B>>>,
-    dataloader_valid: Arc<dyn burn::data::dataloader::DataLoader<TextBatch<B::InnerBackend>>>,
+    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam, Model<B>, B>>,
+    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<B, TextBatch<B>>>,
+    dataloader_valid: Arc<dyn burn::data::dataloader::DataLoader<B::InnerBackend, TextBatch<B::InnerBackend>>>,
     total_items: usize,
 }
 
@@ -121,7 +118,7 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         eprintln!("继续运行，但配置和分词器可能未保存");
     }
     
-    B::seed(context.config.seed);
+    B::seed(&context.device, context.config.seed);
 
     let batch_size = context.config.batch_size;
     let seq_len = context.config.model.max_seq_len;
@@ -136,61 +133,133 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
 
     // 直接使用调整后的配置进行训练
     // 在Windows上避免使用可能导致文件锁定问题的应用日志记录器
-    let application_logger = if cfg!(windows) {
+    let _application_logger: Option<()> = if cfg!(windows) {
         None
     } else {
         None
     };
 
-    let mut learner_builder = LearnerBuilder::new(&adjusted_context.artifact_dir)
-        .metric_train_numeric(LossMetric::new())
-        .metric_valid_numeric(LossMetric::new())
-        .metric_train_numeric(LearningRateMetric::new())
-        .with_file_checkpointer(CompactRecorder::new())
-        .devices(vec![adjusted_context.device.clone()])
-        .num_epochs(adjusted_context.config.num_epochs)
-        .with_application_logger(application_logger);
-
-    if accum > 1 {
-        learner_builder = learner_builder.grads_accumulation(accum);
-    }
-
-    if !adjusted_context.config.no_progress {
-        learner_builder = learner_builder.summary();
-    }
-
-    // 构建模型和优化器
-    let model = adjusted_context.init_model.unwrap_or_else(|| adjusted_context.config.model.init::<B>(&adjusted_context.device));
-    
-    // 使用优化器配置创建优化器
-    let optimizer = adjusted_context.init_optimizer.unwrap_or_else(|| {
-        let optimizer_config = adjusted_context.config.optimizer;
-        optimizer_config.init()
+    // 创建模型和优化器
+    let mut model = adjusted_context.init_model.unwrap_or_else(|| {
+        adjusted_context.config.model.init::<B>(&adjusted_context.device)
+    });
+    let mut optim = adjusted_context.init_optimizer.unwrap_or_else(|| {
+        adjusted_context.config.optimizer.init()
     });
 
-    let learner = learner_builder.build(
-        model,
-        optimizer,
-        adjusted_context.config.lr,
-    );
+    let lr = adjusted_context.config.lr;
+    let num_epochs = adjusted_context.config.num_epochs;
+    let no_progress = adjusted_context.config.no_progress;
+    let artifact_dir = adjusted_context.artifact_dir.clone();
+    let dataloader_train = adjusted_context.dataloader_train.clone();
+    let dataloader_valid = adjusted_context.dataloader_valid.clone();
 
-    let start_time = Instant::now();
-    let model_trained = learner.fit(adjusted_context.dataloader_train, adjusted_context.dataloader_valid);
-    let elapsed = start_time.elapsed();
+    // 创建训练日志目录
+    let checkpoint_dir = Path::new(&artifact_dir).join("checkpoint");
+    fs::create_dir_all(&checkpoint_dir).ok();
 
-    // 保存模型
-    let model_path = format!("{}/model", adjusted_context.artifact_dir);
-    if let Err(e) = model_trained.save_file(&model_path, &CompactRecorder::new()) {
-        eprintln!("警告: 保存模型失败: {} ({})", e, model_path);
-    } else {
-        println!("模型已保存到: {}", model_path);
+    let start_time = std::time::Instant::now();
+
+    // 创建验证损失日志目录
+    let valid_dir = Path::new(&artifact_dir).join("valid");
+    let train_dir = Path::new(&artifact_dir).join("train");
+    fs::create_dir_all(&valid_dir).ok();
+    fs::create_dir_all(&train_dir).ok();
+
+    // 训练循环
+    for epoch in 1..=num_epochs {
+        println!("\n=== Epoch {}/{} ===", epoch, num_epochs);
+        
+        let mut accumulator = GradientsAccumulator::new();
+        let epoch_valid_dir = valid_dir.join(format!("epoch-{}", epoch));
+        let epoch_train_dir = train_dir.join(format!("epoch-{}", epoch));
+        fs::create_dir_all(&epoch_valid_dir).ok();
+        fs::create_dir_all(&epoch_train_dir).ok();
+
+        // 训练阶段
+        let mut train_loss_sum = 0.0f64;
+        let mut train_batches = 0usize;
+        
+        for (iteration, batch) in dataloader_train.iter().enumerate() {
+            let batch_clone = batch.clone();
+            let output = model.forward_step(batch);
+            
+            // 先计算验证损失（用 compute_validation_loss）
+            let batch_loss = model.compute_validation_loss(batch_clone);
+            train_loss_sum += batch_loss;
+            train_batches += 1;
+            
+            // 反向传播
+            let grads = output.loss.backward();
+            let grads = GradientsParams::from_grads(grads, &model);
+            accumulator.accumulate(&model, grads);
+
+            // 梯度累积
+            if (iteration + 1) % accum == 0 {
+                let grads = accumulator.grads();
+                model = optim.step(lr, model, grads);
+                accumulator = GradientsAccumulator::new();
+            }
+
+            if !no_progress && (iteration + 1) % 10 == 0 {
+                let avg_loss = train_loss_sum / train_batches as f64;
+                println!("[Train] Epoch {} - Batch {} - Loss: {:.6}", epoch, iteration + 1, avg_loss);
+            }
+        }
+
+        // 计算并记录训练损失
+        let avg_train_loss = if train_batches > 0 {
+            train_loss_sum / train_batches as f64
+        } else {
+            0.0
+        };
+        let _ = fs::write(epoch_train_dir.join("Loss.log"), format!("{}\n", avg_train_loss));
+
+        println!("[Train] Epoch {} complete - Average Loss: {:.6}", epoch, avg_train_loss);
+
+        // 验证阶段
+        let model_valid = model.valid();
+        let mut valid_loss_sum = 0.0f64;
+        let mut valid_batches = 0usize;
+
+        for (iteration, batch) in dataloader_valid.iter().enumerate() {
+            let batch_loss = model_valid.compute_validation_loss(batch);
+            valid_loss_sum += batch_loss;
+            valid_batches += 1;
+
+            if !no_progress && (iteration + 1) % 10 == 0 {
+                let avg_loss = valid_loss_sum / valid_batches as f64;
+                println!("[Valid] Epoch {} - Batch {} - Loss: {:.6}", epoch, iteration + 1, avg_loss);
+            }
+        }
+
+        // 计算并记录验证损失
+        let avg_valid_loss = if valid_batches > 0 {
+            valid_loss_sum / valid_batches as f64
+        } else {
+            0.0
+        };
+        let _ = fs::write(epoch_valid_dir.join("Loss.log"), format!("{}\n", avg_valid_loss));
+
+        println!("[Valid] Epoch {} complete - Average Loss: {:.6}", epoch, avg_valid_loss);
+
+        // 保存检查点
+        let checkpoint_path = checkpoint_dir.join(format!("model-{}.mpk", epoch));
+        if let Err(e) = model.clone().save_file(&checkpoint_path, &CompactRecorder::new()) {
+            eprintln!("警告: 保存检查点失败: {}", e);
+        } else {
+            println!("检查点已保存: {}", checkpoint_path.display());
+        }
     }
 
-    if let Some(best_epoch) = find_best_epoch(Path::new(&adjusted_context.artifact_dir)) {
-        let from = Path::new(&adjusted_context.artifact_dir)
+    let elapsed = start_time.elapsed();
+
+    // 使用 find_best_epoch 函数找到最佳 epoch
+    if let Some(best_epoch) = find_best_epoch(Path::new(&artifact_dir)) {
+        let from = Path::new(&artifact_dir)
             .join("checkpoint")
             .join(format!("model-{}.mpk", best_epoch));
-        let to = Path::new(&adjusted_context.artifact_dir).join("best_model.mpk");
+        let to = Path::new(&artifact_dir).join("best_model.mpk");
         
         if let Err(e) = fs::copy(&from, &to) {
             eprintln!("警告: 复制最佳模型失败: {} ({} -> {})", e, from.display(), to.display());
@@ -199,7 +268,7 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         }
     }
 
-    print_training_stats(elapsed, adjusted_context.total_items, adjusted_context.config.num_epochs, &adjusted_context.artifact_dir);
+    print_training_stats(elapsed, adjusted_context.total_items, num_epochs, &artifact_dir);
 }
 
 fn print_training_stats(elapsed: std::time::Duration, total_items: usize, num_epochs: usize, artifact_dir: &str) {
@@ -232,7 +301,7 @@ pub fn train<B: AutodiffBackend>(
     tokens: Vec<usize>,
     mask: Vec<u8>,
     init_model: Option<Model<B>>,
-    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam<B::InnerBackend>, Model<B>, B>>,
+    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam, Model<B>, B>>,
 ) {
     if config.distributed {
         // 获取可用设备
@@ -324,7 +393,7 @@ pub fn train_from_cache<B: AutodiffBackend>(
     tokens_path: &str,
     mask_path: &str,
     init_model: Option<Model<B>>,
-    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam<B::InnerBackend>, Model<B>, B>>,
+    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam, Model<B>, B>>,
 ) {
     let dataset_full = MmapTextDataset::open(tokens_path, mask_path, config.model.max_seq_len);
     let n_tokens = dataset_full.total_tokens();
@@ -384,7 +453,7 @@ pub fn train_dpo<B: AutodiffBackend>(
         eprintln!("继续运行，但配置和分词器可能未保存");
     }
     
-    B::seed(config.seed);
+    B::seed(&device, config.seed);
     
     let default_dpo_config = DPOConfig::default();
     let dpo_config = config.dpo_config.as_ref().unwrap_or(&default_dpo_config);
@@ -436,7 +505,7 @@ pub fn train_dpo<B: AutodiffBackend>(
             let batch_items = chunk.to_vec();
             
             // 创建批次
-            let batch = batcher.batch(batch_items);
+            let batch = batcher.batch(batch_items, &device);
             
             // 训练批次（传递学习率）
             let loss_value = trainer.train_batch(batch, config.lr);
@@ -473,12 +542,12 @@ pub fn train_with_loaders<B: AutodiffBackend>(
     config: TrainingConfig,
     device: B::Device,
     tokenizer: &Tokenizer,
-    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<TextBatch<B>>>,
+    dataloader_train: Arc<dyn burn::data::dataloader::DataLoader<B, TextBatch<B>>>,
     dataloader_valid: Arc<
-        dyn burn::data::dataloader::DataLoader<TextBatch<B::InnerBackend>>,
+        dyn burn::data::dataloader::DataLoader<B::InnerBackend, TextBatch<B::InnerBackend>>,
     >,
     init_model: Option<Model<B>>,
-    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam<B::InnerBackend>, Model<B>, B>>,
+    init_optimizer: Option<OptimizerAdaptor<burn::optim::Adam, Model<B>, B>>,
 ) {
     let total_items = dataloader_train.num_items();
     let context = TrainingContext {
