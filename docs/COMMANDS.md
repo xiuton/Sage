@@ -165,7 +165,23 @@ cargo run --release --bin train -- --sft-jsonl code_data.jsonl --artifact-dir ./
 cargo run --release --bin train -- --sft-jsonl math_data.jsonl --artifact-dir ./tmp/sft_math --training-mode math --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
 ```
 
-**B11. GPU 后端训练**
+**B11. 使用学习率调度器训练（推荐）**
+
+```bash
+# 基础学习率调度器训练（Cosine Annealing + Warmup）
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu --force --reset-tokenizer
+
+# 学习率调度器 + GPU + 大模型
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler_large --lr-scheduler --lr-max 0.0003 --lr-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu --force --reset-tokenizer
+
+# 学习率调度器说明：
+# - Warmup阶段（前 warmup-steps）：学习率从 0 线性增加到 lr-max
+# - Cosine阶段（之后）：学习率从 lr-max 余弦衰减到 lr-min
+# - 推荐设置：warmup-steps 为 total-steps 的 5%-10%
+# - 学习率调度器能显著提升训练稳定性和收敛效果
+```
+
+**B12. GPU 后端训练**
 
 ```bash
 cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_gpu --backend gpu --use-bpe --num-epochs 20 --force --reset-tokenizer
@@ -225,7 +241,12 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--lr <LR>`：学习率（默认 `0.0001`）。控制模型权重更新的步长，过大会导致训练不稳定，过小会使训练过慢收敛。
 - `--max-seq-len <MAX_SEQ_LEN>`：序列长度（默认 `256`）。限制输入序列的最大长度，过长会增加内存使用，过短可能丢失上下文信息。
 - `--use-bpe`：使用 BPE 分词器替代字符级分词器（推荐用于减少重复字符问题）。
-- `--bpe-vocab-size <BPE_VOCAB_SIZE>`：BPE 词汇表大小（默认 `5000`，仅在启用 `--use-bpe` 时有效）。
+- `--bpe-vocab-size &lt;BPE_VOCAB_SIZE&gt;`：BPE 词汇表大小（默认 `5000`，仅在启用 `--use-bpe` 时有效）。
+- `--lr-scheduler`：启用学习率调度器（Cosine Annealing + Warmup），需要同时设置 `--lr-max`、`--lr-min`、`--warmup-steps`、`--total-steps`。
+- `--lr-max &lt;LR_MAX&gt;`：学习率调度器的最大学习率（默认 `0.0001`）。
+- `--lr-min &lt;LR_MIN&gt;`：学习率调度器的最小学习率（默认 `0.00001`）。
+- `--warmup-steps &lt;WARMUP_STEPS&gt;`：学习率预热步数（默认 `1000`）。
+- `--total-steps &lt;TOTAL_STEPS&gt;`：学习率调度总步数（默认 `10000`）。
 - `--force`：即使输出目录已有模型也强制重新训练/覆盖。会删除现有的模型文件。
 - `--continue`：从 `<artifact-dir>/model.mpk` 加载权重继续训练。用于增量训练或微调。
 - `--resume-epoch <RESUME_EPOCH>`：从 `<artifact-dir>/checkpoint/model-<epoch>.mpk` 加载权重继续训练。用于从特定checkpoint恢复训练。

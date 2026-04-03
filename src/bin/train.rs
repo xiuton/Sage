@@ -160,6 +160,26 @@ struct Args {
     /// DPO数据文件路径
     #[arg(long, value_name = "path/to/dpo_data.jsonl")]
     dpo_data: Option<String>,
+    
+    /// 启用学习率调度器（Cosine Annealing + Warmup）
+    #[arg(long, default_value_t = false)]
+    lr_scheduler: bool,
+    
+    /// 学习率调度器的最大学习率（Warmup阶段结束时的值）
+    #[arg(long, default_value_t = 0.0001)]
+    lr_max: f64,
+    
+    /// 学习率调度器的最小学习率（Cosine阶段结束时的值）
+    #[arg(long, default_value_t = 0.00001)]
+    lr_min: f64,
+    
+    /// 学习率调度器的Warmup步数
+    #[arg(long, default_value_t = 1000)]
+    warmup_steps: usize,
+    
+    /// 学习率调度器的总调度步数
+    #[arg(long, default_value_t = 100000)]
+    total_steps: usize,
 }
 
 impl Args {
@@ -1143,6 +1163,18 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 "CPU 后端: 梯度累积步数 = {}",
                 training_config.gradient_accumulation_steps
             );
+        }
+
+        // 学习率调度器配置
+        if args.lr_scheduler {
+            use sage::training::training::LRSchedulerConfig;
+            let lr_scheduler_config = LRSchedulerConfig {
+                lr_max: args.lr_max,
+                lr_min: args.lr_min,
+                warmup_steps: args.warmup_steps,
+                total_steps: args.total_steps,
+            };
+            training_config.lr_scheduler = Some(lr_scheduler_config);
         }
 
         // 默认启用TUI，除非明确禁用或使用快速模式

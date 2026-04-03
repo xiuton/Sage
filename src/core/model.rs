@@ -21,6 +21,44 @@ pub use multimodal::{
     FusionStrategy,
 };
 
+// TODO: 待实现 RMSNorm 层（需要研究 Burn 0.20 的正确 Param API）
+// #[derive(Module, Debug)]
+// pub struct RMSNorm<B: Backend> {
+//     gamma: Param<Tensor<B, 1>>,
+//     epsilon: f64,
+// }
+//
+// impl<B: Backend> RMSNorm<B> {
+//     pub fn new(d_model: usize, device: &B::Device) -> Self {
+//         Self::with_epsilon(d_model, 1e-6, device)
+//     }
+//
+//     pub fn with_epsilon(d_model: usize, epsilon: f64, device: &B::Device) -> Self {
+//         let gamma = Param::from_tensor(Tensor::ones([d_model], device));
+//         Self { gamma, epsilon }
+//     }
+//
+//     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+//         let [batch_size, seq_len, d_model] = x.dims();
+//
+//         let x_squared = x.clone().powf_scalar(2.0);
+//         let mean = x_squared.mean_dim(2);
+//         let rms = mean.add_scalar(self.epsilon).sqrt();
+//         let normalized = x / rms.unsqueeze::<2>();
+//         let gamma_expanded = self.gamma.val().unsqueeze::<2>().unsqueeze::<1>();
+//
+//         normalized * gamma_expanded
+//     }
+// }
+
+// TODO: 待实现 SwiGLU FFN（需要研究 Burn 0.20 的正确 sigmoid API）
+// pub fn swiglu<B: Backend>(x: Tensor<B, 3>, w1: &Linear<B>, w2: &Linear<B>, w3: &Linear<B>) -> Tensor<B, 3> {
+//     let x1 = w1.forward(x.clone());
+//     let x2 = w2.forward(x);
+//     let x_gated = x1 * x2.sigmoid();
+//     w3.forward(x_gated)
+// }
+
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
     embedding: Embedding<B>,

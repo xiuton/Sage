@@ -4,3 +4,4 @@ pub mod lora;
 pub mod vram_probe;
 pub mod distributed;
 pub mod dpo;
+pub mod lr_scheduler;

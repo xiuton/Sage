@@ -21,6 +21,16 @@ use std::{
 use crate::{MmapTextDataset, TextBatch, TextBatcher, TextDataset};
 use crate::core::model::{Model, ModelConfig};
 use crate::core::tokenizer::Tokenizer;
+use crate::training::lr_scheduler::LRScheduler;
+
+/// 学习率调度器配置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LRSchedulerConfig {
+    pub lr_max: f64,
+    pub lr_min: f64,
+    pub warmup_steps: usize,
+    pub total_steps: usize,
+}
 
 #[derive(Config, Debug)]
 pub struct TrainingConfig {
@@ -48,6 +58,8 @@ pub struct TrainingConfig {
     pub devices: Vec<String>,
     /// DPO训练配置
     pub dpo_config: Option<DPOConfig>,
+    /// 学习率调度器配置
+    pub lr_scheduler: Option<LRSchedulerConfig>,
 }
 
 impl TrainingConfig {
@@ -65,6 +77,7 @@ impl TrainingConfig {
             distributed: false,
             devices: Vec::new(),
             dpo_config: None,
+            lr_scheduler: None,
         }
     }
 }
@@ -154,6 +167,18 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
     let dataloader_train = adjusted_context.dataloader_train.clone();
     let dataloader_valid = adjusted_context.dataloader_valid.clone();
 
+    // 初始化学习率调度器
+    let mut lr_scheduler = if let Some(config) = &adjusted_context.config.lr_scheduler {
+        println!("学习率调度器已启用:");
+        println!("  - lr_max: {:.6}", config.lr_max);
+        println!("  - lr_min: {:.6}", config.lr_min);
+        println!("  - warmup_steps: {}", config.warmup_steps);
+        println!("  - total_steps: {}", config.total_steps);
+        Some(LRScheduler::new(config.lr_max, config.lr_min, config.warmup_steps, config.total_steps))
+    } else {
+        None
+    };
+
     // 创建训练日志目录
     let checkpoint_dir = Path::new(&artifact_dir).join("checkpoint");
     fs::create_dir_all(&checkpoint_dir).ok();
@@ -197,8 +222,12 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
             // 梯度累积
             if (iteration + 1) % accum == 0 {
                 let grads = accumulator.grads();
-                model = optim.step(lr, model, grads);
+                let current_lr = lr_scheduler.as_mut().map(|s| s.get_lr()).unwrap_or(lr);
+                model = optim.step(current_lr, model, grads);
                 accumulator = GradientsAccumulator::new();
+                if let Some(scheduler) = &mut lr_scheduler {
+                    scheduler.step();
+                }
             }
 
             if !no_progress && (iteration + 1) % 10 == 0 {

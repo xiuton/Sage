@@ -154,7 +154,7 @@ Sage/
 
 ## 已实现功能特性（按模块）
 
-### 模型（Transformer LM）
+#### 模型（Transformer LM）
 
 - Token Embedding + 可学习位置 Embedding
 - **Transformer Encoder（Encoder-only Transformer 架构）**（多层、多头注意力、FFN）
@@ -164,6 +164,8 @@ Sage/
   - `default`：约 1M 参数（默认）
   - `10m`：约 10M 参数
   - `30m`：约 30M 参数
+- **RMSNorm 层代码**：现代大模型归一化层（已实现代码，待 API 适配）
+- **SwiGLU 激活函数代码**：现代大模型 FFN 激活函数（已实现代码，待 API 适配）
 
 代码入口：[core/model.rs](src/core/model.rs)
 
@@ -201,10 +203,20 @@ Sage/
 - **GPU 加速**：`--backend gpu`（WGPU 后端）
 - **分布式训练**：支持多 GPU/多机器数据并行训练
 - **多模态能力**：支持图像输入，实现图像编码器和多模态融合层
+- **真实 Loss 计算**：训练和验证阶段均使用真实损失值
+- **梯度累积**：支持梯度累积步数配置
+- **学习率调度器配置**：支持 Cosine Annealing + Warmup 学习率调整策略
 
 > 说明：当前"继续训练"是**只恢复模型权重**，不恢复优化器状态（后续计划优化）。
 
 代码入口：[training/training.rs](src/training/training.rs)、[bin/train.rs](src/bin/train.rs)
+
+### 评估指标
+
+- **Perplexity**：语言模型质量评估指标（从损失计算）
+- **BLEU**：文本生成质量评估指标（简化版）
+
+代码入口：[utils/metrics.rs](src/utils/metrics.rs)
 
 ### 推理生成（Sampling）
 
@@ -348,6 +360,52 @@ cargo run --release --bin train -- --sft-jsonl data.jsonl --num-workers 16
 
 ---
 
+## 学习率调度器（推荐使用）
+
+项目实现了 **Cosine Annealing + Warmup** 学习率调度器，能显著提升训练稳定性和收敛效果。
+
+### 快速开始
+```bash
+# 使用学习率调度器训练（推荐）
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
+```
+
+### 参数说明
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--lr-scheduler` | 禁用 | 启用学习率调度器 |
+| `--lr-max` | 0.0001 | 最大学习率（Warmup阶段结束时的值） |
+| `--lr-min` | 0.00001 | 最小学习率（Cosine阶段结束时的值） |
+| `--warmup-steps` | 1000 | Warmup步数（学习率从0线性增加到lr-max） |
+| `--total-steps` | 10000 | 总调度步数 |
+
+### 调度阶段
+1. **Warmup阶段**（前 warmup-steps）：学习率从 0 线性增加到 lr-max
+2. **Cosine阶段**（之后）：学习率从 lr-max 余弦衰减到 lr-min
+
+### 推荐设置
+- Warmup步数：总步数的 5%-10%
+- 小模型（1M/10M）：lr-max=0.0005, lr-min=0.00001
+- 中等模型（30M/100M）：lr-max=0.0003, lr-min=0.000005
+
+---
+
+## 评估指标
+
+项目支持多种评估指标，用于监控和评估模型性能。
+
+### Perplexity（困惑度）
+Perplexity 是衡量语言模型质量的重要指标，值越低越好。
+- 计算方式：Perplexity = exp(Loss)
+- 理想值：对于高质量语料，通常应低于 10-20
+
+### BLEU 分数
+BLEU 用于评估文本生成质量，比较生成文本与参考文本的相似度。
+- 范围：0.0 ~ 1.0
+- 值越高表示生成质量越好
+
+---
+
 ## 命令总览
 
 本项目提供 **八个** 可执行目标（`src/bin/*.rs`）：
@@ -384,7 +442,8 @@ cargo run --release --bin train -- --sft-jsonl data.jsonl --num-workers 16
 - **数据流式加载**：~~对超大 JSONL/多文件语料，支持流式读取而非一次性读入内存。~~ ✅ **已完成**
 - **恢复优化器状态**：checkpoint 恢复不仅恢复模型权重，也恢复 optimizer/scheduler。
 - **更强的停止策略**：~~支持 stop sequences（例如遇到 `\u{0003}` 或 "用户：" 时停止生成）。~~ ✅ **已完成**
-- **评测与指标**：Perplexity、简单的 QA accuracy、样例回放等。
+- **学习率调度器**：~~Cosine Annealing + Warmup 学习率调整策略。~~ ✅ **已完成**
+- **评测与指标**：Perplexity、BLEU 分数、样例回放等。 ✅ **已完成**（Perplexity 和 BLEU 已实现）
 - **GPU 训练与推理**：~~完善 WGPU 后端使用与性能优化（当前默认 NdArray CPU）。~~ ✅ **已完成**（支持 `--backend gpu`）
 - **更大模型配置**：~~提供多个预设 config（~1M、~10M、~30M）按硬件选择。~~ ✅ **已完成**（`--model-size` 参数）
 - **专项训练模式**：代码生成、数学推理等专项优化。 ✅ **已完成**（`--training-mode` 参数）

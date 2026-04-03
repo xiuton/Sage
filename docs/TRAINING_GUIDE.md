@@ -253,12 +253,41 @@ cargo run --release --bin infer -- \
 
 ## 训练参数调整
 
-### 1. 学习率调整
+### 1. 学习率调整与学习率调度器（推荐）
+
+#### 1.1 学习率调度器（推荐使用）
+
+项目实现了 **Cosine Annealing + Warmup** 学习率调度器，能显著提升训练稳定性和收敛效果。
 
 **推荐设置：**
-- **初始学习率**：5e-5 ~ 1e-4（GPU）
-- **学习率预热**：前10%轮次线性预热
-- **学习率衰减**：使用余弦衰减或线性衰减
+- **启用调度器**：`--lr-scheduler`
+- **学习率最大值（lr-max）**：5e-5 ~ 5e-4（GPU）
+  - 小模型（1M/10M）：0.0005 ~ 0.001
+  - 中等模型（30M/100M）：0.0003 ~ 0.0005
+- **学习率最小值（lr-min）**：1e-5 ~ 5e-6
+- **Warmup步数**：总步数的 5%-10%
+- **总调度步数**：根据训练轮数和批次计算
+
+**调度阶段：**
+1. **Warmup阶段**（前 warmup-steps）：学习率从 0 线性增加到 lr-max
+2. **Cosine阶段**（之后）：学习率从 lr-max 余弦衰减到 lr-min
+
+**使用示例：**
+```bash
+# 基础学习率调度器训练
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
+
+# 学习率调度器 + 大模型 + GPU
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler_large --lr-scheduler --lr-max 0.0003 --lr-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu
+```
+
+#### 1.2 固定学习率（不推荐）
+
+如果不使用学习率调度器，可以使用固定学习率：
+
+**推荐设置：**
+- **小模型（&lt;10M）**：1e-4 ~ 5e-4（GPU）
+- **中等模型（10M-100M）**：5e-5 ~ 2e-4
 
 **调整策略：**
 - **训练不稳定**：降低学习率（如从1e-4降至5e-5）
@@ -266,14 +295,9 @@ cargo run --release --bin infer -- \
 - **损失波动大**：降低学习率并增加批量大小
 
 ```bash
-# 调整学习率示例
+# 固定学习率示例
 --lr 3e-5
 ```
-
-**学习率监控：**
-- 通过TUI界面观察学习率变化
-- 训练开始时学习率会逐渐上升（预热阶段）
-- 后期学习率会逐渐下降（衰减阶段）
 
 ### 2. 批量大小调整
 
@@ -360,18 +384,63 @@ cargo run --release --bin infer -- \
 
 ### 1. 评估指标
 
-**主要评估指标：**
-- **损失值（Loss）**：训练和验证损失，反映模型拟合程度
-- **困惑度（Perplexity）**：exp(loss)，越低越好，衡量模型预测的不确定性
-- **生成质量**：人工评估生成内容的质量、相关性和连贯性
-- **BLEU分数**：衡量生成文本与参考文本的相似度（可选）
-- **ROUGE分数**：评估摘要质量（可选）
+#### 1.1 Perplexity（困惑度）
 
-**指标解读：**
+Perplexity 是衡量语言模型质量的重要指标，值越低越好。
+
+**计算公式：**
+```
+Perplexity = exp(Loss)
+```
+
+**解读：**
+- **Perplexity &lt; 10**：非常优秀（接近人类水平）
+- **Perplexity 10-20**：良好（高质量模型）
+- **Perplexity 20-50**：一般（可接受）
+- **Perplexity &gt; 50**：较差（需要改进）
+
+**用途：**
+- 监控训练过程中模型质量的变化
+- 比较不同模型或超参数的性能
+- 判断模型是否收敛
+
+**Perplexity 计算位置：**
+- 项目在 `src/utils/metrics.rs` 中实现了 Perplexity 计算函数
+- 支持从单个损失值或多个损失值计算平均 Perplexity
+
+#### 1.2 BLEU 分数
+
+BLEU（Bilingual Evaluation Understudy）用于评估文本生成质量，比较生成文本与参考文本的相似度。
+
+**范围：** 0.0 ~ 1.0
+- **BLEU &gt; 0.5**：非常优秀
+- **BLEU 0.3-0.5**：良好
+- **BLEU 0.1-0.3**：一般
+- **BLEU &lt; 0.1**：较差
+
+**用途：**
+- 自动评估文本生成质量
+- 比较不同生成策略的效果
+- 量化评估模型的文本生成能力
+
+**BLEU 计算位置：**
+- 项目在 `src/utils/metrics.rs` 中实现了简化版 BLEU 分数计算
+- 支持 n-gram 精度计算和简洁惩罚
+
+#### 1.3 其他评估指标
+
+**损失值（Loss）**：训练和验证损失，反映模型拟合程度
 - **Loss下降**：模型正在学习和拟合数据
-- **Perplexity降低**：模型预测能力提高
 - **训练Loss远低于验证Loss**：可能存在过拟合
 - **Loss不再下降**：模型可能已收敛
+
+**生成质量**：人工评估生成内容的质量、相关性和连贯性
+- 这是最可靠的评估方式，但耗时耗力
+- 建议定期进行人工评估
+
+**ROUGE分数**：评估摘要质量（可选）
+- 用于评估摘要、翻译等任务
+- 关注召回率而非精确率
 
 ### 2. 评估方法
 
