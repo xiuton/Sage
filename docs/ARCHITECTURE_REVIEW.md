@@ -8,7 +8,7 @@
 
 | 域 | 主要内容 | 合理性简评 |
 |----|----------|------------|
-| **核心模型** | `core/model.rs`：Encoder-style Transformer + LM head；多档 `ModelConfig`（1M～预设大到 671B 量级）；`core/multimodal.rs`：图像编码器与多模态融合层 | 小模型档（default/10m/30m）与 Burn Learner 配套合理；极大档多为「占位/教学」配置，单机 WGPU 通常无法训练。多模态模块提供图像输入支持。 |
+| **核心模型** | `core/model.rs`：**TransformerEncoder + 自回归掩码**（实现因果注意力，行为等价于 Decoder-only）+ LM head；多档 `ModelConfig`（1M～预设大到 671B 量级）；`core/kv_cache.rs`：KV 缓存实现；`core/multimodal.rs`：图像编码器与多模态融合层 | 小模型档（default/10m/30m）与 Burn Learner 配套合理；极大档多为「占位/教学」配置，单机 WGPU 通常无法训练。使用 TransformerEncoder + 自回归掩码是当前 Burn 0.20 下的最佳实践（组件是 Encoder，但通过掩码实现因果注意力）。多模态模块提供图像输入支持。KV Cache 为推理性能优化奠定基础。 |
 | **分词** | `core/tokenizer.rs`：字符级 + BPE | 符合小模型与大一点实验需求；BPE 对中文更实用。 |
 | **数据** | `data/data.rs`：LM/SFT 数据集、mask、Batcher | 与 CrossEntropy pad 忽略配套；严谨 loss mask 仍可增强（见 README 已知限制）。 |
 | **训练** | `training/training.rs`：Learner、checkpoint、best 模型；`streaming.rs` 大语料；`vram_probe.rs` GPU 预检；`distributed.rs` 分布式训练；`dpo.rs` DPO偏好对齐 | 主路径清晰；WGPU 下 DataLoader `num_workers=0` 属必要取舍。分布式训练和DPO模块完善了训练能力。 |

@@ -157,13 +157,21 @@ Sage/
 #### 模型（Transformer LM）
 
 - Token Embedding + 可学习位置 Embedding
-- **Transformer Encoder（Encoder-only Transformer 架构）**（多层、多头注意力、FFN）
+- **TransformerEncoder + 自回归掩码**（实现 Decoder-only 风格的因果注意力）
+  - 组件使用 `TransformerEncoder`（Burn 0.20 下的最佳实践）
+  - 通过自回归掩码实现因果注意力，确保每个 token 只能关注前面的 token
+  - 行为上等价于 Decoder-only 架构
 - 语言模型输出头（Linear → vocab logits）
 - 参数量统计（估算）
 - **多规模模型配置**：
   - `default`：约 1M 参数（默认）
   - `10m`：约 10M 参数
   - `30m`：约 30M 参数
+  - `100m`：约 100M 参数
+  - `1b`：约 1B 参数
+  - `3b`：约 3B 参数
+  - `671b`：约 671B 参数（演示用）
+- **KV Cache**：用于加速自回归推理的键值缓存
 - **RMSNorm 层代码**：现代大模型归一化层（已实现代码，待 API 适配）
 - **SwiGLU 激活函数代码**：现代大模型 FFN 激活函数（已实现代码，待 API 适配）
 
@@ -406,6 +414,57 @@ BLEU 用于评估文本生成质量，比较生成文本与参考文本的相似
 
 ---
 
+## 编译与构建
+
+本项目使用 **Cargo Features** 进行功能模块化管理，以优化编译内存占用和时间。
+
+### Feature 功能说明
+
+| Feature | 包含内容 | 说明 |
+|---------|----------|------|
+| `core` (默认) | `train`、`infer`、`gen_sft` | 核心功能，默认编译 |
+| `api` | `api_server` | API 服务器 |
+| `tools` | `benchmark`、`accuracy_eval`、`export` | 辅助工具 |
+| `web` | `gen_web_sft` | Web 数据生成 |
+| `full` | 所有功能 | 全部编译 |
+
+### 常用编译命令
+
+```powershell
+# 推荐：只编译核心功能（内存占用最小）
+cargo build --release
+
+# 编译核心 + API 服务器
+cargo build --release --features "api"
+
+# 编译核心 + 辅助工具
+cargo build --release --features "tools"
+
+# 编译所有功能
+cargo build --release --features "full"
+```
+
+### 内存优化建议
+
+如果在 Windows 上遇到编译内存不足（OOM）问题：
+
+1. **使用 `-j 1` 限制并行编译**：
+   ```powershell
+   cargo build --release -j 1
+   ```
+
+2. **只编译需要的二进制**：
+   ```powershell
+   cargo build --release --bin train --bin infer --bin gen_sft
+   ```
+
+3. **使用 Debug 模式**（开发时）：
+   ```powershell
+   cargo build
+   ```
+
+---
+
 ## 命令总览
 
 本项目提供 **八个** 可执行目标（`src/bin/*.rs`）：
@@ -447,3 +506,7 @@ BLEU 用于评估文本生成质量，比较生成文本与参考文本的相似
 - **GPU 训练与推理**：~~完善 WGPU 后端使用与性能优化（当前默认 NdArray CPU）。~~ ✅ **已完成**（支持 `--backend gpu`）
 - **更大模型配置**：~~提供多个预设 config（~1M、~10M、~30M）按硬件选择。~~ ✅ **已完成**（`--model-size` 参数）
 - **专项训练模式**：代码生成、数学推理等专项优化。 ✅ **已完成**（`--training-mode` 参数）
+- **自回归掩码**：~~实现因果注意力机制，确保每个token只能关注前面的token。~~ ✅ **已完成**（通过自回归掩码实现）
+- **KV Cache 优化**：进一步优化 KV Cache 以提升推理性能
+- **RoPE 位置编码**：实现旋转位置编码以提升长文本外推能力
+- **RMSNorm 与 SwiGLU 启用**：适配 Burn 0.20 API 以启用 RMSNorm 归一化层和 SwiGLU 激活函数

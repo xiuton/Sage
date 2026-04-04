@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 use burn::backend::{ndarray::{NdArray}, wgpu::Wgpu};
 use burn::config::Config;
 use burn::module::Module;

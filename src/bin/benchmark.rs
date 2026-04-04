@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 use clap::Parser;
 use burn::backend::{ndarray::{NdArray, NdArrayDevice}, wgpu::Wgpu};
 use burn::prelude::Backend;

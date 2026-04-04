@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 use burn::backend::{Autodiff, ndarray::NdArray, wgpu::Wgpu};
 use burn::module::Module;
 use burn::optim::AdamConfig;

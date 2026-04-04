@@ -5,7 +5,7 @@ use burn::{
         transformer::{TransformerEncoder, TransformerEncoderConfig, TransformerEncoderInput},
     },
     prelude::*,
-    tensor::backend::AutodiffBackend,
+    tensor::{backend::AutodiffBackend, TensorData},
     train::{ClassificationOutput, TrainOutput, TrainStep},
 };
 
@@ -230,6 +230,22 @@ impl ModelConfig {
     }
 }
 
+/// 生成自回归掩码（Decoder-only 架构用）
+/// 确保每个位置只能看到前面的位置，不能看到后面的位置
+fn generate_autoregressive_mask<B: Backend>(batch_size: usize, seq_len: usize, device: &B::Device) -> Tensor<B, 3, Bool> {
+    let mask_data = (0..seq_len)
+        .map(|i| (0..seq_len).map(|j| j <= i).collect::<Vec<bool>>())
+        .flatten()
+        .collect::<Vec<bool>>();
+    
+    let mask = Tensor::<B, 2, Bool>::from_data(
+        TensorData::new(mask_data, [seq_len, seq_len]),
+        device,
+    );
+
+    mask.unsqueeze::<3>().repeat(&[batch_size, 1, 1])
+}
+
 impl<B: Backend> Model<B> {
     pub fn forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         self.forward_with_cache(input, None)
@@ -243,7 +259,8 @@ impl<B: Backend> Model<B> {
         let token_embeddings = self.embedding.forward(input);
 
         // Position embeddings - 使用 arange 创建位置索引
-        let pos_ids = if let Some(cache) = kv_cache {
+        let has_kv_cache = kv_cache.is_some();
+        let pos_ids = if let Some(cache) = kv_cache.as_ref() {
             // 如果有缓存，从缓存长度开始计算位置
             let start_pos = cache.get_cached_seq_len() as i64;
             Tensor::<B, 1, Int>::arange(start_pos..(start_pos + seq_len as i64), &device)
@@ -256,12 +273,22 @@ impl<B: Backend> Model<B> {
 
         let mut x = token_embeddings + pos_embeddings;
 
-        // 使用TransformerEncoder进行前向传播
-        // 注意：burn库的TransformerEncoder目前不直接支持KV缓存
-        // 但我们通过位置编码的优化来减少重复计算
-        x = self
-            .transformer_encoder
-            .forward(TransformerEncoderInput::new(x));
+        // Decoder-only 架构：生成自回归掩码
+        let autoregressive_mask = if !has_kv_cache {
+            // 训练阶段或无缓存推理阶段：使用完整的自回归掩码
+            Some(generate_autoregressive_mask::<B>(batch_size, seq_len, &device))
+        } else {
+            // 有缓存的推理阶段：不需要掩码，因为每次只生成一个 token
+            None
+        };
+
+        // 使用TransformerEncoder进行前向传播（应用自回归掩码实现 Decoder-only）
+        let mut encoder_input = TransformerEncoderInput::new(x);
+        if let Some(mask) = autoregressive_mask {
+            encoder_input = encoder_input.mask_attn(mask);
+        }
+        
+        x = self.transformer_encoder.forward(encoder_input);
 
         // Final head for language modeling
         self.output_head.forward(x)
@@ -293,10 +320,16 @@ impl<B: Backend> Model<B> {
         // 融合文本和视觉特征
         text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
         
-        // 使用TransformerEncoder进行前向传播
-        text_features = self
-            .transformer_encoder
-            .forward(TransformerEncoderInput::new(text_features));
+        // Decoder-only 架构：生成自回归掩码
+        let autoregressive_mask = Some(generate_autoregressive_mask::<B>(batch_size, seq_len, &device));
+        
+        // 使用TransformerEncoder进行前向传播（应用自回归掩码实现 Decoder-only）
+        let mut encoder_input = TransformerEncoderInput::new(text_features);
+        if let Some(mask) = autoregressive_mask {
+            encoder_input = encoder_input.mask_attn(mask);
+        }
+        
+        text_features = self.transformer_encoder.forward(encoder_input);
         
         // Final head for language modeling
         self.output_head.forward(text_features)

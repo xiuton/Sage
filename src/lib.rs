@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 pub mod core;
 pub mod training;
 pub mod inference;
@@ -19,6 +21,7 @@ pub use training::streaming;
 pub use training::training::*;
 pub use training::vram_probe::{probe_first_fitting_config, probe_training_step_fits};
 pub use tools::export;
+#[cfg(feature = "web")]
 pub use tools::model_download;
 pub use utils::error::*;
 pub use utils::logger;

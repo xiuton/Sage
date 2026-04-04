@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 use burn::backend::{ndarray::{NdArray, NdArrayDevice}, wgpu::Wgpu};
 use burn::prelude::Backend;
 
@@ -10,7 +12,9 @@ use sage::{
     tokenizer::Tokenizer,
     TrainingConfig,
 };
-use sage::{log_info, log_error, model_download::ModelDownloader};
+use sage::{log_info, log_error};
+#[cfg(feature = "web")]
+use sage::model_download::ModelDownloader;
 use axum::{
     extract::{Json, Path, Request},
     http::{header, StatusCode},
@@ -231,6 +235,7 @@ struct AppState {
     active_model: Arc<Mutex<String>>,
     
     // 模型下载器
+    #[cfg(feature = "web")]
     model_downloader: Arc<ModelDownloader>,
 }
 
@@ -302,7 +307,8 @@ async fn main() {
     };
     models.insert("default".to_string(), model_info);
     
-    // 创建模型下载器
+    // 创建模型下载器（仅在 web feature 启用时）
+    #[cfg(feature = "web")]
     let model_downloader = Arc::new(ModelDownloader::new(&args.model_dir));
     
     let state = Arc::new(AppState {
@@ -319,6 +325,7 @@ async fn main() {
         performance_monitor: PerformanceMonitor::new(),
         models: Arc::new(Mutex::new(models)),
         active_model: Arc::new(Mutex::new("default".to_string())),
+        #[cfg(feature = "web")]
         model_downloader,
     });
 
@@ -328,7 +335,7 @@ async fn main() {
         task_processor(state_clone, task_receiver).await;
     });
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/model-info", get(model_info_handler))
         .route("/api/performance", get(performance_handler))
@@ -342,11 +349,15 @@ async fn main() {
         .route("/api/models", post(load_model_handler))
         .route("/api/models/:model_id", delete(unload_model_handler))
         .route("/api/models/:model_id/activate", post(switch_model_handler))
-        .route("/api/models/:model_id/reload", post(reload_model_handler))
-        
-        // 模型下载和更新接口
-        .route("/api/models/download", post(download_model_handler))
-        
+        .route("/api/models/:model_id/reload", post(reload_model_handler));
+    
+    // 模型下载和更新接口（仅在 web feature 启用时）
+    #[cfg(feature = "web")]
+    {
+        app = app.route("/api/models/download", post(download_model_handler));
+    }
+    
+    app = app
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state.clone());
 
@@ -1525,11 +1536,13 @@ async fn reload_model_handler(
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg(feature = "web")]
 struct DownloadModelRequest {
     model_id: String,
     url: String,
 }
 
+#[cfg(feature = "web")]
 async fn download_model_handler(
     state: axum::extract::State<Arc<AppState>>,
     axum::extract::Json(req): axum::extract::Json<DownloadModelRequest>,

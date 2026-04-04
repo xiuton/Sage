@@ -53,12 +53,21 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 ### 2.2 模型（Transformer LM）
 
 - Token Embedding + Position Embedding
-- Transformer Encoder + LM Head（**Encoder-only Transformer 架构**）
+- **TransformerEncoder + 自回归掩码**（实现因果注意力，行为等价于 Decoder-only）
+  - 组件使用 `TransformerEncoder`
+  - 通过自回归掩码实现因果注意力，确保每个 token 只能关注前面的 token
+  - 行为上等价于 Decoder-only 架构
+- 自回归掩码生成函数：生成下三角矩阵掩码
 - TrainStep / ValidStep 接入 Burn Learner
 - **多规模模型配置**：
   - `default`：约 1M 参数（默认）
   - `10m`：约 10M 参数
   - `30m`：约 30M 参数
+  - `100m`：约 100M 参数
+  - `1b`：约 1B 参数
+  - `3b`：约 3B 参数
+  - `671b`：约 671B 参数（演示用）
+- **KV Cache**：用于加速自回归推理的键值缓存
 
 ### 2.3 Tokenizer（字符级 + BPE + 中文）
 
@@ -219,6 +228,20 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
    - 实现 `QuantizedModel` 量化模型封装
    - 支持 INT4、INT8、动态量化模式
    - 提供模型大小计算工具
+8. **自回归掩码实现** ✅ **已完成**
+   - 实现自回归掩码生成函数
+   - 通过 TransformerEncoder + 自回归掩码实现因果注意力机制
+   - 确保每个 token 只能关注前面的 token，不能看到后面的 token
+   - 支持多模态场景下的自回归掩码
+   - 行为上等价于 Decoder-only 架构（组件仍是 TransformerEncoder）
+9. **学习率调度器** ✅ **已完成**
+   - 实现 Cosine Annealing + Warmup 学习率调度策略
+   - 集成到训练循环中
+   - 支持灵活的参数配置（lr-max、lr-min、warmup-steps、total-steps）
+10. **评测指标** ✅ **已完成**
+    - 实现 Perplexity（困惑度）指标
+    - 实现 BLEU 分数指标
+    - 支持模型性能评估
 
 ---
 
