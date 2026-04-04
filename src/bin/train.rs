@@ -182,6 +182,18 @@ struct Args {
     /// 学习率调度器的总调度步数
     #[arg(long, default_value_t = 100000)]
     total_steps: usize,
+    
+    /// 启用多模态训练
+    #[arg(long, default_value_t = false)]
+    multimodal: bool,
+    
+    /// 视觉编码器输出维度
+    #[arg(long, default_value_t = 512)]
+    vision_out_dim: usize,
+    
+    /// 融合策略：add, concatenate, attention
+    #[arg(long, default_value = "add", value_name = "add|concatenate|attention")]
+    fusion_strategy: String,
 }
 
 impl Args {
@@ -970,6 +982,39 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
     let mut model_config = model_config;
     model_config.vocab_size = tokenizer.vocab_size;
     model_config.max_seq_len = args.max_seq_len;
+    
+    // 配置多模态功能
+    if args.multimodal {
+        println!("启用多模态功能...");
+        use sage::core::multimodal::{MultimodalConfig, VisionEncoderConfig, MultimodalFusionConfig, FusionStrategy};
+        
+        let fusion_strategy = match args.fusion_strategy.as_str() {
+            "add" => FusionStrategy::Add,
+            "concatenate" => FusionStrategy::Concatenate,
+            "attention" => FusionStrategy::Attention,
+            _ => FusionStrategy::Add,
+        };
+        
+        let multimodal_config = MultimodalConfig {
+            vision_encoder: VisionEncoderConfig {
+                in_channels: 3,
+                hidden_dim: 64,
+                out_dim: args.vision_out_dim,
+                num_layers: 4,
+                use_batch_norm: true,
+            },
+            fusion: MultimodalFusionConfig {
+                text_dim: model_config.d_model,
+                vision_dim: args.vision_out_dim,
+                output_dim: model_config.d_model,
+                strategy: fusion_strategy.clone(),
+            },
+            enable_multimodal: true,
+        };
+        
+        model_config.multimodal = Some(multimodal_config);
+        println!("多模态配置: 视觉输出维度={}, 融合策略={:?}", args.vision_out_dim, fusion_strategy);
+    }
 
     let model_init = model_config.init::<B>(&device);
     let num_params = model_init.num_params();

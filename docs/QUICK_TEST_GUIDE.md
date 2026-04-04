@@ -378,17 +378,93 @@ cargo run --bin train -- `
 
 Write-Host "✅ 训练模式测试完成！"
 ```
+error
+数学模型，进入交互式对话模式报错
+```
+PS D:\Code\Rust\Sage> cargo run --bin infer -- `
+>>     --model-dir .\tmp\test_math_mode `
+>>     --use-best `
+>>     --chat `
+>>     --interactive
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.36s
+     Running `target\debug\infer.exe --model-dir .\tmp\test_math_mode --use-best --chat --interactive`
+正在加载模型...
+模型加载完成。
+
+--- 进入交互模式 --- (输入 'exit' 退出)
+>> 123
+
+thread 'main' (11872) panicked at C:\Users\i\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\burn-ndarray-0.20.1\src\ops\base.rs:817:28:
+collapse_axis: Index 256 must be less than axis length 256 for array with shape IxDynImpl(Inline(2, [256, 128, 0, 0]))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: process didn't exit successfully: `target\debug\infer.exe --model-dir .\tmp\test_math_mode --use-best --chat --interactive` (exit code: 101)
+```
 
 ### 15. 交互式对话测试
 ```powershell
 # 交互式对话模式（需要手动输入）
-# cargo run --bin infer -- `
-#     --model-dir .\tmp\test_model_quick `
-#     --use-best `
-#     --chat `
-#     --interactive
+cargo run --bin infer -- `
+    --model-dir .\tmp\test_model_quick `
+    --use-best `
+    --chat `
+    --interactive
 
 Write-Host "✅ 交互式对话测试（需要手动测试）！"
+```
+error
+交互式对话，有概率出错
+```
+PS D:\Code\Rust\Sage> # 交互式对话模式（需要手动输入）
+>> cargo run --bin infer -- `
+>>     --model-dir .\tmp\test_model_quick `
+>>     --use-best `
+>>     --chat `
+>>     --interactive
+>>
+>> Write-Host "✅ 交互式对话测试（需要手动测试）！"
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.21s
+     Running `target\debug\infer.exe --model-dir .\tmp\test_model_quick --use-best --chat --interactive`
+正在加载模型...
+模型加载完成。
+
+--- 进入交互模式 --- (输入 'exit' 退出)
+>> 你好
+助手: e释sen千重练解章千汉蒙一？么i一么s出R来解R成章 >成文一解u<组uu由章汉释s么复汉用我个是话千练谁训释个解章/一什千释汉u<个你用句a一》ue你小话r模模se蒙话释我模a复蒙r话释出 话练e出启由模
+r什不ri我成来s么句你个的训谁谁你的小解汉释s我什 >文用汉n/解我模字谁组用组 释释释
+
+>> 写一篇文章
+
+thread 'main' (10356) panicked at C:\Users\i\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\burn-ndarray-0.20.1\src\ops\base.rs:817:28:
+collapse_axis: Index 256 must be less than axis length 256 for array with shape IxDynImpl(Inline(2, [256, 128, 0, 0]))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: process didn't exit successfully: `target\debug\infer.exe --model-dir .\tmp\test_model_quick --use-best --chat --interactive` (exit code: 101)
+✅ 交互式对话测试（需要手动测试）！
+```
+```
+PS D:\Code\Rust\Sage> # 交互式对话模式（需要手动输入）
+>> cargo run --bin infer -- `
+>>     --model-dir .\tmp\test_model_quick `
+>>     --use-best `
+>>     --chat `
+>>     --interactive
+>>
+>> Write-Host "✅ 交互式对话测试（需要手动测试）！"
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.15s
+     Running `target\debug\infer.exe --model-dir .\tmp\test_model_quick --use-best --chat --interactive`
+正在加载模型...
+模型加载完成。
+
+--- 进入交互模式 --- (输入 'exit' 退出)
+>> 写一篇文章
+助手: n章 >u>字我是成一千。什>一么是什个训>蒙r组 汉你么成模ue么i千什》我你我么么话ts
+
+>> 你可以做什么
+
+thread 'main' (6136) panicked at C:\Users\i\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\burn-ndarray-0.20.1\src\ops\base.rs:817:28:
+collapse_axis: Index 256 must be less than axis length 256 for array with shape IxDynImpl(Inline(2, [256, 128, 0, 0]))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: process didn't exit successfully: `target\debug\infer.exe --model-dir .\tmp\test_model_quick --use-best --chat --interactive` (exit code: 101)
+✅ 交互式对话测试（需要手动测试）！
 ```
 
 ### 16. 采样参数调整测试
@@ -421,17 +497,159 @@ cargo run --bin train -- `
 
 Write-Host "✅ 多轮对话格式测试完成！"
 ```
+error
+概率报错
+```
+PS D:\Code\Rust\Sage> # 交互式对话模式（需要手动输入）
+>> cargo run --bin infer -- `
+>>     --model-dir .\tmp\test_messages_format `
+>>     --use-best `
+>>     --chat `
+>>     --interactive    
+>> 
+>> Write-Host "✅ 交互式对话测试（需要手动测试）！"
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.14s
+     Running `target\debug\infer.exe --model-dir .\tmp\test_messages_format --use-best --chat --interactive`
+正在加载模型...
+模型加载完成。
+   
+--- 进入交互模式 --- (输入 'exit' 退出)
+>> nihao
+助手: 练用
+不tc一蒙《R修r重练用入习项么手么y目谁所借c一用s训写y用用借由句
+模c成u练章ys蒙建，蒙R>手建项正字重来模什c成谁重和话所多写的。一蒙千项么y项么ei给成成r并汉t 话重入配小入千写项谁什复写是e句
+
+>> 12
+助手: 章手n用
+章从建成训？p用。并么ts借c你a重出章释出e组手e？a借一和谁话有我启章
+
+>> k
+助手: 什《一手蒙文
+
+>> 你可以做什么
+
+thread 'main' (15772) panicked at C:\Users\i\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\burn-ndarray-0.20.1\src\ops\base.rs:817:28:
+collapse_axis: Index 256 must be less than axis length 256 for array with shape IxDynImpl(Inline(2, [256, 128, 0, 0]))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: process didn't exit successfully: `target\debug\infer.exe --model-dir .\tmp\test_messages_format --use-best --chat --interactive` (exit code: 101)
+✅ 交互式对话测试（需要手动测试）！
+```
 
 ### 18. 多模态功能测试
 ```powershell
 # 多模态功能测试（图像输入）
 # 注意：多模态功能需要特定的数据格式和配置
-# 目前多模态功能已实现图像编码器和多模态融合层
+# 多模态功能已完全集成到训练和推理流程中
 
 # 运行多模态相关单元测试
 cargo test test_multimodal
 
 Write-Host "✅ 多模态功能测试完成！"
+```
+
+### 18.1 多模态功能详细测试
+```powershell
+# 多模态功能当前状态说明：
+# 1. ✅ 已实现 VisionEncoder 图像编码器
+# 2. ✅ 已实现多模态融合层
+# 3. ✅ 已集成到完整的训练和推理流程
+# 4. ✅ 支持图像加载和预处理
+# 5. ✅ 支持多模态生成
+
+# 查看多模态相关代码
+Write-Host "多模态功能文件："
+Get-ChildItem .\src\core\multimodal.rs
+Get-ChildItem .\src\core\generation.rs
+
+# 运行多模态单元测试
+Write-Host "运行多模态单元测试："
+cargo test test_multimodal -v
+
+Write-Host "✅ 多模态功能详细测试完成！"
+```
+
+### 18.2 多模态训练指南
+```powershell
+# 多模态训练命令
+# 基本多模态训练
+cargo run --bin train -- `
+    --multimodal `
+    --vision-out-dim 512 `
+    --fusion-strategy add `
+    --ultra-quick `
+    --sft-sample `
+    --backend cpu `
+    --artifact-dir .\tmp\test_multimodal_train `
+    --no-progress
+
+# 自定义多模态配置
+cargo run --bin train -- `
+    --multimodal `
+    --vision-out-dim 768 `
+    --fusion-strategy concatenate `
+    --num-epochs 5 `
+    --batch-size 16 `
+    --backend cpu `
+    --artifact-dir .\tmp\test_multimodal_custom `
+    --no-progress
+
+Write-Host "✅ 多模态训练测试完成！"
+```
+
+### 18.3 多模态推理指南
+```powershell
+# 多模态推理命令
+# 注意：需要准备一张测试图像
+# 示例：将 test_image.jpg 放在项目根目录
+
+# 基本多模态推理
+cargo run --bin infer -- `
+    --multimodal `
+    --image-path .\test_image.jpg `
+    --prompt "描述这张图片"
+
+# 流式多模态推理
+cargo run --bin infer -- `
+    --multimodal `
+    --image-path .\test_image.jpg `
+    --prompt "描述这张图片" `
+    --stream `
+    --stream-speed 50
+
+# 聊天模式多模态推理
+cargo run --bin infer -- `
+    --multimodal `
+    --image-path .\test_image.jpg `
+    --prompt "这张图片里有什么？" `
+    --chat
+
+Write-Host "✅ 多模态推理测试完成！"
+```
+
+### 18.4 多模态功能技术说明
+```powershell
+# 多模态功能技术参数说明：
+# --multimodal: 启用多模态功能
+# --vision-out-dim: 视觉编码器输出维度（默认 512）
+# --fusion-strategy: 融合策略（add/concatenate/attention）
+# --image-path: 图像文件路径（用于推理）
+
+# 支持的图像格式：JPG、PNG、BMP 等常见格式
+# 图像预处理：自动调整为 224x224 大小并归一化
+
+Write-Host "✅ 多模态功能技术说明完成！"
+```
+
+### 18.5 多模态功能未来测试方向
+```powershell
+# 未来多模态功能测试方向：
+# 1. 多模态数据加载器：支持包含图像和文本的数据集
+# 2. 更丰富的融合策略：实现注意力融合等高级融合方法
+# 3. 多模态评估：添加图像理解任务的评估指标
+# 4. 性能优化：优化图像处理和特征融合的计算效率
+# 5. 多模态微调：使用特定领域的图像-文本数据进行微调
+
+Write-Host "✅ 多模态功能未来测试方向说明完成！"
 ```
 
 ### 19. 分布式训练测试（多 GPU）

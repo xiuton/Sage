@@ -45,6 +45,7 @@ impl Default for GenerateOptions {
 pub enum ModelType<'a, B: Backend> {
     Normal(&'a Model<B>),
     Quantized(&'a QuantizedModel<B>),
+    Multimodal(&'a Model<B>, &'a Tensor<B, 4>),
 }
 
 pub struct GenerationState<'a, B: Backend> {
@@ -149,10 +150,28 @@ impl<'a, B: Backend> GenerationState<'a, B> {
                 }
             },
             ModelType::Quantized(model) => model.forward(input),
+            ModelType::Multimodal(model, image) => {
+                // 多模态前向传播 - 只在第一次调用时处理图像
+                if self.generated_tokens == 0 {
+                    use crate::core::multimodal::MultimodalInput;
+                    let multimodal_input = MultimodalInput::new(input, (**image).clone());
+                    model.forward_multimodal(multimodal_input)
+                } else {
+                    // 后续调用只处理文本
+                    if let Some(kv_cache) = &mut self.kv_cache {
+                        let output = model.forward_with_cache(input, Some(kv_cache));
+                        // 更新缓存序列长度
+                        kv_cache.set_cached_seq_len(kv_cache.get_cached_seq_len() + input_tokens.len());
+                        output
+                    } else {
+                        model.forward(input)
+                    }
+                }
+            },
         };
         let [_, seq_len, _] = output.dims();
 
-        let last_token_logits =
+        let last_token_logits = 
             output.slice([0..1, (seq_len - 1)..seq_len, 0..self.tokenizer.vocab_size]);
 
         let mut logits_vec: Vec<f32> = last_token_logits
@@ -295,6 +314,17 @@ pub fn generate_quantized<B: Backend>(
     device: &B::Device,
 ) -> String {
     generate_with_model_type(ModelType::Quantized(model), tokenizer, prompt, options, device)
+}
+
+pub fn generate_multimodal<B: Backend>(
+    model: &Model<B>,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    image: &Tensor<B, 4>,
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> String {
+    generate_with_model_type(ModelType::Multimodal(model, image), tokenizer, prompt, options, device)
 }
 
 fn generate_with_model_type<B: Backend>(

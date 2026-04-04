@@ -135,6 +135,37 @@ cargo run --release --bin train -- \
 - `--devices`：指定使用的GPU设备ID（逗号分隔）
 - 每个GPU会自动分配batch_size的训练任务
 
+### 6. 多模态训练
+
+使用图像和文本数据进行多模态训练：
+
+```bash
+# 基本多模态训练
+cargo run --bin train -- \
+    --multimodal \
+    --vision-out-dim 512 \
+    --fusion-strategy add \
+    --ultra-quick \
+    --sft-sample
+
+# 自定义多模态配置
+cargo run --bin train -- \
+    --multimodal \
+    --vision-out-dim 768 \
+    --fusion-strategy concatenate \
+    --num-epochs 5 \
+    --batch-size 16 \
+    --backend cpu \
+    --artifact-dir ./tmp/test_multimodal_custom \
+    --no-progress
+```
+
+**参数说明：**
+- `--multimodal`：启用多模态训练
+- `--vision-out-dim`：视觉编码器输出维度（默认 512）
+- `--fusion-strategy`：融合策略（add/concatenate/attention，默认 add）
+- 多模态训练需要准备包含图像路径的训练数据
+
 ## 语料获取
 
 ### 1. 使用内置生成工具
@@ -706,6 +737,7 @@ Failed to load model
 - **多种训练模式**：通用对话、代码生成、数学推理
 - **快速开发模式**：超快速验证和快速开发模式
 - **流式数据加载**：支持大语料流式训练
+- **多模态训练**：支持图像和文本融合训练，多种融合策略
 
 #### 分词器优化
 - **BPE分词器**：支持字节对编码分词

@@ -11,7 +11,7 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供
 - **推理功能**：Chat 模式、流式输出、GPU 加速
 - **技术特性**：BPE 分词器、INT4/INT8 量化、可中断训练、快速开发模式
 - **分布式训练**：支持多 GPU/多机器数据并行训练
-- **多模态能力**：支持图像输入，实现图像编码器和多模态融合
+- **多模态能力**：支持图像输入，实现图像编码器和多模态融合层，集成到完整的训练和推理流程
 
 > 目标：提供一个“可跑通、可扩展、可继续工程化”的 Rust 大模型训练最小闭环。
 
@@ -70,6 +70,12 @@ cargo run --release --bin train -- --sft-jsonl data/sft_demo.jsonl --artifact-di
 
 # 推理生成
 cargo run --bin infer -- --model-dir ./tmp/model --use-best --chat --prompt "你好"
+
+# 多模态训练
+cargo run --bin train -- --multimodal --vision-out-dim 512 --fusion-strategy add --ultra-quick --sft-sample
+
+# 多模态推理
+cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
 ```
 
 ---
@@ -211,6 +217,9 @@ Sage/
 - **GPU 加速**：`--backend gpu`（WGPU 后端）
 - **分布式训练**：支持多 GPU/多机器数据并行训练
 - **多模态能力**：支持图像输入，实现图像编码器和多模态融合层
+  - `--multimodal`：启用多模态训练
+  - `--vision-out-dim`：视觉编码器输出维度
+  - `--fusion-strategy`：融合策略（add/concatenate/attention）
 - **真实 Loss 计算**：训练和验证阶段均使用真实损失值
 - **梯度累积**：支持梯度累积步数配置
 - **学习率调度器配置**：支持 Cosine Annealing + Warmup 学习率调整策略
@@ -237,6 +246,10 @@ Sage/
 - **停止序列**：
   - `--stop-on-user`：遇到 `<user>` 标签时停止（默认启用）
   - `--stop-sequence`：自定义停止序列（可多次使用）
+- **多模态推理**：
+  - `--multimodal`：启用多模态推理
+  - `--image-path`：指定图像文件路径
+  - 支持图像描述、图像理解等多模态任务
 
 代码入口：[core/generation.rs](src/core/generation.rs)、[bin/infer.rs](src/bin/infer.rs)
 

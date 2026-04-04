@@ -187,6 +187,16 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_gpu --backend gpu --use-bpe --num-epochs 20 --force --reset-tokenizer
 ```
 
+**B13. 多模态训练**
+
+```bash
+# 基本多模态训练
+cargo run --bin train -- --multimodal --vision-out-dim 512 --fusion-strategy add --ultra-quick --sft-sample
+
+# 自定义多模态配置
+cargo run --bin train -- --multimodal --vision-out-dim 768 --fusion-strategy concatenate --num-epochs 5 --batch-size 16 --backend cpu --artifact-dir ./tmp/test_multimodal_custom --no-progress
+```
+
 **B2. JSONL 的 schema 示例**
 
 prompt/response：
@@ -265,7 +275,9 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 - `--dpo-data <DPO_DATA>`：DPO训练数据文件路径。每行包含 `prompt`、`chosen`、`rejected` 字段。
 - `--dpo-beta <DPO_BETA>`：DPO损失的beta参数（默认 `0.1`）。控制偏好对齐的强度。
 - `--dpo-kl-weight <DPO_KL_WEIGHT>`：DPO KL散度权重参数（默认 `0.1`）。控制KL正则化的强度。
-- `--dpo-kl-weight <DPO_KL_WEIGHT>`：DPO KL散度权重参数（默认 `0.1`）。控制KL正则化的强度。
+- `--multimodal`：启用多模态训练。
+- `--vision-out-dim <VISION_OUT_DIM>`：视觉编码器输出维度（默认 `512`）。
+- `--fusion-strategy <FUSION_STRATEGY>`：融合策略（add/concatenate/attention，默认 `add`）。
 
 补充说明：
 
@@ -389,6 +401,12 @@ cargo run --bin infer -- --model-dir ./tmp/full_flow_model --use-best --chat --p
 
 # 自定义采样参数的流式输出
 cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "请介绍一下 Rust 语言" --stream --stream-speed 20 --backend gpu -n 100 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.5
+
+# 多模态推理
+cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
+
+# 多模态推理（使用 GPU 加速）
+cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片" --backend gpu
 ```
 
 ### 2.2 参数说明（来自 `infer --help`）
@@ -411,6 +429,8 @@ cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "�
 - `--stream`：启用流式输出（逐字/逐词输出）。
 - `--stream-speed <STREAM_SPEED>`：流式输出速度（每秒 token 数，默认 `50`）。
 - `--backend <BACKEND>`：推理后端选择，可选值为 `cpu` 或 `gpu`（默认 `cpu`）。
+- `--multimodal`：启用多模态推理。
+- `--image-path <IMAGE_PATH>`：图像文件路径（用于多模态推理）。
 
 补充说明：
 - `-t, --temperature`：控制生成随机性。值越大（>1.0）生成更随机/创造性，值越小（<1.0）生成更保守/确定性。0.7-0.9 适合大多数应用。

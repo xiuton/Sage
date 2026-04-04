@@ -141,9 +141,25 @@ impl<B: Backend> MultimodalFusion<B> {
         }
     }
     
-    pub fn forward(&self, text_embedding: Tensor<B, 3>, _vision_embedding: Tensor<B, 2>) -> Tensor<B, 3> {
-        // 简化实现：只使用文本嵌入
-        self.projection_text.forward(text_embedding)
+    pub fn forward(&self, text_embedding: Tensor<B, 3>, vision_embedding: Tensor<B, 2>) -> Tensor<B, 3> {
+        // 投影文本和视觉特征到相同维度
+        let text_proj: Tensor<B, 3> = self.projection_text.forward(text_embedding);
+        
+        // 将视觉特征扩展到序列维度
+        let [_batch_size, _vision_dim] = vision_embedding.dims();
+        let [_, seq_len, _output_dim] = text_proj.dims();
+        
+        // 扩展视觉特征到 [batch_size, seq_len, output_dim]
+        let vision_proj = self.projection_vision.forward(vision_embedding);
+        let vision_proj = vision_proj.unsqueeze::<3>(); // 添加一个维度，变为 [batch_size, vision_dim, 1]
+        let vision_proj = vision_proj.repeat(&[1, 1, seq_len]); // 重复到序列长度，变为 [batch_size, vision_dim, seq_len]
+        let vision_proj = vision_proj.permute([0, 2, 1]); // 调整维度顺序，变为 [batch_size, seq_len, vision_dim]
+        
+        // 融合特征
+        let fused = text_proj + vision_proj;
+        
+        // 通过输出层
+        self.output_layer.forward(fused)
     }
 }
 

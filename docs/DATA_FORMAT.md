@@ -6,11 +6,12 @@
 
 ## 0) 总览
 
-Sage 目前支持三类训练目标：
+Sage 目前支持四类训练目标：
 
 1. **LM（Language Modeling / 续写）**：从纯文本中学习预测下一个 token。
 2. **SFT（Supervised Fine-Tuning / 指令微调）**：从对话/问答数据中学习“用户提问 → 助手回答”。
 3. **DPO（Direct Preference Optimization / 偏好对齐）**：从偏好数据中学习区分好回复和坏回复。
+4. **多模态训练**：从图像和文本数据中学习多模态融合表示。
 
 ---
 
@@ -217,4 +218,69 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --sft-max-records
 
 ```bash
 cargo run --bin infer -- --model-dir ./tmp/sft_smoke --use-best --chat --prompt "你是谁？" -n 80 -t 0.7 -p 0.9 -k 20 -r 1.1 --punctuation-penalty 1.8 -s 1
+```
+
+---
+
+## 5) 多模态数据格式
+
+### 5.1 多模态训练命令
+
+```bash
+cargo run --bin train -- --multimodal --vision-out-dim 512 --fusion-strategy add --ultra-quick --sft-sample
+```
+
+### 5.2 多模态数据格式
+
+多模态训练需要包含图像路径的 SFT 数据，支持以下格式：
+
+#### A) 带图像路径的 prompt/response 格式
+
+```json
+{"prompt":"描述这张图片","response":"这是一张风景照片，展示了一座山和一片湖泊。","image_path":"./images/mountain.jpg"}
+```
+
+#### B) 带图像路径的 messages 格式
+
+```json
+{
+  "messages": [
+    {"role":"user","content":"描述这张图片","image_path":"./images/mountain.jpg"},
+    {"role":"assistant","content":"这是一张风景照片，展示了一座山和一片湖泊。"}
+  ]
+}
+```
+
+字段说明：
+- `image_path`：图像文件的相对或绝对路径
+- `prompt`/`content`：文本提示或问题
+- `response`：助手的文本回复
+
+### 5.3 支持的图像格式
+
+- JPEG (.jpg, .jpeg)
+- PNG (.png)
+- BMP (.bmp)
+
+### 5.4 图像预处理
+
+在多模态训练和推理中，图像会被自动预处理：
+1. 调整大小为 224x224 像素
+2. 转换为 RGB 格式
+3. 归一化像素值到 0-1 范围
+
+### 5.5 多模态数据质量建议
+
+- 确保图像路径正确且文件存在
+- 使用清晰、内容明确的图像
+- 文本描述应准确反映图像内容
+- 避免使用过大的图像文件（建议小于 10MB）
+- 确保图像内容与文本描述匹配
+
+### 5.6 多模态推理数据
+
+在推理时，使用 `--image-path` 参数指定图像文件：
+
+```bash
+cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
 ```

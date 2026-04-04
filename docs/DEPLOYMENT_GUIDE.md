@@ -142,6 +142,23 @@ cargo run --release --bin infer -- \
     --backend gpu
 ```
 
+### 3.4 多模态推理部署
+
+```bash
+# 基本多模态推理
+cargo run --bin infer -- \
+    --multimodal \
+    --image-path ./test_image.jpg \
+    --prompt "描述这张图片"
+
+# 多模态推理（使用GPU加速）
+cargo run --bin infer -- \
+    --multimodal \
+    --image-path ./test_image.jpg \
+    --prompt "描述这张图片" \
+    --backend gpu
+```
+
 ---
 
 ## 4. API服务部署

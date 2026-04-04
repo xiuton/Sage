@@ -5,13 +5,11 @@ use burn::config::Config;
 use burn::module::Module;
 use burn::prelude::Backend;
 use clap::Parser;
-use sage::{
-    generation::{GenerateOptions, generate},
-    tokenizer::Tokenizer,
-    TrainingConfig,
+use sage::{    generation::{GenerateOptions, generate},    tokenizer::Tokenizer,    TrainingConfig,
 };
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
+use image::imageops::resize;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -69,6 +67,14 @@ struct Args {
 
     #[arg(long, default_value = "cpu")]
     backend: String,
+    
+    /// 启用多模态推理
+    #[arg(long, default_value_t = false)]
+    multimodal: bool,
+    
+    /// 图像文件路径（用于多模态推理）
+    #[arg(long)]
+    image_path: Option<String>,
 }
 
 impl Args {
@@ -111,6 +117,34 @@ fn extract_assistant_reply(full: &str) -> String {
     full[start..start + end].trim().to_string()
 }
 
+/// 加载并预处理图像
+fn load_and_preprocess_image<B: Backend>(image_path: &str, device: &B::Device) -> burn::tensor::Tensor<B, 4> {
+    // 加载图像
+    let img = image::open(image_path).expect("无法加载图像");
+    
+    // 调整大小为 224x224
+    let img_resized = resize(&img, 224, 224, image::imageops::FilterType::Lanczos3);
+    
+    // 转换为张量
+    let mut data = Vec::with_capacity(3 * 224 * 224);
+    for y in 0..224 {
+        for x in 0..224 {
+            let pixel = img_resized.get_pixel(x, y);
+            data.push(pixel[0] as f32 / 255.0);
+            data.push(pixel[1] as f32 / 255.0);
+            data.push(pixel[2] as f32 / 255.0);
+        }
+    }
+    
+    // 创建张量 [batch_size, channels, height, width]
+    let tensor = burn::tensor::Tensor::<B, 4>::from_data(
+        burn::tensor::TensorData::new(data, [1, 3, 224, 224]),
+        device
+    );
+    
+    tensor
+}
+
 fn run_inference<B: Backend>(args: &Args) {
     let device = B::Device::default();
 
@@ -149,7 +183,7 @@ fn run_inference<B: Backend>(args: &Args) {
         std::process::exit(1);
     }
 
-    let training_config: TrainingConfig =
+    let training_config: TrainingConfig = 
         TrainingConfig::load(&config_path).expect("读取 config.json 失败");
     let model_config = training_config.model;
     let requested_context_len = if args.context_len == 0 {
@@ -171,6 +205,13 @@ fn run_inference<B: Backend>(args: &Args) {
         .load_file(&model_path, &burn::record::CompactRecorder::new(), &device)
         .unwrap();
     println!("模型加载完成。\n");
+
+    // 多模态推理准备
+    let image_tensor = if args.multimodal && args.image_path.is_some() {
+        Some(load_and_preprocess_image::<B>(args.image_path.as_ref().unwrap(), &device))
+    } else {
+        None
+    };
 
     if args.interactive {
         println!("--- 进入交互模式 --- (输入 'exit' 退出)");
@@ -204,8 +245,14 @@ fn run_inference<B: Backend>(args: &Args) {
                 println!("助手: ");
                 io::stdout().flush().unwrap();
                 
+                let model_type = if args.multimodal && image_tensor.is_some() {
+                    sage::generation::ModelType::Multimodal(&model, image_tensor.as_ref().unwrap())
+                } else {
+                    sage::generation::ModelType::Normal(&model)
+                };
+                
                 let mut state = sage::generation::GenerationState::new(
-                    sage::generation::ModelType::Normal(&model),
+                    model_type,
                     &tokenizer,
                     &input_text,
                     &gen_options,
@@ -245,7 +292,11 @@ fn run_inference<B: Backend>(args: &Args) {
                 }
             } else {
                 // 一次性输出
-                let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
+                let generated = if args.multimodal && image_tensor.is_some() {
+                    sage::generation::generate_multimodal(&model, &tokenizer, &input_text, image_tensor.as_ref().unwrap(), &gen_options, &device)
+                } else {
+                    generate(&model, &tokenizer, &input_text, &gen_options, &device)
+                };
                 if args.chat {
                     let reply = extract_assistant_reply(&generated);
                     println!("助手: {}\n", reply);
@@ -276,8 +327,14 @@ fn run_inference<B: Backend>(args: &Args) {
             }
             io::stdout().flush().unwrap();
             
+            let model_type = if args.multimodal && image_tensor.is_some() {
+                sage::generation::ModelType::Multimodal(&model, image_tensor.as_ref().unwrap())
+            } else {
+                sage::generation::ModelType::Normal(&model)
+            };
+            
             let mut state = sage::generation::GenerationState::new(
-                sage::generation::ModelType::Normal(&model),
+                model_type,
                 &tokenizer,
                 &input_text,
                 &gen_options,
@@ -309,7 +366,11 @@ fn run_inference<B: Backend>(args: &Args) {
             println!("\n");
         } else {
             // 一次性输出
-            let generated = generate(&model, &tokenizer, &input_text, &gen_options, &device);
+            let generated = if args.multimodal && image_tensor.is_some() {
+                sage::generation::generate_multimodal(&model, &tokenizer, &input_text, image_tensor.as_ref().unwrap(), &gen_options, &device)
+            } else {
+                generate(&model, &tokenizer, &input_text, &gen_options, &device)
+            };
             if args.chat {
                 println!("用户: \"{}\"", prompt);
                 println!("助手: \"{}\"\n", extract_assistant_reply(&generated));
