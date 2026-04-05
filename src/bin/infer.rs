@@ -9,7 +9,7 @@ use sage::{    generation::{GenerateOptions, generate},    tokenizer::Tokenizer,
 };
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
-use image::imageops::resize;
+use image;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -122,8 +122,11 @@ fn load_and_preprocess_image<B: Backend>(image_path: &str, device: &B::Device) -
     // 加载图像
     let img = image::open(image_path).expect("无法加载图像");
     
+    // 确保是 RGB 格式
+    let img_rgb = img.to_rgb8();
+    
     // 调整大小为 224x224
-    let img_resized = resize(&img, 224, 224, image::imageops::FilterType::Lanczos3);
+    let img_resized = image::imageops::resize(&img_rgb, 224, 224, image::imageops::FilterType::Lanczos3);
     
     // 转换为张量
     let mut data = Vec::with_capacity(3 * 224 * 224);

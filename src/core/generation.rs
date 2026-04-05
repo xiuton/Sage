@@ -94,6 +94,12 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             .collect();
 
         let seen_tokens: HashSet<usize> = tokens.iter().copied().collect();
+        
+        // 多模态模型禁用 KV 缓存，保证稳定性
+        let kv_cache = match model {
+            ModelType::Multimodal(_, _) => None,
+            _ => Some(KVCache::new()),
+        };
 
         Self {
             model,
@@ -107,7 +113,7 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             device,
             generated_tokens: 0,
             stopped: false,
-            kv_cache: Some(KVCache::new()),
+            kv_cache,
         }
     }
 
@@ -116,16 +122,22 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             return None;
         }
 
-        // 对于KV缓存优化：
-        // 1. 第一次调用时处理整个上下文窗口
-        // 2. 后续调用只处理新生成的token
-        let input_tokens = if self.generated_tokens == 0 {
-            // 第一次调用，处理整个上下文窗口
-            let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
-            &self.tokens[window_start..]
-        } else {
-            // 后续调用，只处理最后一个token
-            &self.tokens[self.tokens.len() - 1..]
+        // 对于多模态模型，每次都处理完整的输入序列，保证可靠性
+        let input_tokens = match &self.model {
+            ModelType::Multimodal(_, _) => {
+                // 多模态模型：每次都处理完整的序列
+                let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
+                &self.tokens[window_start..]
+            },
+            _ => {
+                // 普通模型：利用 KV 缓存优化
+                if self.generated_tokens == 0 {
+                    let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
+                    &self.tokens[window_start..]
+                } else {
+                    &self.tokens[self.tokens.len() - 1..]
+                }
+            }
         };
         
         let input = Tensor::<B, 1, Int>::from_ints(
@@ -151,22 +163,10 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             },
             ModelType::Quantized(model) => model.forward(input),
             ModelType::Multimodal(model, image) => {
-                // 多模态前向传播 - 只在第一次调用时处理图像
-                if self.generated_tokens == 0 {
-                    use crate::core::multimodal::MultimodalInput;
-                    let multimodal_input = MultimodalInput::new(input, (**image).clone());
-                    model.forward_multimodal(multimodal_input)
-                } else {
-                    // 后续调用只处理文本
-                    if let Some(kv_cache) = &mut self.kv_cache {
-                        let output = model.forward_with_cache(input, Some(kv_cache));
-                        // 更新缓存序列长度
-                        kv_cache.set_cached_seq_len(kv_cache.get_cached_seq_len() + input_tokens.len());
-                        output
-                    } else {
-                        model.forward(input)
-                    }
-                }
+                use crate::core::multimodal::MultimodalInput;
+                // 多模态模型：每次都调用 forward_multimodal，处理完整的序列
+                let multimodal_input = MultimodalInput::new(input, (**image).clone());
+                model.forward_multimodal(multimodal_input)
             },
         };
         let [_, seq_len, _] = output.dims();

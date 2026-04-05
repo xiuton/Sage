@@ -998,10 +998,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         let multimodal_config = MultimodalConfig {
             vision_encoder: VisionEncoderConfig {
                 in_channels: 3,
-                hidden_dim: 64,
                 out_dim: args.vision_out_dim,
-                num_layers: 4,
-                use_batch_norm: true,
             },
             fusion: MultimodalFusionConfig {
                 text_dim: model_config.d_model,

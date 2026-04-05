@@ -296,32 +296,51 @@ impl<B: Backend> Model<B> {
     
     /// 多模态前向传播方法
     pub fn forward_multimodal(&self, input: MultimodalInput<B>) -> Tensor<B, 3> {
+        self.forward_multimodal_with_cache(input, None)
+    }
+    
+    /// 支持 KV 缓存的多模态前向传播方法
+    pub fn forward_multimodal_with_cache(&self, input: MultimodalInput<B>, kv_cache: Option<&mut KVCache<B>>) -> Tensor<B, 3> {
         let [batch_size, seq_len] = input.text.dims();
         let device = input.text.device();
         
         // 检查是否启用多模态功能
         if self.vision_encoder.is_none() || self.multimodal_fusion.is_none() {
-            return self.forward(input.text);
+            return self.forward_with_cache(input.text, kv_cache);
         }
+        
+        let has_kv_cache = kv_cache.is_some();
         
         // Token embeddings
         let token_embeddings = self.embedding.forward(input.text);
         
         // Position embeddings
-        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+        let pos_ids = if let Some(cache) = kv_cache.as_ref() {
+            let start_pos = cache.get_cached_seq_len() as i64;
+            Tensor::<B, 1, Int>::arange(start_pos..(start_pos + seq_len as i64), &device)
+        } else {
+            Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device)
+        };
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
         let pos_embeddings = self.pos_embedding.forward(positions);
         
         let mut text_features = token_embeddings + pos_embeddings;
         
-        // 编码图像
-        let vision_embedding = self.vision_encoder.as_ref().unwrap().forward(input.image);
-        
-        // 融合文本和视觉特征
-        text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
+        // 只有在没有 KV 缓存的情况下才处理图像（第一次调用时）
+        if !has_kv_cache {
+            // 编码图像
+            let vision_embedding = self.vision_encoder.as_ref().unwrap().forward(input.image);
+            
+            // 融合文本和视觉特征
+            text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
+        }
         
         // Decoder-only 架构：生成自回归掩码
-        let autoregressive_mask = Some(generate_autoregressive_mask::<B>(batch_size, seq_len, &device));
+        let autoregressive_mask = if !has_kv_cache {
+            Some(generate_autoregressive_mask::<B>(batch_size, seq_len, &device))
+        } else {
+            None
+        };
         
         // 使用TransformerEncoder进行前向传播（应用自回归掩码实现 Decoder-only）
         let mut encoder_input = TransformerEncoderInput::new(text_features);
@@ -329,7 +348,7 @@ impl<B: Backend> Model<B> {
             encoder_input = encoder_input.mask_attn(mask);
         }
         
-        text_features = self.transformer_encoder.forward(encoder_input);
+        let text_features = self.transformer_encoder.forward(encoder_input);
         
         // Final head for language modeling
         self.output_head.forward(text_features)

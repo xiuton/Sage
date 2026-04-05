@@ -1,5 +1,5 @@
 use burn::{
-    nn::{conv::{Conv2d, Conv2dConfig}, BatchNorm, BatchNormConfig, Linear, LinearConfig, PaddingConfig2d, Relu},
+    nn::{Linear, LinearConfig},
     prelude::*,
     tensor::backend::Backend,
 };
@@ -10,24 +10,15 @@ use serde::{Serialize, Deserialize};
 pub struct VisionEncoderConfig {
     /// 输入通道数（RGB图像为3）
     pub in_channels: usize,
-    /// 隐藏维度
-    pub hidden_dim: usize,
     /// 输出维度（与文本嵌入维度匹配）
     pub out_dim: usize,
-    /// 卷积层数
-    pub num_layers: usize,
-    /// 是否使用批归一化
-    pub use_batch_norm: bool,
 }
 
 impl Default for VisionEncoderConfig {
     fn default() -> Self {
         Self {
             in_channels: 3,
-            hidden_dim: 64,
             out_dim: 512,
-            num_layers: 4,
-            use_batch_norm: true,
         }
     }
 }
@@ -35,65 +26,24 @@ impl Default for VisionEncoderConfig {
 /// 图像编码器
 #[derive(Module, Debug)]
 pub struct VisionEncoder<B: Backend> {
-    conv_layers: Vec<Conv2d<B>>,
-    batch_norms: Option<Vec<BatchNorm<B>>>,
-    relu: Relu,
     output_projection: Linear<B>,
 }
 
 impl<B: Backend> VisionEncoder<B> {
     pub fn new(config: VisionEncoderConfig, device: &B::Device) -> Self {
-        let mut conv_layers = Vec::with_capacity(config.num_layers);
-        let mut batch_norms = if config.use_batch_norm {
-            Some(Vec::with_capacity(config.num_layers))
-        } else {
-            None
-        };
-        
-        let mut in_channels = config.in_channels;
-        
-        for i in 0..config.num_layers {
-            let out_channels = config.hidden_dim * (1 << i);
-            let conv_config = Conv2dConfig::new([3, 3], [in_channels, out_channels])
-                .with_stride([1, 1])
-                .with_padding(PaddingConfig2d::Explicit(1, 1));
-            conv_layers.push(conv_config.init(device));
-            
-            if let Some(batch_norms) = batch_norms.as_mut() {
-                let bn_config = BatchNormConfig::new(out_channels);
-                batch_norms.push(bn_config.init(device));
-            }
-            
-            in_channels = out_channels;
-        }
-        
-        let linear_config = LinearConfig::new(in_channels * 8 * 8, config.out_dim);
+        // 最简单的实现：直接将图像展平后投影
+        let linear_config = LinearConfig::new(3 * 224 * 224, config.out_dim);
         let output_projection = linear_config.init(device);
         
         Self {
-            conv_layers,
-            batch_norms,
-            relu: Relu::new(),
             output_projection,
         }
     }
     
     pub fn forward(&self, image: Tensor<B, 4>) -> Tensor<B, 2> {
-        let mut x = image;
-        
-        for (i, conv) in self.conv_layers.iter().enumerate() {
-            x = conv.forward(x);
-            
-            if let Some(batch_norms) = &self.batch_norms {
-                x = batch_norms[i].forward(x);
-            }
-            
-            x = self.relu.forward(x);
-        }
-        
-        // 展平特征图
-        let [batch_size, channels, height, width] = x.dims();
-        let x = x.reshape([batch_size, channels * height * width]);
+        // 直接展平图像
+        let [batch_size, channels, height, width] = image.dims();
+        let x = image.reshape([batch_size, channels * height * width]);
         
         // 投影到输出维度
         self.output_projection.forward(x)
@@ -150,10 +100,9 @@ impl<B: Backend> MultimodalFusion<B> {
         let [_, seq_len, _output_dim] = text_proj.dims();
         
         // 扩展视觉特征到 [batch_size, seq_len, output_dim]
-        let vision_proj = self.projection_vision.forward(vision_embedding);
-        let vision_proj = vision_proj.unsqueeze::<3>(); // 添加一个维度，变为 [batch_size, vision_dim, 1]
-        let vision_proj = vision_proj.repeat(&[1, 1, seq_len]); // 重复到序列长度，变为 [batch_size, vision_dim, seq_len]
-        let vision_proj = vision_proj.permute([0, 2, 1]); // 调整维度顺序，变为 [batch_size, seq_len, vision_dim]
+        let vision_proj_2d: Tensor<B, 2> = self.projection_vision.forward(vision_embedding);
+        let vision_proj_3d: Tensor<B, 3> = vision_proj_2d.unsqueeze_dim(1);
+        let vision_proj: Tensor<B, 3> = vision_proj_3d.repeat(&[1, seq_len, 1]);
         
         // 融合特征
         let fused = text_proj + vision_proj;

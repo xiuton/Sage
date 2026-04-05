@@ -28,6 +28,8 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供
 - **[DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)**：实战部署指南
 - **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**：常见故障排查与解决方案
 - **[PROJECT_STATUS.md](docs/PROJECT_STATUS.md)**：项目开发状态、已完成功能、未来计划路线图
+- **[PROJECT_CHECKLIST.md](docs/PROJECT_CHECKLIST.md)**：功能检查清单与优化计划、模块完整性验证
+- **[QUICK_TEST_GUIDE.md](docs/QUICK_TEST_GUIDE.md)**：全流程测试指南（53项测试覆盖所有功能）
 - **[ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)**：功能合理性、Rust/目录规范、小模型场景取舍（审阅向）
 
 ### 文档职责说明
@@ -41,6 +43,8 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供
 | DEPLOYMENT_GUIDE.md | 实战部署指南 | 部署运维人员 |
 | TROUBLESHOOTING.md | 问题排查 | 所有用户 |
 | PROJECT_STATUS.md | 项目进展和路线图 | 关注项目发展的用户 |
+| PROJECT_CHECKLIST.md | 功能检查清单、优化计划、模块完整性验证 | 开发者 / 维护者 |
+| QUICK_TEST_GUIDE.md | 全流程测试指南（53项测试覆盖所有功能） | 测试人员 / 开发者 |
 | ARCHITECTURE_REVIEW.md | 架构与规范审阅、功能取舍 | 维护者 / 进阶贡献者 |
 
 ## 快速开始
