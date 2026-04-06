@@ -1,19 +1,62 @@
 use burn::prelude::*;
 
-/// KV Cache 用于加速自回归生成
-/// 
-/// 注意：当前的 TransformerEncoder 架构不直接支持完整的 KV Cache
-/// 但该结构体已为未来的 Decoder-only 架构做好准备
-/// 
-/// 当前使用的优化：
-/// - 位置编码优化：根据缓存长度计算新 token 的位置
+/// 单个 Transformer 层的 KV Cache
+pub struct LayerKVCache<B: Backend> {
+    key_cache: Option<Tensor<B, 4>>,
+    value_cache: Option<Tensor<B, 4>>,
+}
+
+impl<B: Backend> Default for LayerKVCache<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<B: Backend> LayerKVCache<B> {
+    pub fn new() -> Self {
+        Self {
+            key_cache: None,
+            value_cache: None,
+        }
+    }
+
+    pub fn update(&mut self, new_key: Tensor<B, 4>, new_value: Tensor<B, 4>) -> (Tensor<B, 4>, Tensor<B, 4>) {
+        let (key, value) = match (&self.key_cache, &self.value_cache) {
+            (Some(key), Some(value)) => {
+                let key = Tensor::cat(vec![key.clone(), new_key], 2);
+                let value = Tensor::cat(vec![value.clone(), new_value], 2);
+                (key, value)
+            }
+            _ => (new_key, new_value),
+        };
+        
+        self.key_cache = Some(key.clone());
+        self.value_cache = Some(value.clone());
+        
+        (key, value)
+    }
+
+    pub fn get(&self) -> Option<(Tensor<B, 4>, Tensor<B, 4>)> {
+        match (&self.key_cache, &self.value_cache) {
+            (Some(key), Some(value)) => Some((key.clone(), value.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.key_cache = None;
+        self.value_cache = None;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.key_cache.is_none()
+    }
+}
+
+/// 完整的 KV Cache，用于存储所有层的 key 和 value
 pub struct KVCache<B: Backend> {
-    /// 按层存储的 key 缓存
-    pub key_cache: Vec<Tensor<B, 4>>,
-    /// 按层存储的 value 缓存
-    pub value_cache: Vec<Tensor<B, 4>>,
-    /// 已缓存的序列长度
-    pub cached_seq_len: usize,
+    layer_caches: Vec<LayerKVCache<B>>,
+    cached_seq_len: usize,
 }
 
 impl<B: Backend> Default for KVCache<B> {
@@ -23,64 +66,43 @@ impl<B: Backend> Default for KVCache<B> {
 }
 
 impl<B: Backend> KVCache<B> {
-    /// 创建新的 KV Cache
     pub fn new() -> Self {
         Self {
-            key_cache: Vec::new(),
-            value_cache: Vec::new(),
+            layer_caches: Vec::new(),
             cached_seq_len: 0,
         }
     }
 
-    /// 更新 KV Cache（未来用于 Decoder 层）
-    /// 
-    /// # Arguments
-    /// * `key` - 形状为 [batch_size, num_heads, seq_len, head_dim]
-    /// * `value` - 形状为 [batch_size, num_heads, seq_len, head_dim]
-    pub fn update(&mut self, key: Tensor<B, 4>, value: Tensor<B, 4>) {
-        let [_, _, seq_len, _] = key.dims();
-        self.key_cache.push(key);
-        self.value_cache.push(value);
-        self.cached_seq_len += seq_len;
+    pub fn with_capacity(n_layers: usize) -> Self {
+        Self {
+            layer_caches: (0..n_layers).map(|_| LayerKVCache::new()).collect(),
+            cached_seq_len: 0,
+        }
     }
 
-    /// 清空 KV Cache
-    pub fn clear(&mut self) {
-        self.key_cache.clear();
-        self.value_cache.clear();
-        self.cached_seq_len = 0;
-    }
-
-    /// 检查 KV Cache 是否为空
-    pub fn is_empty(&self) -> bool {
-        self.key_cache.is_empty() && self.cached_seq_len == 0
-    }
-
-    /// 获取已缓存的序列长度
     pub fn get_cached_seq_len(&self) -> usize {
         self.cached_seq_len
     }
 
-    /// 拼接所有层的 key 缓存（未来用于完整的 KV Cache）
-    pub fn get_combined_keys(&self) -> Option<Tensor<B, 4>> {
-        if self.key_cache.is_empty() {
-            return None;
-        }
-        
-        Some(Tensor::cat(self.key_cache.clone(), 2))
-    }
-
-    /// 拼接所有层的 value 缓存（未来用于完整的 KV Cache）
-    pub fn get_combined_values(&self) -> Option<Tensor<B, 4>> {
-        if self.value_cache.is_empty() {
-            return None;
-        }
-        
-        Some(Tensor::cat(self.value_cache.clone(), 2))
-    }
-
-    /// 设置缓存的序列长度（用于位置编码优化）
     pub fn set_cached_seq_len(&mut self, len: usize) {
         self.cached_seq_len = len;
+    }
+
+    pub fn get_layer_cache(&mut self, layer_idx: usize) -> &mut LayerKVCache<B> {
+        while self.layer_caches.len() <= layer_idx {
+            self.layer_caches.push(LayerKVCache::new());
+        }
+        &mut self.layer_caches[layer_idx]
+    }
+
+    pub fn clear(&mut self) {
+        for cache in &mut self.layer_caches {
+            cache.clear();
+        }
+        self.cached_seq_len = 0;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.layer_caches.is_empty() || self.layer_caches.iter().all(|c| c.is_empty())
     }
 }

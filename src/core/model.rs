@@ -1,11 +1,12 @@
 use burn::{
     nn::{
-        Embedding, EmbeddingConfig, Linear, LinearConfig,
+        Embedding, EmbeddingConfig, Linear, LinearConfig, Dropout, DropoutConfig,
+        attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
         loss::CrossEntropyLossConfig,
-        transformer::{TransformerEncoder, TransformerEncoderConfig, TransformerEncoderInput},
+        RmsNorm, RmsNormConfig, SwiGlu, SwiGluConfig,
     },
     prelude::*,
-    tensor::{backend::AutodiffBackend, TensorData},
+    tensor::{backend::AutodiffBackend, TensorData, Bool},
     train::{ClassificationOutput, TrainOutput, TrainStep},
 };
 
@@ -21,49 +22,152 @@ pub use multimodal::{
     FusionStrategy,
 };
 
-// TODO: 待实现 RMSNorm 层（需要研究 Burn 0.20 的正确 Param API）
-// #[derive(Module, Debug)]
-// pub struct RMSNorm<B: Backend> {
-//     gamma: Param<Tensor<B, 1>>,
-//     epsilon: f64,
-// }
-//
-// impl<B: Backend> RMSNorm<B> {
-//     pub fn new(d_model: usize, device: &B::Device) -> Self {
-//         Self::with_epsilon(d_model, 1e-6, device)
-//     }
-//
-//     pub fn with_epsilon(d_model: usize, epsilon: f64, device: &B::Device) -> Self {
-//         let gamma = Param::from_tensor(Tensor::ones([d_model], device));
-//         Self { gamma, epsilon }
-//     }
-//
-//     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
-//         let [batch_size, seq_len, d_model] = x.dims();
-//
-//         let x_squared = x.clone().powf_scalar(2.0);
-//         let mean = x_squared.mean_dim(2);
-//         let rms = mean.add_scalar(self.epsilon).sqrt();
-//         let normalized = x / rms.unsqueeze::<2>();
-//         let gamma_expanded = self.gamma.val().unsqueeze::<2>().unsqueeze::<1>();
-//
-//         normalized * gamma_expanded
-//     }
-// }
+#[derive(Config, Debug)]
+pub struct CustomTransformerEncoderConfig {
+    pub d_model: usize,
+    pub d_ff: usize,
+    pub n_heads: usize,
+    pub n_layers: usize,
+    #[config(default = 0.1)]
+    pub dropout: f64,
+    #[config(default = true)]
+    pub norm_first: bool,
+    #[config(default = 1e-6)]
+    pub norm_epsilon: f64,
+    #[config(default = false)]
+    pub quiet_softmax: bool,
+}
 
-// TODO: 待实现 SwiGLU FFN（需要研究 Burn 0.20 的正确 sigmoid API）
-// pub fn swiglu<B: Backend>(x: Tensor<B, 3>, w1: &Linear<B>, w2: &Linear<B>, w3: &Linear<B>) -> Tensor<B, 3> {
-//     let x1 = w1.forward(x.clone());
-//     let x2 = w2.forward(x);
-//     let x_gated = x1 * x2.sigmoid();
-//     w3.forward(x_gated)
-// }
+#[derive(Module, Debug)]
+pub struct CustomTransformerEncoderLayer<B: Backend> {
+    mha: MultiHeadAttention<B>,
+    pwff: SwiGlu<B>,
+    norm_1: RmsNorm<B>,
+    norm_2: RmsNorm<B>,
+    dropout: Dropout,
+    norm_first: bool,
+}
+
+impl<B: Backend> CustomTransformerEncoderLayer<B> {
+    pub fn new(config: &CustomTransformerEncoderConfig, device: &B::Device) -> Self {
+        let mha = MultiHeadAttentionConfig::new(config.d_model, config.n_heads)
+            .with_dropout(config.dropout)
+            .with_quiet_softmax(config.quiet_softmax)
+            .init(device);
+        
+        let norm_1 = RmsNormConfig::new(config.d_model)
+            .with_epsilon(config.norm_epsilon)
+            .init(device);
+        
+        let norm_2 = RmsNormConfig::new(config.d_model)
+            .with_epsilon(config.norm_epsilon)
+            .init(device);
+        
+        let dropout = DropoutConfig::new(config.dropout).init();
+        
+        let pwff = SwiGluConfig::new(config.d_model, config.d_ff)
+            .init(device);
+
+        Self {
+            mha,
+            norm_1,
+            norm_2,
+            pwff,
+            dropout,
+            norm_first: config.norm_first,
+        }
+    }
+
+    pub fn forward(
+        &self,
+        input: Tensor<B, 3>,
+        mask_pad: Option<Tensor<B, 2, Bool>>,
+        mask_attn: Option<Tensor<B, 3, Bool>>,
+    ) -> Tensor<B, 3> {
+        let x = input;
+        let mut residual_path = x.clone();
+
+        if self.norm_first {
+            residual_path = self.norm_2.forward(residual_path);
+        }
+
+        let mut input_mhs = MhaInput::self_attn(residual_path);
+        if let Some(mask_pad) = mask_pad {
+            input_mhs = input_mhs.mask_pad(mask_pad);
+        }
+        if let Some(mask_attn) = mask_attn {
+            input_mhs = input_mhs.mask_attn(mask_attn);
+        }
+        let residual_path = self.mha.forward(input_mhs).context;
+
+        let residual_path = self.dropout.forward(residual_path);
+        let mut x = x + residual_path;
+
+        let residual_path = if self.norm_first {
+            self.norm_1.forward(x.clone())
+        } else {
+            x = self.norm_1.forward(x);
+            x.clone()
+        };
+
+        let residual_path = self.pwff.forward(residual_path);
+        let residual_path = self.dropout.forward(residual_path);
+        let mut x = x + residual_path;
+
+        if !self.norm_first {
+            x = self.norm_2.forward(x);
+        }
+
+        x
+    }
+}
+
+#[derive(Module, Debug)]
+pub struct CustomTransformerEncoder<B: Backend> {
+    layers: Vec<CustomTransformerEncoderLayer<B>>,
+    d_model: usize,
+    d_ff: usize,
+    n_heads: usize,
+    n_layers: usize,
+    dropout: f64,
+    norm_first: bool,
+    quiet_softmax: bool,
+}
+
+impl<B: Backend> CustomTransformerEncoder<B> {
+    pub fn new(config: &CustomTransformerEncoderConfig, device: &B::Device) -> Self {
+        let layers = (0..config.n_layers)
+            .map(|_| CustomTransformerEncoderLayer::new(config, device))
+            .collect();
+
+        Self {
+            layers,
+            d_model: config.d_model,
+            d_ff: config.d_ff,
+            n_heads: config.n_heads,
+            n_layers: config.n_layers,
+            dropout: config.dropout,
+            norm_first: config.norm_first,
+            quiet_softmax: config.quiet_softmax,
+        }
+    }
+
+    pub fn forward(&self, x: Tensor<B, 3>, mask_pad: Option<Tensor<B, 2, Bool>>, mask_attn: Option<Tensor<B, 3, Bool>>) -> Tensor<B, 3> {
+        let mut x = x;
+
+        for layer in self.layers.iter() {
+            x = layer.forward(x, mask_pad.clone(), mask_attn.clone());
+        }
+
+        x
+    }
+}
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
     embedding: Embedding<B>,
     pos_embedding: Embedding<B>,
-    transformer_encoder: TransformerEncoder<B>,
+    transformer_encoder: CustomTransformerEncoder<B>,
     output_head: Linear<B>,
     vocab_size: usize,
     max_seq_len: usize,
@@ -102,10 +206,18 @@ impl ModelConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         let embedding = EmbeddingConfig::new(self.vocab_size, self.d_model).init(device);
         let pos_embedding = EmbeddingConfig::new(self.max_seq_len, self.d_model).init(device);
-        let transformer_encoder =
-            TransformerEncoderConfig::new(self.d_model, self.d_ff, self.n_heads, self.n_layers)
-                .with_dropout(self.dropout)
-                .init(device);
+        
+        let encoder_config = CustomTransformerEncoderConfig {
+            d_model: self.d_model,
+            d_ff: self.d_ff,
+            n_heads: self.n_heads,
+            n_layers: self.n_layers,
+            dropout: self.dropout,
+            norm_first: true,
+            norm_epsilon: 1e-6,
+            quiet_softmax: false,
+        };
+        let transformer_encoder = CustomTransformerEncoder::new(&encoder_config, device);
 
         let output_head = LinearConfig::new(self.d_model, self.vocab_size).init(device);
 
@@ -282,13 +394,8 @@ impl<B: Backend> Model<B> {
             None
         };
 
-        // 使用TransformerEncoder进行前向传播（应用自回归掩码实现 Decoder-only）
-        let mut encoder_input = TransformerEncoderInput::new(x);
-        if let Some(mask) = autoregressive_mask {
-            encoder_input = encoder_input.mask_attn(mask);
-        }
-        
-        x = self.transformer_encoder.forward(encoder_input);
+        // 使用自定义 TransformerEncoder 进行前向传播（应用自回归掩码实现 Decoder-only）
+        x = self.transformer_encoder.forward(x, None, autoregressive_mask);
 
         // Final head for language modeling
         self.output_head.forward(x)
@@ -342,13 +449,8 @@ impl<B: Backend> Model<B> {
             None
         };
         
-        // 使用TransformerEncoder进行前向传播（应用自回归掩码实现 Decoder-only）
-        let mut encoder_input = TransformerEncoderInput::new(text_features);
-        if let Some(mask) = autoregressive_mask {
-            encoder_input = encoder_input.mask_attn(mask);
-        }
-        
-        let text_features = self.transformer_encoder.forward(encoder_input);
+        // 使用自定义 TransformerEncoder 进行前向传播（应用自回归掩码实现 Decoder-only）
+        let text_features = self.transformer_encoder.forward(text_features, None, autoregressive_mask);
         
         // Final head for language modeling
         self.output_head.forward(text_features)
@@ -363,7 +465,7 @@ impl<B: Backend> Model<B> {
         &self.pos_embedding
     }
     
-    pub fn transformer_encoder(&self) -> &TransformerEncoder<B> {
+    pub fn transformer_encoder(&self) -> &CustomTransformerEncoder<B> {
         &self.transformer_encoder
     }
     
