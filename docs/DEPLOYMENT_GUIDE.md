@@ -431,14 +431,52 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 | 端点 | 方法 | 描述 | 认证 |
 |------|------|------|------|
-| `/v1/chat/completions` | POST | Chat Completion接口（OpenAI标准） | 需要 |
-| `/v1/batch-chat/completions` | POST | 批量Chat Completion接口 | 需要 |
-| `/v1/async-chat/completions` | POST | 异步Chat Completion接口 | 需要 |
-| `/api/task/:task_id` | GET | 查询任务状态 | 需要 |
+| `/api/generate` | POST | 简单文本生成接口 | 可选 |
 | `/api/health` | GET | 健康检查接口 | 不需要 |
-| `/api/model-info` | GET | 获取模型信息 | 需要 |
+| `/api/model-info` | GET | 获取模型信息 | 可选 |
+| `/api/performance` | GET | 获取性能监控信息 | 可选 |
+| `/v1/chat/completions` | POST | Chat Completion接口（OpenAI标准） | 可选 |
+| `/v1/batch-chat/completions` | POST | 批量Chat Completion接口 | 可选 |
+| `/v1/async-chat/completions` | POST | 异步Chat Completion接口 | 可选 |
+| `/api/task/:task_id` | GET | 查询任务状态 | 可选 |
+| `/api/models` | GET | 列出所有已加载模型 | 可选 |
+| `/api/models` | POST | 加载新模型 | 可选 |
+| `/api/models/:model_id` | DELETE | 卸载模型 | 可选 |
+| `/api/models/:model_id/activate` | POST | 切换活动模型 | 可选 |
+| `/api/models/:model_id/reload` | POST | 热更新模型 | 可选 |
+| `/api/models/download` | POST | 下载模型（需web feature） | 可选 |
 
-### 9.2 Chat Completion接口（OpenAI标准）
+### 9.2 /api/generate 简单文本生成接口
+
+**请求示例：**
+```bash
+curl -X POST http://localhost:8000/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "你好，请介绍一下你自己", "max_length": 100}'
+```
+
+**请求参数：**
+| 参数 | 类型 | 必填 | 说明 | 默认值 |
+|------|------|------|------|--------|
+| `prompt` | string | 是 | 用户输入文本 | - |
+| `max_length` | integer | 否 | 最大生成长度 | 50 |
+| `temperature` | float | 否 | 采样温度 | 0.8 |
+| `top_p` | float | 否 | top-p采样参数 | 0.9 |
+| `top_k` | integer | 否 | top-k采样参数 | 10 |
+
+**响应格式：**
+```json
+{
+  "prompt": "你好，请介绍一下你自己",
+  "text": "我叫Sage，是一个AI助手..."
+}
+```
+
+**响应字段说明：**
+- `prompt`：用户输入的原始问题
+- `text`：模型生成的助手回复
+
+### 9.3 Chat Completion接口（OpenAI标准）
 
 **请求示例（普通模式）：**
 ```bash
@@ -510,7 +548,7 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242
 }
 ```
 
-### 9.3 批量Chat Completion接口
+### 9.4 批量Chat Completion接口
 
 **请求示例：**
 ```bash
@@ -585,7 +623,7 @@ curl -X POST http://localhost:8000/v1/batch-chat/completions \
 }
 ```
 
-### 9.4 异步Chat Completion接口
+### 9.5 异步Chat Completion接口
 
 **请求示例：**
 ```bash
@@ -609,7 +647,7 @@ curl -X POST http://localhost:8000/v1/async-chat/completions \
 }
 ```
 
-### 9.5 任务状态查询接口
+### 9.6 任务状态查询接口
 
 **请求示例：**
 ```bash
@@ -650,7 +688,7 @@ curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 
 }
 ```
 
-### 9.6 API参数说明（OpenAI标准）
+### 9.7 API参数说明（OpenAI标准）
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
@@ -666,12 +704,12 @@ curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 
 | `frequency_penalty` | 频率惩罚 | 无 |
 | `seed` | 随机种子 | 无 |
 
-### 9.7 批量推理限制
+### 9.8 批量推理限制
 
 - 最大批量大小：100个请求
 - 批量请求不能为空
 
-### 9.8 异步任务状态
+### 9.9 异步任务状态
 
 - `Pending`：任务等待处理
 - `Running`：任务正在处理中

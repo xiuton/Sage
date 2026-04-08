@@ -97,6 +97,10 @@ cargo run --release --bin train -- --corpus corpus_cn.txt --max-seq-len 256 --nu
 ```bash
 cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
 ```
+GPU 训练
+```bash
+cargo run --release --bin train -- --sft-jsonl ./data/sft_small.jsonl --artifact-dir ./tmp/sft_small --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer --backend gpu
+```
 
 如果你没有现成的数据，可以先用 `gen_sft` 生成一份：
 
@@ -557,18 +561,24 @@ cargo run --release --features=api --bin api_server -- --port 8000 --model-dir .
 
 ### 5.2 API 接口列表
 
-#### 模型管理接口
-- `GET /api/models` - 获取模型列表
-- `POST /api/models` - 加载模型
-- `DELETE /api/models/:model_id` - 卸载模型
-- `POST /api/models/:model_id/activate` - 激活模型
-- `POST /api/models/:model_id/reload` - 重新加载模型
-- `POST /api/models/download` - 下载模型
-
 #### 推理接口
-- `POST /api/generate` - 生成文本
-- `GET /api/model-info` - 获取当前模型信息
+- `POST /api/generate` - 简单文本生成
+- `POST /v1/chat/completions` - Chat Completion（OpenAI标准）
+- `POST /v1/batch-chat/completions` - 批量Chat Completion
+- `POST /v1/async-chat/completions` - 异步Chat Completion
+- `GET /api/task/:task_id` - 查询任务状态
+
+#### 模型管理接口
+- `GET /api/models` - 列出所有已加载模型
+- `POST /api/models` - 加载新模型
+- `DELETE /api/models/:model_id` - 卸载模型
+- `POST /api/models/:model_id/activate` - 切换活动模型
+- `POST /api/models/:model_id/reload` - 热更新模型
+
+#### 工具接口
 - `GET /api/health` - 健康检查
+- `GET /api/model-info` - 获取模型信息
+- `GET /api/performance` - 获取性能监控信息
 
 ### 5.3 使用示例
 
