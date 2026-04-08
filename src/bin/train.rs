@@ -861,6 +861,9 @@ fn main() {
 
         // 设置日志级别
         std::env::set_var("RUST_LOG", "burn_train=info,wgpu_core=off,burn_core=off");
+
+        // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
     }
 
     let mut args = Args::parse();

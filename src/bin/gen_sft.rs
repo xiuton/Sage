@@ -9,6 +9,11 @@ use std::{
 };
 
 fn main() {
+    // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+    unsafe {
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
+    }
+
     let args: Vec<String> = env::args().collect();
 
     let out = arg_value(&args, "--out")

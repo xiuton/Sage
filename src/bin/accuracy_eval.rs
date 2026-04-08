@@ -8,6 +8,11 @@ use sage::{
 use std::collections::HashMap;
 
 fn main() {
+    // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+    unsafe {
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
+    }
+
     let config_path = "config.toml";
     let model_path = "sage_model.burn";
     

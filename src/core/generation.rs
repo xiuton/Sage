@@ -1,4 +1,3 @@
-use crate::core::kv_cache::KVCache;
 use crate::core::model::Model;
 use crate::quantization::quantization::QuantizedModel;
 use crate::core::tokenizer::Tokenizer;
@@ -6,6 +5,8 @@ use burn::prelude::*;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{SeedableRng, rngs::StdRng};
 use std::collections::HashSet;
+use std::time::Instant;
+use log;
 
 #[derive(Clone, Debug)]
 pub struct GenerateOptions {
@@ -60,7 +61,6 @@ pub struct GenerationState<'a, B: Backend> {
     device: &'a B::Device,
     generated_tokens: usize,
     stopped: bool,
-    kv_cache: Option<KVCache<B>>,
 }
 
 impl<'a, B: Backend> GenerationState<'a, B> {
@@ -71,7 +71,9 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         options: &'a GenerateOptions,
         device: &'a B::Device,
     ) -> Self {
+        log::info!("[Generation] Creating GenerationState for prompt: {}", prompt);
         let mut tokens = tokenizer.encode(prompt);
+        log::info!("[Generation] Encoded {} tokens", tokens.len());
         
         if tokens.is_empty() {
             tokens.push(tokenizer.bos_id);
@@ -94,12 +96,6 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             .collect();
 
         let seen_tokens: HashSet<usize> = tokens.iter().copied().collect();
-        
-        // 多模态模型禁用 KV 缓存，保证稳定性
-        let kv_cache = match model {
-            ModelType::Multimodal(_, _) => None,
-            _ => Some(KVCache::new()),
-        };
 
         Self {
             model,
@@ -113,7 +109,6 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             device,
             generated_tokens: 0,
             stopped: false,
-            kv_cache,
         }
     }
 
@@ -122,24 +117,13 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             return None;
         }
 
-        // 对于多模态模型，每次都处理完整的输入序列，保证可靠性
-        let input_tokens = match &self.model {
-            ModelType::Multimodal(_, _) => {
-                // 多模态模型：每次都处理完整的序列
-                let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
-                &self.tokens[window_start..]
-            },
-            _ => {
-                // 普通模型：利用 KV 缓存优化
-                if self.generated_tokens == 0 {
-                    let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
-                    &self.tokens[window_start..]
-                } else {
-                    &self.tokens[self.tokens.len() - 1..]
-                }
-            }
-        };
+        let step_start = Instant::now();
         
+        // 暂时禁用 KV 缓存，每次都处理完整的输入序列
+        let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
+        let input_tokens = &self.tokens[window_start..];
+        
+        let input_prep_start = Instant::now();
         let input = Tensor::<B, 1, Int>::from_ints(
             input_tokens
                 .iter()
@@ -149,27 +133,22 @@ impl<'a, B: Backend> GenerationState<'a, B> {
             self.device,
         )
         .unsqueeze::<2>();
-
+        let input_prep_duration = input_prep_start.elapsed();
+        
+        let forward_start = Instant::now();
         let output = match &self.model {
-            ModelType::Normal(model) => {
-                if let Some(kv_cache) = &mut self.kv_cache {
-                    let output = model.forward_with_cache(input, Some(kv_cache));
-                    // 更新缓存序列长度
-                    kv_cache.set_cached_seq_len(kv_cache.get_cached_seq_len() + input_tokens.len());
-                    output
-                } else {
-                    model.forward(input)
-                }
-            },
+            ModelType::Normal(model) => model.forward(input),
             ModelType::Quantized(model) => model.forward(input),
             ModelType::Multimodal(model, image) => {
                 use crate::core::multimodal::MultimodalInput;
-                // 多模态模型：每次都调用 forward_multimodal，处理完整的序列
                 let multimodal_input = MultimodalInput::new(input, (**image).clone());
                 model.forward_multimodal(multimodal_input)
             },
         };
+        let forward_duration = forward_start.elapsed();
         let [_, seq_len, _] = output.dims();
+        
+        let token_process_start = Instant::now();
 
         let last_token_logits = 
             output.slice([0..1, (seq_len - 1)..seq_len, 0..self.tokenizer.vocab_size]);
@@ -251,6 +230,18 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         };
 
         let token_char = self.tokenizer.char_for_id(sampled_idx)?;
+        let token_process_duration = token_process_start.elapsed();
+        let step_duration = step_start.elapsed();
+        
+        // 打印性能日志
+        log::info!("[Generation] Token #{}, input_prep={:?}, forward={:?}, token_process={:?}, total={:?}", 
+            self.generated_tokens + 1,
+            input_prep_duration,
+            forward_duration,
+            token_process_duration,
+            step_duration
+        );
+        
         self.tokens.push(sampled_idx);
         self.seen_tokens.insert(sampled_idx);
         self.generated_tokens += 1;

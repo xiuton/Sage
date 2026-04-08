@@ -390,6 +390,11 @@ fn run_inference<B: Backend>(args: &Args) {
 fn main() {
     let args = Args::parse();
 
+    // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+    unsafe {
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
+    }
+
     match args.backend.as_str() {
         "cpu" => run_inference::<NdArray>(&args),
         "gpu" => run_inference::<Wgpu>(&args),

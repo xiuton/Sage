@@ -402,11 +402,17 @@ cargo run --bin infer -- --model-dir ./tmp/full_flow_model --use-best --chat --p
 # 自定义采样参数的流式输出
 cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "请介绍一下 Rust 语言" --stream --stream-speed 20 --backend gpu -n 100 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.5
 
-# 多模态推理
-cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
+# 多模态推理 模型权重文件默认：./tmp/sage_model_formal/model.mpk 可选路径为 best_model.mpk 或 model.mpk（如果使用 --use-best 但 first 失败会回退）。
+cargo run --bin infer -- --multimodal --image-path ./data/images/image.png --prompt "描述这张图片"
 
 # 多模态推理（使用 GPU 加速）
-cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片" --backend gpu
+cargo run --bin infer -- --multimodal --image-path ./data/images/image.png --prompt "描述这张图片" --backend gpu
+
+# 多模态推理 指定模型
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --multimodal --image-path ./data/images/image.png --prompt "描述这张图片"
+
+# 多模态推理（使用 GPU 加速） 指定模型
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --multimodal --image-path ./data/images/image.png --prompt "描述这张图片" --backend gpu
 ```
 
 ### 2.2 参数说明（来自 `infer --help`）
@@ -481,8 +487,10 @@ cargo run --release --bin gen_sft -- --out sft_demo_20000.jsonl --count 20000 --
 运行：
 
 ```bash
-cargo run --release --bin gen_web_sft -- [OPTIONS]
+cargo run --release --features=web --bin gen_web_sft -- [OPTIONS]
 ```
+
+⚠️ **重要提示**：gen_web_sft 需要启用 `web` feature，否则会报错："target `gen_web_sft` in package `sage` requires the features: `web`"
 
 这是一个用于生成真实问答语料的工具，支持从本地数据和网络API获取数据，生成格式为 `{"messages":[...], "id": ..., "domain": "..."}`，与 `train --sft-jsonl` 兼容。
 
@@ -510,16 +518,16 @@ cargo run --release --bin gen_web_sft -- [OPTIONS]
 
 ```bash
 # 生成真实问答语料（本地数据）
-cargo run --release --bin gen_web_sft -- --out real_qa.jsonl --count 500 --seed 42
+cargo run --release --features=web --bin gen_web_sft -- --out real_qa.jsonl --count 500 --seed 42
 
 # 生成真实问答语料（本地+网络数据）
-cargo run --release --bin gen_web_sft -- --out real_qa_web.jsonl --count 500 --web --seed 42
+cargo run --release --features=web --bin gen_web_sft -- --out real_qa_web.jsonl --count 500 --web --seed 42
 
 # 仅使用网络数据
-cargo run --release --bin gen_web_sft -- --out web_only.jsonl --count 500 --web --web-only --seed 42
+cargo run --release --features=web --bin gen_web_sft -- --out web_only.jsonl --count 500 --web --web-only --seed 42
 
 # 完整参数示例
-cargo run --release --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 --web --seed 123
+cargo run --release --features=web --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 --web --seed 123
 ```
 
 ---
@@ -529,10 +537,16 @@ cargo run --release --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 -
 运行：
 
 ```bash
-cargo run --release --bin api_server -- [OPTIONS]
+cargo run --release --features=api --bin api_server -- [OPTIONS]
 ```
 
+⚠️ **重要提示**：api_server 需要启用 `api` feature，否则会报错："target `api_server` in package `sage` requires the features: `api`"
+
 API 服务器提供 HTTP REST API 接口，支持模型管理和推理服务。
+
+```bash
+cargo run --release --features=api --bin api_server -- --port 8000 --model-dir ./tmp/test --log-level info
+```
 
 ### 5.1 参数说明
 
@@ -559,14 +573,41 @@ API 服务器提供 HTTP REST API 接口，支持模型管理和推理服务。
 ### 5.3 使用示例
 
 ```bash
-# 启动 API 服务器
-cargo run --release --bin api_server -- --port 8080 --model-dir ./my_models
+# 启动 API 服务器（必须添加 --features=api）
+cargo run --release --features=api --bin api_server -- --port 8080 --model-dir ./my_models
 
 # 使用 curl 测试 API
 curl http://localhost:8080/api/health
 curl -X POST http://localhost:8080/api/models -H "Content-Type: application/json" -d '{"model_id":"my_model","model_dir":"./models/my_model"}'
-curl -X POST http://localhost:8080/api/generate -H "Content-Type: application/json" -d '{"prompt":"你好，请介绍一下你自己","max_length":100}'
 ```
+
+### 5.4 /api/generate 接口详解
+
+**请求格式**：
+```bash
+curl -X POST http://localhost:8080/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"你好，请介绍一下你自己","max_length":100}'
+```
+
+**请求参数**：
+- `prompt` (string, 必填)：用户输入文本
+- `max_length` (integer, 可选)：最大生成长度（默认 50）
+- `temperature` (float, 可选)：温度参数（默认 0.8）
+- `top_p` (float, 可选)：top-p 采样参数（默认 0.9）
+- `top_k` (integer, 可选)：top-k 采样参数（默认 10）
+
+**响应格式**：
+```json
+{
+  "prompt": "你好，请介绍一下你自己",
+  "text": "我叫Sage，是一个AI助手..."
+}
+```
+
+**响应字段说明**：
+- `prompt`：用户输入的原始问题
+- `text`：模型生成的助手回复
 
 ---
 

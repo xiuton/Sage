@@ -7,7 +7,7 @@ use clap::Parser;
 use sage::{
     generation::GenerateOptions,
     lazy_load::LazyModel,
-    logger::init_logger,
+    logger::init_logger_with_level,
     performance::PerformanceMonitor,
     tokenizer::Tokenizer,
     TrainingConfig,
@@ -58,6 +58,9 @@ struct Args {
     
     #[arg(long)]
     quantize: bool,
+
+    #[arg(long, default_value = "info")]
+    log_level: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -110,6 +113,21 @@ struct ChatCompletionResponse {
 struct ErrorResponse {
     error: String,
     message: String,
+}
+
+#[derive(Deserialize)]
+struct GenerateRequest {
+    prompt: String,
+    max_length: Option<usize>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    top_k: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct GenerateResponse {
+    prompt: String,
+    text: String,
 }
 
 #[derive(Deserialize)]
@@ -244,31 +262,56 @@ async fn main() {
     let args = Args::parse();
     
     // 初始化日志系统
-    init_logger();
+    init_logger_with_level(Some(&args.log_level));
     
     log_info!("正在启动API服务器...");
     log_info!("模型目录: {}", args.model_dir);
     log_info!("端口: {}", args.port);
+
+    // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+    unsafe {
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
+    }
 
     // 加载模型配置
     let config_path = format!("{}/config.json", args.model_dir);
     let config_str = fs::read_to_string(&config_path).expect("Failed to read config");
     let config: TrainingConfig = serde_json::from_str(&config_str).expect("Failed to parse config");
 
+    // 计算正确的 context_len
+    let requested_context_len = if args.context_len == 0 {
+        config.model.max_seq_len
+    } else {
+        args.context_len
+    };
+    let context_len = requested_context_len.min(config.model.max_seq_len);
+    if requested_context_len > config.model.max_seq_len {
+        log_info!("context_len {} 超过模型 max_seq_len {}，已自动截断。", requested_context_len, config.model.max_seq_len);
+    }
+
     // 加载分词器
     let tokenizer_path = format!("{}/tokenizer.json", args.model_dir);
     let tokenizer = Tokenizer::load(&tokenizer_path).expect("Failed to load tokenizer");
 
     // 根据后端类型加载模型
+    let primary_model_path = format!("{}/model.mpk", args.model_dir);
+    let best_model_path = format!("{}/best_model.mpk", args.model_dir);
+    
     let model_path = if args.use_best {
-        let best_path = format!("{}/best_model.mpk", args.model_dir);
-        if fs::metadata(&best_path).is_ok() {
-            best_path
+        if fs::metadata(&best_model_path).is_ok() {
+            best_model_path
         } else {
-            format!("{}/model.mpk", args.model_dir)
+            primary_model_path
         }
     } else {
-        format!("{}/model.mpk", args.model_dir)
+        if fs::metadata(&primary_model_path).is_ok() {
+            primary_model_path
+        } else if fs::metadata(&best_model_path).is_ok() {
+            log_info!("model.mpk 不存在，自动使用 best_model.mpk");
+            best_model_path
+        } else {
+            primary_model_path
+        }
     };
 
     let (lazy_model, lazy_model_gpu, backend) = if args.backend == "gpu" {
@@ -316,7 +359,7 @@ async fn main() {
         lazy_model: Arc::new(Mutex::new(lazy_model)),
         lazy_model_gpu: Arc::new(Mutex::new(lazy_model_gpu)),
         config: Arc::new(Mutex::new(config)),
-        context_len: args.context_len,
+        context_len,
         api_key,
         tasks: tasks.clone(),
         task_queue: task_queue.clone(),
@@ -335,10 +378,11 @@ async fn main() {
         task_processor(state_clone, task_receiver).await;
     });
 
-    let mut app = Router::new()
+    let app = Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/model-info", get(model_info_handler))
         .route("/api/performance", get(performance_handler))
+        .route("/api/generate", post(generate_handler))
         .route("/v1/chat/completions", post(infer_handler))
         .route("/v1/batch-chat/completions", post(batch_infer_handler))
         .route("/v1/async-chat/completions", post(async_infer_handler))
@@ -353,11 +397,11 @@ async fn main() {
     
     // 模型下载和更新接口（仅在 web feature 启用时）
     #[cfg(feature = "web")]
-    {
-        app = app.route("/api/models/download", post(download_model_handler));
-    }
+    let app = app.route("/api/models/download", post(download_model_handler));
+    #[cfg(not(feature = "web"))]
+    let app = app;
     
-    app = app
+    let final_app = app
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state.clone());
 
@@ -366,7 +410,7 @@ async fn main() {
     
     let listener = TcpListener::bind(addr).await.unwrap();
     
-    axum::serve(listener, app.into_make_service())
+    axum::serve(listener, final_app)
         .await
         .unwrap();
 }
@@ -480,175 +524,31 @@ async fn infer_handler(
         let tokenizer = state.tokenizer.lock().unwrap();
         
         if req.stream.unwrap_or(false) {
-            // 流式输出处理
-            let created_time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let model_name = req.model.unwrap_or_else(|| "sage-model".to_string());
-            
-            let mut generation_state = sage::generation::GenerationState::new(sage::generation::ModelType::Normal(&*model), &tokenizer, &formatted_prompt, &options, &device);
-                
-                let mut full_content = String::new();
-                let mut chunks = Vec::new();
-                
-                while !generation_state.is_stopped() {
-                    if let Some(token) = generation_state.next_token() {
-                        full_content.push_str(&token);
-                        
-                        let choice = ChatCompletionChoice {
-                            index: 0,
-                            message: ChatMessage {
-                                role: "assistant".to_string(),
-                                content: full_content.clone(),
-                            },
-                            finish_reason: None,
-                        };
-                        
-                        let chunk = ChatCompletionResponse {
-                            id: request_id.clone(),
-                            object: "chat.completion.chunk".to_string(),
-                            created: created_time,
-                            model: model_name.clone(),
-                            choices: vec![choice],
-                            usage: Usage {
-                                prompt_tokens: formatted_prompt.len() / 4,
-                                completion_tokens: full_content.len() / 4,
-                                total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
-                            },
-                        };
-                        
-                        chunks.push(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap()));
-                    }
-                }
-                
-                // 添加最后一个chunk，包含finish_reason
-                let choice = ChatCompletionChoice {
-                    index: 0,
-                    message: ChatMessage {
-                        role: "assistant".to_string(),
-                        content: full_content.clone(),
-                    },
-                    finish_reason: Some("stop".to_string()),
-                };
-                
-                let final_chunk = ChatCompletionResponse {
-                    id: request_id,
-                    object: "chat.completion.chunk".to_string(),
-                    created: created_time,
-                    model: model_name,
-                    choices: vec![choice],
-                    usage: Usage {
-                        prompt_tokens: formatted_prompt.len() / 4,
-                        completion_tokens: full_content.len() / 4,
-                        total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
-                    },
-                };
-                
-                chunks.push(serde_json::to_string(&final_chunk).unwrap() + "\n");
-                
-                // 将所有chunk合并为一个响应
-                let response_body = chunks.join("");
-                
-                let response = axum::response::Response::builder()
-                    .header("Content-Type", "text/event-stream")
-                    .header("Cache-Control", "no-cache")
-                    .header("Connection", "keep-alive")
-                    .body(axum::body::Body::from(response_body))
-                    .unwrap();
-                    
-                return Ok(response);
-            } else {
-                // 非流式输出处理
-                log_info!("开始执行GPU推理...");
-                
-                let response = sage::generation::generate(&*model, &tokenizer, &formatted_prompt, &options, &device);
-                log_info!("推理完成，原始响应: {}", response);
-                
-                // 提取助手回复
-                let reply = extract_assistant_reply(&response);
-                log_info!("提取的助手回复: {}", reply);
-                
-                let duration_ms = start_time.elapsed().as_millis();
-                log_info!("推理耗时: {}ms", duration_ms);
-                (reply, duration_ms)
-            }
+            return Ok(perform_gpu_streaming_inference(&*model, &tokenizer, &formatted_prompt, &options, &device, req.model.clone()));
         } else {
-            let device = NdArrayDevice::Cpu;
-            let lazy_model = state.lazy_model.lock().unwrap();
-            let model = lazy_model.get_model(&device);
-            let model = model.lock().unwrap();
-            let tokenizer = state.tokenizer.lock().unwrap();
-            
-            if req.stream.unwrap_or(false) {
-                let created_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                let request_id = uuid::Uuid::new_v4().to_string();
-                let model_name = req.model.unwrap_or_else(|| "sage-model".to_string());
-                
-                let mut generation_state = sage::generation::GenerationState::new(sage::generation::ModelType::Normal(&*model), &tokenizer, &formatted_prompt, &options, &device);
-                
-                let mut full_content = String::new();
-                let mut chunks = Vec::new();
-                
-                while !generation_state.is_stopped() {
-                    if let Some(token) = generation_state.next_token() {
-                        full_content.push_str(&token);
-                        
-                        let choice = ChatCompletionChoice {
-                            index: 0,
-                            message: ChatMessage {
-                                role: "assistant".to_string(),
-                                content: full_content.clone(),
-                            },
-                            finish_reason: None,
-                        };
-                        
-                        let chunk = ChatCompletionResponse {
-                            id: request_id.clone(),
-                            object: "chat.completion.chunk".to_string(),
-                            created: created_time,
-                            model: model_name.clone(),
-                            choices: vec![choice],
-                            usage: Usage {
-                                prompt_tokens: formatted_prompt.len() / 4,
-                                completion_tokens: full_content.len() / 4,
-                                total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
-                            },
-                        };
-                        
-                        chunks.push(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap()));
-                    }
-                }
-                
-                let response_body = axum::body::Body::from(chunks.join(""));
-                
-                let response = axum::response::Response::builder()
-                    .header("Content-Type", "text/event-stream")
-                    .header("Cache-Control", "no-cache")
-                    .header("Connection", "keep-alive")
-                    .body(response_body)
-                    .unwrap();
-                    
-                return Ok(response);
-            } else {
-                log_info!("开始执行CPU推理...");
-                
-                let response = sage::generation::generate(&*model, &tokenizer, &formatted_prompt, &options, &device);
-                log_info!("推理完成，原始响应: {}", response);
-                
-                // 提取助手回复
-                let reply = extract_assistant_reply(&response);
-                log_info!("提取的助手回复: {}", reply);
-                
-                let duration_ms = start_time.elapsed().as_millis();
-                log_info!("推理耗时: {}ms", duration_ms);
-                (reply, duration_ms)
-            }
-        };
+            log_info!("开始执行GPU推理...");
+            let (reply, duration_ms) = perform_gpu_non_streaming_inference(&*model, &tokenizer, &formatted_prompt, &options, &device, start_time);
+            log_info!("推理完成，提取的助手回复: {}", reply);
+            log_info!("推理耗时: {}ms", duration_ms);
+            (reply, duration_ms)
+        }
+    } else {
+        let device = NdArrayDevice::Cpu;
+        let lazy_model = state.lazy_model.lock().unwrap();
+        let model = lazy_model.get_model(&device);
+        let model = model.lock().unwrap();
+        let tokenizer = state.tokenizer.lock().unwrap();
+        
+        if req.stream.unwrap_or(false) {
+            return Ok(perform_cpu_streaming_inference(&*model, &tokenizer, &formatted_prompt, &options, &device, req.model.clone()));
+        } else {
+            log_info!("开始执行CPU推理...");
+            let (reply, duration_ms) = perform_cpu_non_streaming_inference(&*model, &tokenizer, &formatted_prompt, &options, &device, start_time);
+            log_info!("推理完成，提取的助手回复: {}", reply);
+            log_info!("推理耗时: {}ms", duration_ms);
+            (reply, duration_ms)
+        }
+    };
 
     // 构建OpenAI格式的响应
     let choice = ChatCompletionChoice {
@@ -701,6 +601,156 @@ async fn infer_handler(
         .unwrap();
         
     Ok(response)
+}
+
+async fn perform_inference_inner(
+    state: Arc<AppState>,
+    formatted_prompt: String,
+    options: GenerateOptions,
+    stream: bool,
+    _model: Option<String>,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    let start_time = std::time::Instant::now();
+    
+    if stream {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "bad_request".to_string(),
+                message: "Stream is not supported for /api/generate".to_string(),
+            }),
+        ));
+    }
+    
+    let (reply, _duration_ms) = if state._backend == "gpu" {
+        let lazy_model_gpu = state.lazy_model_gpu.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Model lock poisoned".to_string(),
+                }),
+            )
+        })?;
+        
+        if lazy_model_gpu.is_none() {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "GPU model not loaded".to_string(),
+                }),
+            ));
+        }
+        
+        let device = <Wgpu as Backend>::Device::default();
+        let model_ref = lazy_model_gpu.as_ref().unwrap().get_model(&device);
+        let model_guard = model_ref.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Model lock poisoned".to_string(),
+                }),
+            )
+        })?;
+        let tokenizer = state.tokenizer.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Tokenizer lock poisoned".to_string(),
+                }),
+            )
+        })?;
+        
+        log_info!("开始执行GPU推理...");
+        let (reply, duration_ms) = perform_gpu_non_streaming_inference(
+            &*model_guard, 
+            &tokenizer, 
+            &formatted_prompt, 
+            &options, 
+            &device, 
+            start_time
+        );
+        log_info!("推理完成，提取的助手回复: {}", reply);
+        log_info!("推理耗时: {}ms", duration_ms);
+        (reply, duration_ms)
+    } else {
+        let lazy_model = state.lazy_model.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Model lock poisoned".to_string(),
+                }),
+            )
+        })?;
+        let device = NdArrayDevice::Cpu;
+        let model_ref = lazy_model.get_model(&device);
+        let model_guard = model_ref.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Model lock poisoned".to_string(),
+                }),
+            )
+        })?;
+        let tokenizer = state.tokenizer.lock().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Tokenizer lock poisoned".to_string(),
+                }),
+            )
+        })?;
+        
+        log_info!("开始执行CPU推理...");
+        let (reply, duration_ms) = perform_cpu_non_streaming_inference(
+            &*model_guard, 
+            &tokenizer, 
+            &formatted_prompt, 
+            &options, 
+            &device, 
+            start_time
+        );
+        log_info!("推理完成，提取的助手回复: {}", reply);
+        log_info!("推理耗时: {}ms", duration_ms);
+        (reply, duration_ms)
+    };
+    
+    Ok(reply)
+}
+
+async fn generate_handler(
+    state: axum::extract::State<Arc<AppState>>,
+    Json(req): Json<GenerateRequest>,
+) -> Result<Json<GenerateResponse>, (StatusCode, Json<ErrorResponse>)> {
+    log_info!("收到Generate请求: prompt长度={}", req.prompt.len());
+
+    let formatted_prompt = format!("<user>\n{}\n</user>\n<assistant>", req.prompt);
+    log_info!("格式化后的提示: {}", formatted_prompt);
+
+    let options = GenerateOptions {
+        max_new_tokens: req.max_length.unwrap_or(50),
+        temperature: req.temperature.unwrap_or(0.8),
+        top_k: req.top_k.unwrap_or(10),
+        top_p: req.top_p.unwrap_or(0.9),
+        repetition_penalty: 1.1,
+        punctuation_penalty: 1.3,
+        presence_penalty: 0.0,
+        frequency_penalty: 0.0,
+        seed: None,
+        context_len: state.context_len,
+        stop_on_user: true,
+        stop_sequences: Vec::new(),
+    };
+
+    let reply = perform_inference_inner(state.0.clone(), formatted_prompt, options, false, None).await?;
+
+    Ok(Json(GenerateResponse { prompt: req.prompt, text: reply }))
 }
 
 async fn batch_infer_handler(
@@ -1178,6 +1228,218 @@ async fn task_processor(state: Arc<AppState>, mut receiver: mpsc::Receiver<Strin
             log_info!("任务处理完成: {}", task_id);
         }
     }
+}
+
+/// 为 WGPU 后端执行流式推理
+fn perform_gpu_streaming_inference(
+    model: &sage::core::model::Model<Wgpu>,
+    tokenizer: &sage::core::tokenizer::Tokenizer,
+    formatted_prompt: &str,
+    options: &sage::core::generation::GenerateOptions,
+    device: &<Wgpu as Backend>::Device,
+    req_model: Option<String>,
+) -> axum::response::Response {
+    let created_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let model_name = req_model.unwrap_or_else(|| "sage-model".to_string());
+    
+    let mut generation_state = sage::generation::GenerationState::new(
+        sage::generation::ModelType::Normal(model),
+        tokenizer,
+        formatted_prompt,
+        options,
+        device,
+    );
+    
+    let mut full_content = String::new();
+    let mut chunks = Vec::new();
+    
+    while !generation_state.is_stopped() {
+        if let Some(token) = generation_state.next_token() {
+            full_content.push_str(&token);
+            
+            let choice = ChatCompletionChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".to_string(),
+                    content: full_content.clone(),
+                },
+                finish_reason: None,
+            };
+            
+            let chunk = ChatCompletionResponse {
+                id: request_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created: created_time,
+                model: model_name.clone(),
+                choices: vec![choice],
+                usage: Usage {
+                    prompt_tokens: formatted_prompt.len() / 4,
+                    completion_tokens: full_content.len() / 4,
+                    total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
+                },
+            };
+            
+            chunks.push(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap()));
+        }
+    }
+    
+    let final_choice = ChatCompletionChoice {
+        index: 0,
+        message: ChatMessage {
+            role: "assistant".to_string(),
+            content: full_content.clone(),
+        },
+        finish_reason: Some("stop".to_string()),
+    };
+    
+    let final_chunk = ChatCompletionResponse {
+        id: request_id,
+        object: "chat.completion.chunk".to_string(),
+        created: created_time,
+        model: model_name,
+        choices: vec![final_choice],
+        usage: Usage {
+            prompt_tokens: formatted_prompt.len() / 4,
+            completion_tokens: full_content.len() / 4,
+            total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
+        },
+    };
+    
+    chunks.push(serde_json::to_string(&final_chunk).unwrap() + "\n");
+    
+    let response_body = chunks.join("");
+    
+    axum::response::Response::builder()
+        .header("Content-Type", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .body(axum::body::Body::from(response_body))
+        .unwrap()
+}
+
+/// 为 NdArray 后端执行流式推理
+fn perform_cpu_streaming_inference(
+    model: &sage::core::model::Model<NdArray>,
+    tokenizer: &sage::core::tokenizer::Tokenizer,
+    formatted_prompt: &str,
+    options: &sage::core::generation::GenerateOptions,
+    device: &NdArrayDevice,
+    req_model: Option<String>,
+) -> axum::response::Response {
+    let created_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let model_name = req_model.unwrap_or_else(|| "sage-model".to_string());
+    
+    let mut generation_state = sage::generation::GenerationState::new(
+        sage::generation::ModelType::Normal(model),
+        tokenizer,
+        formatted_prompt,
+        options,
+        device,
+    );
+    
+    let mut full_content = String::new();
+    let mut chunks = Vec::new();
+    
+    while !generation_state.is_stopped() {
+        if let Some(token) = generation_state.next_token() {
+            full_content.push_str(&token);
+            
+            let choice = ChatCompletionChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".to_string(),
+                    content: full_content.clone(),
+                },
+                finish_reason: None,
+            };
+            
+            let chunk = ChatCompletionResponse {
+                id: request_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created: created_time,
+                model: model_name.clone(),
+                choices: vec![choice],
+                usage: Usage {
+                    prompt_tokens: formatted_prompt.len() / 4,
+                    completion_tokens: full_content.len() / 4,
+                    total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
+                },
+            };
+            
+            chunks.push(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap()));
+        }
+    }
+    
+    let final_choice = ChatCompletionChoice {
+        index: 0,
+        message: ChatMessage {
+            role: "assistant".to_string(),
+            content: full_content.clone(),
+        },
+        finish_reason: Some("stop".to_string()),
+    };
+    
+    let final_chunk = ChatCompletionResponse {
+        id: request_id,
+        object: "chat.completion.chunk".to_string(),
+        created: created_time,
+        model: model_name,
+        choices: vec![final_choice],
+        usage: Usage {
+            prompt_tokens: formatted_prompt.len() / 4,
+            completion_tokens: full_content.len() / 4,
+            total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
+        },
+    };
+    
+    chunks.push(serde_json::to_string(&final_chunk).unwrap() + "\n");
+    
+    let response_body = chunks.join("");
+    
+    axum::response::Response::builder()
+        .header("Content-Type", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .body(axum::body::Body::from(response_body))
+        .unwrap()
+}
+
+/// 为 WGPU 后端执行非流式推理
+fn perform_gpu_non_streaming_inference(
+    model: &sage::core::model::Model<Wgpu>,
+    tokenizer: &sage::core::tokenizer::Tokenizer,
+    formatted_prompt: &str,
+    options: &sage::core::generation::GenerateOptions,
+    device: &<Wgpu as Backend>::Device,
+    start_time: std::time::Instant,
+) -> (String, u128) {
+    let response = sage::generation::generate(model, tokenizer, formatted_prompt, options, device);
+    let reply = extract_assistant_reply(&response);
+    let duration_ms = start_time.elapsed().as_millis();
+    (reply, duration_ms)
+}
+
+/// 为 NdArray 后端执行非流式推理
+fn perform_cpu_non_streaming_inference(
+    model: &sage::core::model::Model<NdArray>,
+    tokenizer: &sage::core::tokenizer::Tokenizer,
+    formatted_prompt: &str,
+    options: &sage::core::generation::GenerateOptions,
+    device: &NdArrayDevice,
+    start_time: std::time::Instant,
+) -> (String, u128) {
+    let response = sage::generation::generate(model, tokenizer, formatted_prompt, options, device);
+    let reply = extract_assistant_reply(&response);
+    let duration_ms = start_time.elapsed().as_millis();
+    (reply, duration_ms)
 }
 
 fn format_messages_to_prompt(messages: &[ChatMessage]) -> String {

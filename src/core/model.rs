@@ -1,12 +1,11 @@
 use burn::{
     nn::{
-        Embedding, EmbeddingConfig, Linear, LinearConfig, Dropout, DropoutConfig,
-        attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
+        Embedding, EmbeddingConfig, Linear, LinearConfig,
+        transformer::{TransformerEncoder, TransformerEncoderConfig, TransformerEncoderInput, TransformerEncoderAutoregressiveCache},
         loss::CrossEntropyLossConfig,
-        RmsNorm, RmsNormConfig, SwiGlu, SwiGluConfig,
     },
     prelude::*,
-    tensor::{backend::AutodiffBackend, TensorData, Bool},
+    tensor::backend::AutodiffBackend,
     train::{ClassificationOutput, TrainOutput, TrainStep},
 };
 
@@ -22,152 +21,11 @@ pub use multimodal::{
     FusionStrategy,
 };
 
-#[derive(Config, Debug)]
-pub struct CustomTransformerEncoderConfig {
-    pub d_model: usize,
-    pub d_ff: usize,
-    pub n_heads: usize,
-    pub n_layers: usize,
-    #[config(default = 0.1)]
-    pub dropout: f64,
-    #[config(default = true)]
-    pub norm_first: bool,
-    #[config(default = 1e-6)]
-    pub norm_epsilon: f64,
-    #[config(default = false)]
-    pub quiet_softmax: bool,
-}
-
-#[derive(Module, Debug)]
-pub struct CustomTransformerEncoderLayer<B: Backend> {
-    mha: MultiHeadAttention<B>,
-    pwff: SwiGlu<B>,
-    norm_1: RmsNorm<B>,
-    norm_2: RmsNorm<B>,
-    dropout: Dropout,
-    norm_first: bool,
-}
-
-impl<B: Backend> CustomTransformerEncoderLayer<B> {
-    pub fn new(config: &CustomTransformerEncoderConfig, device: &B::Device) -> Self {
-        let mha = MultiHeadAttentionConfig::new(config.d_model, config.n_heads)
-            .with_dropout(config.dropout)
-            .with_quiet_softmax(config.quiet_softmax)
-            .init(device);
-        
-        let norm_1 = RmsNormConfig::new(config.d_model)
-            .with_epsilon(config.norm_epsilon)
-            .init(device);
-        
-        let norm_2 = RmsNormConfig::new(config.d_model)
-            .with_epsilon(config.norm_epsilon)
-            .init(device);
-        
-        let dropout = DropoutConfig::new(config.dropout).init();
-        
-        let pwff = SwiGluConfig::new(config.d_model, config.d_ff)
-            .init(device);
-
-        Self {
-            mha,
-            norm_1,
-            norm_2,
-            pwff,
-            dropout,
-            norm_first: config.norm_first,
-        }
-    }
-
-    pub fn forward(
-        &self,
-        input: Tensor<B, 3>,
-        mask_pad: Option<Tensor<B, 2, Bool>>,
-        mask_attn: Option<Tensor<B, 3, Bool>>,
-    ) -> Tensor<B, 3> {
-        let x = input;
-        let mut residual_path = x.clone();
-
-        if self.norm_first {
-            residual_path = self.norm_2.forward(residual_path);
-        }
-
-        let mut input_mhs = MhaInput::self_attn(residual_path);
-        if let Some(mask_pad) = mask_pad {
-            input_mhs = input_mhs.mask_pad(mask_pad);
-        }
-        if let Some(mask_attn) = mask_attn {
-            input_mhs = input_mhs.mask_attn(mask_attn);
-        }
-        let residual_path = self.mha.forward(input_mhs).context;
-
-        let residual_path = self.dropout.forward(residual_path);
-        let mut x = x + residual_path;
-
-        let residual_path = if self.norm_first {
-            self.norm_1.forward(x.clone())
-        } else {
-            x = self.norm_1.forward(x);
-            x.clone()
-        };
-
-        let residual_path = self.pwff.forward(residual_path);
-        let residual_path = self.dropout.forward(residual_path);
-        let mut x = x + residual_path;
-
-        if !self.norm_first {
-            x = self.norm_2.forward(x);
-        }
-
-        x
-    }
-}
-
-#[derive(Module, Debug)]
-pub struct CustomTransformerEncoder<B: Backend> {
-    layers: Vec<CustomTransformerEncoderLayer<B>>,
-    d_model: usize,
-    d_ff: usize,
-    n_heads: usize,
-    n_layers: usize,
-    dropout: f64,
-    norm_first: bool,
-    quiet_softmax: bool,
-}
-
-impl<B: Backend> CustomTransformerEncoder<B> {
-    pub fn new(config: &CustomTransformerEncoderConfig, device: &B::Device) -> Self {
-        let layers = (0..config.n_layers)
-            .map(|_| CustomTransformerEncoderLayer::new(config, device))
-            .collect();
-
-        Self {
-            layers,
-            d_model: config.d_model,
-            d_ff: config.d_ff,
-            n_heads: config.n_heads,
-            n_layers: config.n_layers,
-            dropout: config.dropout,
-            norm_first: config.norm_first,
-            quiet_softmax: config.quiet_softmax,
-        }
-    }
-
-    pub fn forward(&self, x: Tensor<B, 3>, mask_pad: Option<Tensor<B, 2, Bool>>, mask_attn: Option<Tensor<B, 3, Bool>>) -> Tensor<B, 3> {
-        let mut x = x;
-
-        for layer in self.layers.iter() {
-            x = layer.forward(x, mask_pad.clone(), mask_attn.clone());
-        }
-
-        x
-    }
-}
-
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
     embedding: Embedding<B>,
     pos_embedding: Embedding<B>,
-    transformer_encoder: CustomTransformerEncoder<B>,
+    transformer_encoder: TransformerEncoder<B>,
     output_head: Linear<B>,
     vocab_size: usize,
     max_seq_len: usize,
@@ -207,17 +65,15 @@ impl ModelConfig {
         let embedding = EmbeddingConfig::new(self.vocab_size, self.d_model).init(device);
         let pos_embedding = EmbeddingConfig::new(self.max_seq_len, self.d_model).init(device);
         
-        let encoder_config = CustomTransformerEncoderConfig {
-            d_model: self.d_model,
-            d_ff: self.d_ff,
-            n_heads: self.n_heads,
-            n_layers: self.n_layers,
-            dropout: self.dropout,
-            norm_first: true,
-            norm_epsilon: 1e-6,
-            quiet_softmax: false,
-        };
-        let transformer_encoder = CustomTransformerEncoder::new(&encoder_config, device);
+        let encoder_config = TransformerEncoderConfig::new(
+            self.d_model,
+            self.d_ff,
+            self.n_heads,
+            self.n_layers,
+        )
+        .with_dropout(self.dropout);
+        
+        let transformer_encoder = encoder_config.init(device);
 
         let output_head = LinearConfig::new(self.d_model, self.vocab_size).init(device);
 
@@ -342,28 +198,12 @@ impl ModelConfig {
     }
 }
 
-/// 生成自回归掩码（Decoder-only 架构用）
-/// 确保每个位置只能看到前面的位置，不能看到后面的位置
-fn generate_autoregressive_mask<B: Backend>(batch_size: usize, seq_len: usize, device: &B::Device) -> Tensor<B, 3, Bool> {
-    let mask_data = (0..seq_len)
-        .map(|i| (0..seq_len).map(|j| j <= i).collect::<Vec<bool>>())
-        .flatten()
-        .collect::<Vec<bool>>();
-    
-    let mask = Tensor::<B, 2, Bool>::from_data(
-        TensorData::new(mask_data, [seq_len, seq_len]),
-        device,
-    );
-
-    mask.unsqueeze::<3>().repeat(&[batch_size, 1, 1])
-}
-
 impl<B: Backend> Model<B> {
     pub fn forward(&self, input: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         self.forward_with_cache(input, None)
     }
 
-    pub fn forward_with_cache(&self, input: Tensor<B, 2, Int>, kv_cache: Option<&mut KVCache<B>>) -> Tensor<B, 3> {
+    pub fn forward_with_cache(&self, input: Tensor<B, 2, Int>, _kv_cache: Option<&mut KVCache<B>>) -> Tensor<B, 3> {
         let [batch_size, seq_len] = input.dims();
         let device = input.device();
 
@@ -371,31 +211,49 @@ impl<B: Backend> Model<B> {
         let token_embeddings = self.embedding.forward(input);
 
         // Position embeddings - 使用 arange 创建位置索引
-        let has_kv_cache = kv_cache.is_some();
-        let pos_ids = if let Some(cache) = kv_cache.as_ref() {
-            // 如果有缓存，从缓存长度开始计算位置
-            let start_pos = cache.get_cached_seq_len() as i64;
-            Tensor::<B, 1, Int>::arange(start_pos..(start_pos + seq_len as i64), &device)
-        } else {
-            Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device)
-        };
+        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
         
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
         let pos_embeddings = self.pos_embedding.forward(positions);
 
         let mut x = token_embeddings + pos_embeddings;
 
-        // Decoder-only 架构：生成自回归掩码
-        let autoregressive_mask = if !has_kv_cache {
-            // 训练阶段或无缓存推理阶段：使用完整的自回归掩码
-            Some(generate_autoregressive_mask::<B>(batch_size, seq_len, &device))
-        } else {
-            // 有缓存的推理阶段：不需要掩码，因为每次只生成一个 token
-            None
-        };
+        // 使用 TransformerEncoder 进行前向传播
+        x = self
+            .transformer_encoder
+            .forward(TransformerEncoderInput::new(x));
 
-        // 使用自定义 TransformerEncoder 进行前向传播（应用自回归掩码实现 Decoder-only）
-        x = self.transformer_encoder.forward(x, None, autoregressive_mask);
+        // Final head for language modeling
+        self.output_head.forward(x)
+    }
+
+    pub fn new_autoregressive_cache(&self) -> TransformerEncoderAutoregressiveCache<B> {
+        self.transformer_encoder.new_autoregressive_cache()
+    }
+
+    pub fn forward_autoregressive_inference(
+        &self,
+        input: Tensor<B, 2, Int>,
+        cache: &mut TransformerEncoderAutoregressiveCache<B>,
+    ) -> Tensor<B, 3> {
+        let [batch_size, seq_len] = input.dims();
+        let device = input.device();
+
+        // Token embeddings
+        let token_embeddings = self.embedding.forward(input);
+
+        // Position embeddings - 使用 arange 创建位置索引
+        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+        
+        let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
+        let pos_embeddings = self.pos_embedding.forward(positions);
+
+        let x = token_embeddings + pos_embeddings;
+
+        // 使用 TransformerEncoder 进行自回归推理
+        let x = self
+            .transformer_encoder
+            .forward_autoregressive_inference(TransformerEncoderInput::new(x), cache);
 
         // Final head for language modeling
         self.output_head.forward(x)
@@ -407,50 +265,35 @@ impl<B: Backend> Model<B> {
     }
     
     /// 支持 KV 缓存的多模态前向传播方法
-    pub fn forward_multimodal_with_cache(&self, input: MultimodalInput<B>, kv_cache: Option<&mut KVCache<B>>) -> Tensor<B, 3> {
+    pub fn forward_multimodal_with_cache(&self, input: MultimodalInput<B>, _kv_cache: Option<&mut KVCache<B>>) -> Tensor<B, 3> {
         let [batch_size, seq_len] = input.text.dims();
         let device = input.text.device();
         
         // 检查是否启用多模态功能
         if self.vision_encoder.is_none() || self.multimodal_fusion.is_none() {
-            return self.forward_with_cache(input.text, kv_cache);
+            return self.forward_with_cache(input.text, _kv_cache);
         }
-        
-        let has_kv_cache = kv_cache.is_some();
         
         // Token embeddings
         let token_embeddings = self.embedding.forward(input.text);
         
         // Position embeddings
-        let pos_ids = if let Some(cache) = kv_cache.as_ref() {
-            let start_pos = cache.get_cached_seq_len() as i64;
-            Tensor::<B, 1, Int>::arange(start_pos..(start_pos + seq_len as i64), &device)
-        } else {
-            Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device)
-        };
+        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
         let pos_embeddings = self.pos_embedding.forward(positions);
         
         let mut text_features = token_embeddings + pos_embeddings;
         
-        // 只有在没有 KV 缓存的情况下才处理图像（第一次调用时）
-        if !has_kv_cache {
-            // 编码图像
-            let vision_embedding = self.vision_encoder.as_ref().unwrap().forward(input.image);
-            
-            // 融合文本和视觉特征
-            text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
-        }
+        // 编码图像（每次都处理）
+        let vision_embedding = self.vision_encoder.as_ref().unwrap().forward(input.image);
         
-        // Decoder-only 架构：生成自回归掩码
-        let autoregressive_mask = if !has_kv_cache {
-            Some(generate_autoregressive_mask::<B>(batch_size, seq_len, &device))
-        } else {
-            None
-        };
+        // 融合文本和视觉特征
+        text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
         
-        // 使用自定义 TransformerEncoder 进行前向传播（应用自回归掩码实现 Decoder-only）
-        let text_features = self.transformer_encoder.forward(text_features, None, autoregressive_mask);
+        // 使用 TransformerEncoder 进行前向传播
+        let text_features = self
+            .transformer_encoder
+            .forward(TransformerEncoderInput::new(text_features));
         
         // Final head for language modeling
         self.output_head.forward(text_features)
@@ -465,7 +308,7 @@ impl<B: Backend> Model<B> {
         &self.pos_embedding
     }
     
-    pub fn transformer_encoder(&self) -> &CustomTransformerEncoder<B> {
+    pub fn transformer_encoder(&self) -> &TransformerEncoder<B> {
         &self.transformer_encoder
     }
     

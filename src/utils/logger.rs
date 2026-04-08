@@ -6,8 +6,15 @@ use std::env;
 static INIT_LOGGER: Once = Once::new();
 
 pub fn init_logger() {
+    init_logger_with_level(None);
+}
+
+pub fn init_logger_with_level(log_level: Option<&str>) {
     INIT_LOGGER.call_once(|| {
-        let log_level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+        let log_level = log_level
+            .map(|s| s.to_string())
+            .or_else(|| env::var("RUST_LOG").ok())
+            .unwrap_or_else(|| "info".to_string());
         let env_filter = env_logger::Env::default().default_filter_or(&log_level);
         
         let mut binding = env_logger::Builder::from_env(env_filter);

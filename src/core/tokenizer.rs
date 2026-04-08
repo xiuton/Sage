@@ -274,7 +274,7 @@ impl Tokenizer {
     pub fn char_for_id(&self, id: usize) -> Option<char> {
         match self.tokenizer_type {
             TokenizerType::Char => self.id_to_char.get(&id).copied(),
-            TokenizerType::Bpe => None,
+            TokenizerType::Bpe => self.bpe_id_to_token.get(&id)?.chars().next(),
         }
     }
 

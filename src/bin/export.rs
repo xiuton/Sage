@@ -25,6 +25,11 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+    unsafe {
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
+    }
+
     let args = Args::parse();
     
     // 加载模型配置
