@@ -339,3 +339,41 @@ fn generate_with_model_type<B: Backend>(
     
     state.get_full_text()
 }
+
+pub fn batch_generate<B: Backend>(
+    model: &Model<B>,
+    tokenizer: &Tokenizer,
+    prompts: &[&str],
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> Vec<String> {
+    if prompts.is_empty() {
+        return Vec::new();
+    }
+
+    let mut states: Vec<GenerationState<'_, B>> = prompts
+        .iter()
+        .map(|prompt| {
+            GenerationState::new(
+                ModelType::Normal(model),
+                tokenizer,
+                prompt,
+                options,
+                device,
+            )
+        })
+        .collect();
+
+    let max_iterations = options.max_new_tokens;
+    for _ in 0..max_iterations {
+        let all_stopped = states.iter_mut().all(|s| {
+            s.next_token();
+            s.is_stopped()
+        });
+        if all_stopped {
+            break;
+        }
+    }
+
+    states.into_iter().map(|s| s.get_full_text()).collect()
+}

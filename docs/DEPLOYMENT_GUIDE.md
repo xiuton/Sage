@@ -284,13 +284,37 @@ docker-compose up -d sage-api-gpu
 - **缓存**：缓存频繁使用的计算结果
 - **并行处理**：使用多线程或异步处理
 
-### 6.3 部署优化
+### 6.3 GPU 利用率优化
+
+Sage 使用 CubeCL 作为 GPU 计算后端。可以通过以下方式优化 GPU 利用率：
+
+**CubeCL Autotune 级别：**
+
+| 级别 | 描述 | 首次启动速度 | GPU 利用率 |
+|------|------|-------------|-----------|
+| `minimal` | 最快但不充分 | 最快 | 低 |
+| `balanced` | 良好平衡（默认） |较快 | 较高 |
+| `extensive` | 更彻底 | 较慢 | 高 |
+| `full` | 最彻底 | 最慢 | 最高 |
+
+**设置方式（环境变量）：**
+```bash
+# Linux/macOS
+export CUBECL_AUTOTUNE_LEVEL=balanced
+
+# Windows PowerShell
+$env:CUBECL_AUTOTUNE_LEVEL="balanced"
+```
+
+**注意：** 更高的 autotune 级别会在首次运行时进行更充分的 kernel 优化测试，选择最优的 GPU kernel 配置。优化结果会被缓存，后续启动会直接使用。
+
+### 6.5 部署优化
 
 - **使用ONNX格式**：导出为ONNX格式进行部署（未来支持）
 - **GPU加速**：在生产环境使用GPU加速推理
 - **内存管理**：优化内存使用减少资源消耗
 
-### 6.4 量化评估
+### 6.6 量化评估
 
 **性能测试：**
 ```bash

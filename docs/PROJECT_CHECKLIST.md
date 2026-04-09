@@ -240,6 +240,7 @@
 | 2026-04-08 | 修复 | 修复 BPE tokenizer 的 char_for_id 问题 - char_for_id 对 BPE tokenizer 永远返回 None，导致 API 推理挂起 | Trae |
 | 2026-04-08 | 优化 | 修复 generate_handler 的 prompt 格式化问题 - 响应现在包含 prompt 和 text 两个字段 | Trae |
 | 2026-04-08 | 文档 | 整理并更新所有 API 接口文档 - COMMANDS.md 和 DEPLOYMENT_GUIDE.md 中接口列表完整统一 | Trae |
+| 2026-04-08 | 优化 | 将 CUBECL_AUTOTUNE_LEVEL 从 minimal 改为 balanced，提高 GPU 利用率；新增 batch_generate 函数支持批量并行推理 | Trae |
 
 ---
 
@@ -255,6 +256,7 @@
 - ✅ **GPU 推理正常**: API推理修复完成！
 - ✅ **API 响应格式优化**: 响应包含 prompt 和 text 两个字段
 - ✅ **API 文档统一**: 所有接口文档已整理完整
+- ✅ **GPU 利用率优化**: CUBECL_AUTOTUNE_LEVEL 改为 balanced，添加批量并行推理
 
 ### 核心进度
 1. ✅ **P0 级任务大部分完成** - 所有高优先级问题已解决
@@ -264,6 +266,7 @@
 5. ✅ **GPU 推理正常** - API推理修复完成！
 6. ✅ **API 响应格式优化** - 响应包含 prompt 和 text 两个字段
 7. ✅ **API 文档统一** - 所有 API 接口文档已整理完整
+8. ✅ **GPU 利用率优化** - CUBECL_AUTOTUNE_LEVEL 改为 balanced，添加批量并行推理
 
 ---
 

@@ -268,9 +268,12 @@ async fn main() {
     log_info!("模型目录: {}", args.model_dir);
     log_info!("端口: {}", args.port);
 
-    // 设置 cubecl autotune 级别为 minimal，加速第一次启动
+    // 设置 cubecl autotune 级别为 balanced，提高 GPU 利用率
+    // minimal: 最快启动但 GPU 利用率低
+    // balanced: 较好的启动速度和 GPU 利用率平衡
+    // extensive/full: 最高 GPU 利用率但首次启动慢
     unsafe {
-        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "minimal");
+        std::env::set_var("CUBECL_AUTOTUNE_LEVEL", "balanced");
     }
 
     // 加载模型配置
