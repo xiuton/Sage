@@ -216,6 +216,9 @@ if (Test-Path .\tmp\test_model_fast) {
 }
 ```
 
+### 5. GPU 后端训练测试
+```powershell
+cargo run --release --bin train -- --sft-jsonl ./data/sft_small.jsonl --artifact-dir ./tmp/sft_100m --model-size 100m --use-bpe --bpe-vocab-size 10000 --num-epochs 30 --batch-size 8 --max-seq-len 128 --force --reset-tokenizer --backend gpu
 ---
 
 ## 第三阶段：推理测试

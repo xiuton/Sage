@@ -1016,8 +1016,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         println!("多模态配置: 视觉输出维度={}, 融合策略={:?}", args.vision_out_dim, fusion_strategy);
     }
 
-    let model_init = model_config.init::<B>(&device);
-    let num_params = model_init.num_params();
+    let num_params = model_config.num_params();
     let params_str = if num_params >= 1_000_000_000 {
         format!("约 {:.3}B", num_params as f64 / 1_000_000_000.0)
     } else if num_params >= 1_000_000 {

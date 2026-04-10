@@ -39,6 +39,28 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     const SPECIAL_TOKENS: [char; 4] = ['\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}'];
+    const ASSISTANT_START: &'static str = "<assistant>";
+    const ASSISTANT_END: &'static str = "</assistant>";
+
+    fn assistant_spans(text: &str) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut i = 0usize;
+        while i < text.len() {
+            let Some(rel_start) = text[i..].find(Self::ASSISTANT_START) else {
+                break;
+            };
+            let start_tag_at = i + rel_start;
+            let content_start = start_tag_at + Self::ASSISTANT_START.len();
+            let Some(rel_end) = text[content_start..].find(Self::ASSISTANT_END) else {
+                spans.push((content_start, text.len()));
+                break;
+            };
+            let content_end = content_start + rel_end;
+            spans.push((content_start, content_end));
+            i = content_end + Self::ASSISTANT_END.len();
+        }
+        spans
+    }
 
     fn build_char_vocab(chars: Vec<char>) -> (HashMap<char, usize>, HashMap<usize, char>) {
         let mut char_to_id = HashMap::new();
@@ -175,37 +197,19 @@ impl Tokenizer {
             TokenizerType::Char => {
                 let mut tokens = Vec::new();
                 let mut mask = Vec::new();
+                let spans = Self::assistant_spans(text);
+                let mut span_idx = 0usize;
 
-                let mut last3: [char; 3] = ['\0', '\0', '\0'];
-                let mut assistant = false;
-
-                for ch in text.chars() {
+                for (byte_pos, ch) in text.char_indices() {
                     let id = self.char_to_id.get(&ch).copied().unwrap_or(self.unk_id);
                     tokens.push(id);
-
-                    if id == self.eos_id {
-                        mask.push(1);
-                        assistant = false;
-                        last3 = ['\0', '\0', '\0'];
-                        continue;
+                    while span_idx < spans.len() && byte_pos >= spans[span_idx].1 {
+                        span_idx += 1;
                     }
-
-                    last3 = [last3[1], last3[2], ch];
-                    mask.push(if assistant { 1 } else { 0 });
-
-                    if last3 == ['助', '手', '：'] {
-                        let len = mask.len();
-                        mask[len - 3] = 0;
-                        mask[len - 2] = 0;
-                        mask[len - 1] = 0;
-                        assistant = true;
-                    } else if last3 == ['用', '户', '：'] {
-                        let len = mask.len();
-                        mask[len - 3] = 0;
-                        mask[len - 2] = 0;
-                        mask[len - 1] = 0;
-                        assistant = false;
-                    }
+                    let in_assistant = span_idx < spans.len()
+                        && byte_pos >= spans[span_idx].0
+                        && byte_pos < spans[span_idx].1;
+                    mask.push(if in_assistant { 1 } else { 0 });
                 }
 
                 (tokens, mask)
@@ -222,23 +226,22 @@ impl Tokenizer {
                     .iter()
                     .map(|&id| id as usize)
                     .collect::<Vec<_>>();
+                let spans = Self::assistant_spans(text);
+                let mut span_idx = 0usize;
 
-                // 查找所有 "助手：" 和 "用户：" 序列的位置
                 let mut assistant_mask = vec![0u8; ids.len()];
-                let mut in_assistant = false;
-
-                // 直接在原始文本中查找标记，然后映射到token位置
                 for (token_idx, (start, end)) in encoding.get_offsets().iter().enumerate() {
-                    let token_text = &text[*start..*end];
-
-                    // 检查token是否包含标记序列
-                    if token_text.contains("<assistant>") {
-                        in_assistant = true;
-                    } else if token_text.contains("<user>") || token_text.contains("</user>") || token_text.contains("</assistant>") {
-                        in_assistant = false;
+                    while span_idx < spans.len() && *end > spans[span_idx].1 {
+                        if *start >= spans[span_idx].1 {
+                            span_idx += 1;
+                        } else {
+                            break;
+                        }
                     }
-
-                    assistant_mask[token_idx] = if in_assistant { 1 } else { 0 };
+                    let overlaps = span_idx < spans.len()
+                        && *start < spans[span_idx].1
+                        && *end > spans[span_idx].0;
+                    assistant_mask[token_idx] = if overlaps { 1 } else { 0 };
                 }
 
                 (ids, assistant_mask)

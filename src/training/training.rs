@@ -206,11 +206,13 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         let mut train_batches = 0usize;
         
         for (iteration, batch) in dataloader_train.iter().enumerate() {
-            let batch_clone = batch.clone();
             let output = model.forward_step(batch);
             
-            // 先计算验证损失（用 compute_validation_loss）
-            let batch_loss = model.compute_validation_loss(batch_clone);
+            let batch_loss = {
+                let loss_data = output.loss.clone().into_data();
+                let loss_slice = loss_data.as_slice::<f32>();
+                loss_slice.map(|s| s[0] as f64).unwrap_or(0.0)
+            };
             train_loss_sum += batch_loss;
             train_batches += 1;
             

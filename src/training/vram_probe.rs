@@ -69,14 +69,20 @@ fn run_training_step_once<B: AutodiffBackend>(
     let targets_flat = inputs_flat.clone();
     let inputs = Tensor::<B, 2, Int>::from_data(TensorData::new(inputs_flat, [batch_size, seq_len]), device);
     let targets = Tensor::<B, 2, Int>::from_data(TensorData::new(targets_flat, [batch_size, seq_len]), device);
-    // 创建全1的mask，表示所有位置都参与训练
     let mask_data = vec![1u8; batch_size * seq_len];
     let mask = Tensor::<B, 2, Int>::from_data(TensorData::new(mask_data, [batch_size, seq_len]), device);
     let batch = TextBatch { inputs, targets, mask };
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let out = model.step(batch);
         drop(out);
-    })).is_ok()
+    }));
+    match result {
+        Ok(()) => true,
+        Err(_) => {
+            print_flush("     ⚠ WGPU 内部错误（OOM/验证失败），正在重置模型状态…");
+            false
+        }
+    }
 }
 
 /// 按顺序尝试多组 `(batch_size, seq_len)`。
@@ -86,6 +92,7 @@ fn run_training_step_once<B: AutodiffBackend>(
 /// - 成功时打印明确提示并返回该组配置。
 ///
 /// 注意：部分 GPU 驱动在 OOM 时直接 abort 进程而无法被 `catch_unwind` 捕获。
+#[allow(unused_assignments)]
 pub fn probe_first_fitting_config<B: AutodiffBackend>(
     device: &B::Device,
     model_config: &ModelConfig,
@@ -102,7 +109,7 @@ pub fn probe_first_fitting_config<B: AutodiffBackend>(
             continue;
         }
 
-        if cached_seq != Some(seq_len) {
+        if cached_seq != Some(seq_len) || model.is_none() {
             print_flush(&format!(
                 "     （seq_len={}：正在构建模型；WGPU 首次可能编译 shader，需等待一段时间属正常）",
                 seq_len
@@ -113,16 +120,17 @@ pub fn probe_first_fitting_config<B: AutodiffBackend>(
                 let _hb = ProbeHeartbeat::start();
                 cfg.init::<B>(device)
             };
+            drop(model.take());
             model = Some(m);
             cached_seq = Some(seq_len);
         }
 
-        let model = model.as_ref().expect("model after cache fill");
         print_flush("     执行一步前向+反向（显存探测，非 Learner 训练循环）…");
 
         let step_ok = {
             let _hb = ProbeHeartbeat::start();
-            run_training_step_once(model, device, batch_size, seq_len, model_config.vocab_size)
+            let model_ref = model.as_ref().expect("model after cache fill");
+            run_training_step_once(model_ref, device, batch_size, seq_len, model_config.vocab_size)
         };
 
         if step_ok {
@@ -135,6 +143,8 @@ pub fn probe_first_fitting_config<B: AutodiffBackend>(
             return Some((batch_size, seq_len));
         }
         print_flush("  ✗ 失败（OOM、panic 或错误），尝试更小配置…");
+        drop(model.take());
+        cached_seq = None;
     }
     None
 }

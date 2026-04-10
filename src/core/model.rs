@@ -196,6 +196,38 @@ impl ModelConfig {
             multimodal: None,
         }
     }
+
+    /// 基于配置字段计算模型参数量，无需实例化模型
+    pub fn num_params(&self) -> usize {
+        let mut total_params = 0;
+
+        // Token Embedding
+        total_params += self.vocab_size * self.d_model;
+
+        // Positional Embedding
+        total_params += self.max_seq_len * self.d_model;
+
+        // Transformer Encoder
+        // Each layer:
+        //   Attention: 4 * (d_model * d_model + d_model)
+        //   MLP: (d_model * d_ff + d_ff) + (d_ff * d_model + d_model)
+        //   LayerNorms: 2 * (d_model * 2)
+        let attention_params = 4 * (self.d_model * self.d_model + self.d_model);
+        let mlp_params =
+            (self.d_model * self.d_ff + self.d_ff) + (self.d_ff * self.d_model + self.d_model);
+        let layernorm_params = 2 * (self.d_model * 2);
+
+        // Since we are estimating based on standard transformer architecture in burn
+        // A more accurate way would be to iterate over the modules if possible, but
+        // manual calculation is fine for this task.
+        let layer_params = attention_params + mlp_params + layernorm_params;
+        total_params += layer_params * self.n_layers;
+
+        // Output Head
+        total_params += self.d_model * self.vocab_size + self.vocab_size;
+
+        total_params
+    }
 }
 
 impl<B: Backend> Model<B> {
@@ -340,36 +372,7 @@ impl<B: Backend> Model<B> {
         crate::quantization::quantization::QuantizedModel::new(self.clone(), QuantizationMode::Dynamic)
     }
 
-    pub fn num_params(&self) -> usize {
-        let mut total_params = 0;
 
-        // Token Embedding
-        total_params += self.vocab_size * self.d_model;
-
-        // Positional Embedding
-        total_params += self.max_seq_len * self.d_model;
-
-        // Transformer Encoder
-        // Each layer:
-        //   Attention: 4 * (d_model * d_model + d_model)
-        //   MLP: (d_model * d_ff + d_ff) + (d_ff * d_model + d_model)
-        //   LayerNorms: 2 * (d_model * 2)
-        let attention_params = 4 * (self.d_model * self.d_model + self.d_model);
-        let mlp_params =
-            (self.d_model * self.d_ff + self.d_ff) + (self.d_ff * self.d_model + self.d_model);
-        let layernorm_params = 2 * (self.d_model * 2);
-
-        // Since we are estimating based on standard transformer architecture in burn
-        // A more accurate way would be to iterate over the modules if possible, but
-        // manual calculation is fine for this task.
-        let layer_params = attention_params + mlp_params + layernorm_params;
-        total_params += layer_params * self.n_layers;
-
-        // Output Head
-        total_params += self.d_model * self.vocab_size + self.vocab_size;
-
-        total_params
-    }
 
     pub fn forward_step(&self, batch: TextBatch<B>) -> ClassificationOutput<B> {
         let [batch_size, seq_len] = batch.inputs.dims();
@@ -395,7 +398,7 @@ impl<B: Backend> Model<B> {
             &mask_device
         );
         let masked_loss = loss * mask_float.clone();
-        let final_loss = masked_loss.sum() / mask_float.sum().max();
+        let final_loss = masked_loss.sum() / (mask_float.sum() + 1.0e-8);
 
         ClassificationOutput::new(final_loss, output, targets)
     }
@@ -424,7 +427,7 @@ impl<B: Backend> Model<B> {
             &mask_device
         );
         let masked_loss = loss * mask_float.clone();
-        let final_loss = masked_loss.sum() / mask_float.sum().max();
+        let final_loss = masked_loss.sum() / (mask_float.sum() + 1.0e-8);
 
         // 转换为 f64 - 通过 to_data 然后读取
         let loss_data = final_loss.into_data();
@@ -442,5 +445,4 @@ impl<B: AutodiffBackend> TrainStep for Model<B> {
         TrainOutput::new(self, item.loss.backward(), item)
     }
 }
-
 
