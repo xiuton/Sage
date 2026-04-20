@@ -628,14 +628,14 @@ mkdir -p configs
 
 ```bash
 # 文生图模型训练
-cargo run --release --bin train -- \
-    --text-to-image \
-    --image-text-data data/text_image_pairs.jsonl \
-    --config-path configs/vae_diffusion.json \
-    --output-dir ./models/text_to_image \
-    --batch-size 16 \
-    --learning-rate 0.0001 \
-    --num-epochs 100 \
+cargo run --release --bin train -- `
+    --text-to-image `
+    --image-text-data data/text_image_pairs.jsonl `
+    --config-path configs/vae_diffusion.json `
+    --output-dir ./models/text_to_image `
+    --batch-size 16 `
+    --learning-rate 0.0001 `
+    --num-epochs 100 `
     --backend gpu
 ```
 
@@ -661,18 +661,18 @@ cargo run --release --bin train -- \
 
 ```bash
 # 使用训练好的模型生成图像
-cargo run --bin image_gen -- \
-    --model-path ./models/text_to_image \
-    --prompt "a cat wearing sunglasses" \
-    --steps 50 \
+cargo run --bin image_gen -- `
+    --model-path ./models/text_to_image `
+    --prompt "a cat wearing sunglasses" `
+    --steps 50 `
     --output ./generated_cat.png
 
 # GPU 加速生成
-cargo run --bin image_gen -- \
-    --backend gpu \
-    --model-path ./models/text_to_image \
-    --prompt "a beautiful landscape with mountains" \
-    --steps 100 \
+cargo run --bin image_gen -- `
+    --backend gpu `
+    --model-path ./models/text_to_image `
+    --prompt "a beautiful landscape with mountains" `
+    --steps 100 `
     --output ./generated_landscape.png
 ```
 
@@ -700,14 +700,14 @@ cargo run --bin image_gen -- \
 
 ```bash
 # 评估生成质量
-cargo run --bin image_gen -- \
-    --model-path ./models/text_to_image/checkpoint_50 \
-    --prompt "a red rose in a vase" \
+cargo run --bin image_gen -- `
+    --prompt "a red rose in a vase" `
+    --steps 50 `
     --output ./eval/rose_50.png
 
-cargo run --bin image_gen -- \
-    --model-path ./models/text_to_image/checkpoint_100 \
-    --prompt "a red rose in a vase" \
+cargo run --bin image_gen -- `
+    --prompt "a red rose in a vase" `
+    --steps 100 `
     --output ./eval/rose_100.png
 ```
 

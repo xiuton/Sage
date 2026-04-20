@@ -63,7 +63,7 @@ cargo run --release --bin train -- [OPTIONS]
 **A. 目录语料训练（续写 LM - 预训练）**
 
 ```bash
-cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./tmp/lm_cn --num-epochs 5 --max-seq-len 64
+cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./models/lm_cn --num-epochs 5 --max-seq-len 64
 ```
 
 **A4. 分布式训练（权重同步）**
@@ -76,20 +76,20 @@ cargo run --release --bin train -- --distributed --devices gpu:0,gpu:1 --sft-jso
 **A5. LoRA 轻量化微调**
 
 ```bash
-cargo run --release --bin train -- --use-lora --lora-rank 8 --lora-alpha 16 --sft-jsonl data.jsonl --output-dir ./tmp/lora_model
+cargo run --release --bin train -- --use-lora --lora-rank 8 --lora-alpha 16 --sft-jsonl data.jsonl --output-dir ./models/lora_model
 ```
 LoRA 模式下仅训练低秩矩阵，可大幅降低显存占用。
 
 **A6. DPO偏好对齐训练**
 
 ```bash
-cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --output-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --output-dir ./models/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
 ```
 
 **A2. 目录语料训练（限制读取大小 + 快速验证 - 预训练）**
 
 ```bash
-cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./tmp/lm_cn_quick --num-epochs 1 --max-seq-len 64 --max-bytes 10000000 --force --reset-tokenizer
+cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./models/lm_cn_quick --num-epochs 1 --max-seq-len 64 --max-bytes 10000000 --force --reset-tokenizer
 ```
 
 **A3. 大规模预训练（使用 GPU 和流式处理）**
@@ -101,7 +101,7 @@ cargo run --release --bin train -- --corpus-dir ./corpus --max-bytes 1000000000 
 **A4. 基本预训练（使用 CPU）**
 
 ```bash
-cargo run --release --bin train -- --corpus-dir ./corpus --output-dir ./tmp/lm_basic --num-epochs 1 --max-seq-len 64 --batch-size 4
+cargo run --release --bin train -- --corpus-dir ./corpus --output-dir ./models/lm_basic --num-epochs 1 --max-seq-len 64 --batch-size 4
 ```
 
 ---
@@ -125,13 +125,13 @@ cargo run --bin infer -- --prompt "你好，请介绍一下自己" --num-tokens 
 **B. 使用特定模型**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --prompt "写一首关于春天的诗"
+cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --prompt "写一首关于春天的诗"
 ```
 
 **C. GPU 加速推理**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --prompt "解释量子计算" --backend gpu
+cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --prompt "解释量子计算" --backend gpu
 ```
 
 ### 2.2 交互式对话
@@ -139,19 +139,19 @@ cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --prompt
 **A. 交互模式**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --interactive
+cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --interactive
 ```
 
 **B. 终端模式（推荐）**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --terminal
+cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --terminal
 ```
 
 **C. Chat 模式**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --chat --prompt "你好"
+cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --chat --prompt "你好"
 ```
 
 ### 2.3 采样参数调优
@@ -332,7 +332,7 @@ cargo run --release --bin api_server -- [OPTIONS]
 ### 5.1 启动 API 服务器
 
 ```bash
-cargo run --release --bin api_server -- --port 8080 --model-dir ./tmp/sage_model_formal
+cargo run --release --bin api_server -- --port 8080 --model-dir ./models/sage_model_formal
 ```
 
 ### 5.2 API 调用示例
@@ -360,7 +360,7 @@ curl -X POST http://localhost:8080/multimodal `
 cargo run --release --bin train -- `
     --multimodal `
     --sft-jsonl data/multimodal_data.jsonl `
-    --output-dir ./tmp/mm_resnet_gated `
+    --output-dir ./models/mm_resnet_gated `
     --vision-out-dim 512 `
     --fusion-strategy gated
 
@@ -368,7 +368,7 @@ cargo run --release --bin train -- `
 cargo run --release --bin train -- `
     --multimodal `
     --sft-jsonl data/multimodal_data.jsonl `
-    --output-dir ./tmp/mm_vit_cross `
+    --output-dir ./models/mm_vit_cross `
     --vision-out-dim 512 `
     --fusion-strategy cross_attention
 ```
@@ -378,14 +378,14 @@ cargo run --release --bin train -- `
 ```bash
 # 基础多模态推理
 cargo run --bin infer -- `
-    --model-dir ./tmp/mm_resnet_gated `
+    --model-dir ./models/mm_resnet_gated `
     --multimodal `
     --image-path ./data/images/test.jpg `
     --prompt "描述这张图片"
 
 # 使用最佳模型 + GPU + 详细参数
 cargo run --bin infer -- `
-    --model-dir ./tmp/mm_vit_cross `
+    --model-dir ./models/mm_vit_cross `
     --use-best `
     --multimodal `
     --image-path ./data/images/sample.jpg `
@@ -396,7 +396,7 @@ cargo run --bin infer -- `
 
 # 交互式多模态对话
 cargo run --bin infer -- `
-    --model-dir ./tmp/mm_model `
+    --model-dir ./models/mm_model `
     --use-best `
     --multimodal `
     --image-path ./data/images/demo.jpg `

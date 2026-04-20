@@ -50,17 +50,17 @@ cargo run --release --bin train -- --quick-dev --sft-sample --backend gpu --forc
 
 ```bash
 # 使用BPE分词器的正式训练
-cargo run --release --bin train -- \
-    --sft-jsonl data/your_corpus.jsonl \
-    --artifact-dir ./tmp/your_model \
-    --use-bpe \
-    --bpe-vocab-size 20000 \
-    --num-epochs 50 \
-    --batch-size 32 \
-    --max-seq-len 256 \
-    --lr 5e-5 \
-    --backend gpu \
-    --model-size 30m \
+cargo run --release --bin train -- `
+    --sft-jsonl data/your_corpus.jsonl `
+    --artifact-dir ./models/your_model `
+    --use-bpe `
+    --bpe-vocab-size 20000 `
+    --num-epochs 50 `
+    --batch-size 32 `
+    --max-seq-len 256 `
+    --lr 5e-5 `
+    --backend gpu `
+    --model-size 30m `
     --force
 ```
 
@@ -77,11 +77,11 @@ cargo run --release --bin train -- \
 
 ```bash
 # 继续训练
-cargo run --release --bin train -- \
-    --sft-jsonl data/your_corpus.jsonl \
-    --artifact-dir ./tmp/your_model \
-    --continue \
-    --num-epochs 100 \
+cargo run --release --bin train -- `
+    --sft-jsonl data/your_corpus.jsonl `
+    --artifact-dir ./models/your_model `
+    --continue `
+    --num-epochs 100 `
     --backend gpu
 ```
 
@@ -95,14 +95,14 @@ cargo run --release --bin train -- \
 
 ```bash
 # DPO训练
-cargo run --release --bin train -- \
-    --dpo \
-    --dpo-data data/dpo_data.jsonl \
-    --artifact-dir ./tmp/dpo_model \
-    --dpo-beta 0.1 \
-    --num-epochs 30 \
-    --batch-size 16 \
-    --backend gpu \
+cargo run --release --bin train -- `
+    --dpo `
+    --dpo-data data/dpo_data.jsonl `
+    --artifact-dir ./models/dpo_model `
+    --dpo-beta 0.1 `
+    --num-epochs 30 `
+    --batch-size 16 `
+    --backend gpu `
     --force
 ```
 
@@ -117,10 +117,10 @@ cargo run --release --bin train -- \
 当前版本支持基础的分布式训练：
 
 ```bash
-cargo run --release --bin train -- \
-    --distributed \
-    --devices cpu,gpu:0 \
-    --sft-jsonl data/your_corpus.jsonl \
+cargo run --release --bin train -- `
+    --distributed `
+    --devices cpu,gpu:0 `
+    --sft-jsonl data/your_corpus.jsonl `
     --backend gpu
 ```
 - **权重同步**：系统会自动在多个设备间同步权重。
@@ -131,12 +131,12 @@ cargo run --release --bin train -- \
 支持仅微调低秩矩阵，大幅节省资源：
 
 ```bash
-cargo run --release --bin train -- \
-    --use-lora \
-    --lora-rank 8 \
-    --lora-alpha 16 \
-    --sft-jsonl data/your_corpus.jsonl \
-    --artifact-dir ./tmp/lora_model \
+cargo run --release --bin train -- `
+    --use-lora `
+    --lora-rank 8 `
+    --lora-alpha 16 `
+    --sft-jsonl data/your_corpus.jsonl `
+    --artifact-dir ./models/lora_model `
     --backend gpu
 ```
 
@@ -146,21 +146,21 @@ Sage 现在支持完整的多模态训练，包括两种视觉编码器和多种
 
 ```bash
 # 使用 ResNet 编码器 + 门控融合
-cargo run --release --bin train -- \
-    --multimodal \
-    --sft-jsonl data/mm_data.jsonl \
-    --output-dir ./tmp/mm_resnet \
-    --vision-out-dim 512 \
-    --fusion-strategy gated \
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_data.jsonl `
+    --output-dir ./models/mm_resnet `
+    --vision-out-dim 512 `
+    --fusion-strategy gated `
     --backend gpu
 
 # 使用 Vision Transformer 编码器 + 跨模态注意力融合
-cargo run --release --bin train -- \
-    --multimodal \
-    --sft-jsonl data/mm_data.jsonl \
-    --output-dir ./tmp/mm_vit \
-    --vision-out-dim 512 \
-    --fusion-strategy cross_attention \
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_data.jsonl `
+    --output-dir ./models/mm_vit `
+    --vision-out-dim 512 `
+    --fusion-strategy cross_attention `
     --backend gpu
 ```
 
@@ -282,14 +282,14 @@ mkdir -p configs
 
 ```bash
 # 文生图模型训练
-cargo run --release --bin train -- \
-    --text-to-image \
-    --image-text-data data/text_image_pairs.jsonl \
-    --config-path configs/vae_diffusion.json \
-    --output-dir ./models/text_to_image \
-    --batch-size 16 \
-    --learning-rate 0.0001 \
-    --num-epochs 100 \
+cargo run --release --bin train -- `
+    --text-to-image `
+    --image-text-data data/text_image_pairs.jsonl `
+    --config-path configs/vae_diffusion.json `
+    --output-dir ./models/text_to_image `
+    --batch-size 16 `
+    --learning-rate 0.0001 `
+    --num-epochs 100 `
     --backend gpu
 ```
 
@@ -342,18 +342,18 @@ cargo run --release --bin train -- \
 
 ```bash
 # 使用训练好的模型生成图像
-cargo run --bin image_gen -- \
-    --model-path ./models/text_to_image \
-    --prompt "a cat wearing sunglasses" \
-    --steps 50 \
+cargo run --bin image_gen -- `
+    --model-path ./models/text_to_image `
+    --prompt "a cat wearing sunglasses" `
+    --steps 50 `
     --output ./generated_cat.png
 
 # GPU 加速生成
-cargo run --bin image_gen -- \
-    --backend gpu \
-    --model-path ./models/text_to_image \
-    --prompt "a beautiful landscape with mountains" \
-    --steps 100 \
+cargo run --bin image_gen -- `
+    --backend gpu `
+    --model-path ./models/text_to_image `
+    --prompt "a beautiful landscape with mountains" `
+    --steps 100 `
     --output ./generated_landscape.png
 ```
 
@@ -363,14 +363,16 @@ cargo run --bin image_gen -- \
 
 ```bash
 # 评估生成质量
-cargo run --bin image_gen -- \
-    --model-path ./models/text_to_image/checkpoint_50 \
-    --prompt "a red rose in a vase" \
+cargo run --bin image_gen -- `
+    --model-path ./models/text_to_image `
+    --prompt "a red rose in a vase" `
+    --steps 50 `
     --output ./eval/rose_50.png
 
-cargo run --bin image_gen -- \
-    --model-path ./models/text_to_image/checkpoint_100 \
-    --prompt "a red rose in a vase" \
+cargo run --bin image_gen -- `
+    --model-path ./models/text_to_image `
+    --prompt "a red rose in a vase" `
+    --steps 100 `
     --output ./eval/rose_100.png
 ```
 
@@ -461,18 +463,18 @@ Get-Content data/train_corpus.jsonl -Head 3
 
 ```bash
 # 步骤1：创建BPE分词器并开始训练
-cargo run --release --bin train -- \
-    --sft-jsonl data/train_corpus.jsonl \
-    --artifact-dir ./tmp/large_model \
-    --use-bpe \
-    --bpe-vocab-size 30000 \
-    --num-epochs 50 \
-    --batch-size 32 \
-    --max-seq-len 256 \
-    --lr 5e-5 \
-    --backend gpu \
-    --model-size 30m \
-    --force \
+cargo run --release --bin train -- `
+    --sft-jsonl data/train_corpus.jsonl `
+    --artifact-dir ./models/large_model `
+    --use-bpe `
+    --bpe-vocab-size 30000 `
+    --num-epochs 50 `
+    --batch-size 32 `
+    --max-seq-len 256 `
+    --lr 5e-5 `
+    --backend gpu `
+    --model-size 30m `
+    --force `
     --force-tui
 
 # 步骤2：监控训练进度
@@ -483,11 +485,11 @@ cargo run --release --bin train -- \
 
 ```bash
 # 使用训练好的模型进行推理测试
-cargo run --release --bin infer -- \
-    --model-dir ./tmp/large_model \
-    --use-best \
-    --prompt "什么是深度学习？" \
-    --num-tokens 100 \
+cargo run --release --bin infer -- `
+    --model-dir ./models/large_model `
+    --use-best `
+    --prompt "什么是深度学习？" `
+    --num-tokens 100 `
     --temperature 0.7
 ```
 
@@ -515,10 +517,10 @@ cargo run --release --bin infer -- \
 **使用示例：**
 ```bash
 # 基础学习率调度器训练
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./models/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
 
 # 学习率调度器 + 大模型 + GPU
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler_large --lr-scheduler --lr-max 0.0003 --lr-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./models/sft_lr_scheduler_large --lr-scheduler --lr-max 0.0003 --lr-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu
 ```
 
 #### 1.2 固定学习率（不推荐）
@@ -689,21 +691,21 @@ BLEU（Bilingual Evaluation Understudy）用于评估文本生成质量，比较
 **自动化评估：**
 ```bash
 # 使用验证集评估
-cargo run --release --bin train -- \
-    --sft-jsonl data/train_corpus.jsonl \
-    --artifact-dir ./tmp/your_model \
-    --continue \
-    --num-epochs 1 \
+cargo run --release --bin train -- `
+    --sft-jsonl data/train_corpus.jsonl `
+    --artifact-dir ./models/your_model `
+    --continue `
+    --num-epochs 1 `
     --backend gpu
 ```
 
 **人工评估：**
 ```bash
 # 使用训练好的模型进行交互式评估
-cargo run --release --bin infer -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --chat \
+cargo run --release --bin infer -- `
+    --model-dir ./models/your_model `
+    --use-best `
+    --chat `
     --interactive
 ```
 

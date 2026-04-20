@@ -77,17 +77,17 @@ Sage 是一个使用 **Rust + Burn** 实现的大模型项目，参考了 DeepSe
 cargo run --release --bin gen_data -- --out data/sft_demo.jsonl --count 5000 --web --multimodal
 
 # 训练模型（全量微调）
-cargo run --release --bin train -- --sft-jsonl data/sft_demo.jsonl --output-dir ./tmp/model --config-path ./inference/configs/config_1B.json
+cargo run --release --bin train -- --sft-jsonl data/sft_demo.jsonl --output-dir ./models/model --config-path ./inference/configs/config_1B.json
 
 # 训练模型（LoRA 轻量化微调）
-cargo run --release --bin train -- --use-lora --lora-rank 8 --sft-jsonl data/sft_demo.jsonl --output-dir ./tmp/lora_model
+cargo run --release --bin train -- --use-lora --lora-rank 8 --sft-jsonl data/sft_demo.jsonl --output-dir ./models/lora_model
 
 # 推理生成（高级终端模式）
-cargo run --bin infer -- --model-dir ./tmp/model --use-best --terminal
+cargo run --bin infer -- --model-dir ./models/model --use-best --terminal
 
 # 多模态训练与推理
-cargo run --release --bin train -- --multimodal --sft-jsonl data/multimodal_data.jsonl
-cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
+cargo run --release --bin train -- --multimodal --sft-jsonl data/multimodal_data.jsonl --output-dir ./models/multimodal_model
+cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片" --model-dir ./models/multimodal_model
 
 # 图像生成（VAE 直接生成，快速测试）
 cargo run --bin image_gen -- --generate-only --image-size 64 --latent-dim 128
@@ -104,7 +104,7 @@ cargo run --bin image_gen -- --image-size 64 --latent-dim 128 --steps 20
 Sage/
   src/
     bin/                    # 可执行文件入口
-      train.rs              # 训练入口（LM/SFT/DPO/LoRA）
+      train.rs              # 训练入口（LM/SFT/DPO/LoRA/多模态/文生图）
       infer.rs              # 推理入口（续写/Chat/终端/多模态）
       api_server.rs         # API 服务器（兼容 OpenAI 格式）
       gen_data.rs           # 综合数据生成工具（SFT/Web/多模态）
@@ -113,11 +113,16 @@ Sage/
       export.rs             # 模型导出 (ONNX/GGUF)
       convert.rs            # 权重格式转换
       create_tokenizer.rs   # 分词器构建工具
-    core/                   # 规范化核心入口：模型定义、Tokenizer、KV Cache、多模态
+      generate.rs           # 文本生成工具
+      image_gen.rs          # 图像生成工具（VAE/Diffusion）
+    core/                   # 规范化核心入口：模型定义、Tokenizer、KV Cache、多模态、图像生成
       mod.rs                # 统一导出
       model.rs              # Transformer LM（含 TrainStep/ValidStep）
       tokenizer.rs          # 分词器（字符级 tokenizer + BPE，支持 SFT mask 编码）
       multimodal.rs         # 多模态能力（图像编码器、多模态融合层）
+      multimodal_metrics.rs # 多模态评估指标
+      image_generation.rs   # 图像生成模型（VAE/Diffusion/UNet）
+      kv_cache.rs           # KV 缓存实现
     data/                   # 规范化数据入口：数据集、Batcher、数据预处理
       mod.rs                # 统一导出
       data.rs               # Dataset/Batcher（含 SFT mask → target pad）
@@ -138,7 +143,6 @@ Sage/
       lr_scheduler.rs       # 学习率调度器
     transformer/            # 底层基础组件
       mod.rs                # Transformer 模块导出
-      kv_cache.rs           # KV 缓存实现
     quantization/           # 量化支持
       mod.rs                # 量化模块导出
       quantization.rs       # 量化框架/体积估算
@@ -151,6 +155,8 @@ Sage/
       export.rs             # 模型导出功能
     utils/                  # 辅助工具 (logger, performance, error, etc.)
     lib.rs                  # 库导出
+  configs/                  # 配置文件目录
+    config_vae_diffusion.json # VAE/Diffusion 模型配置
   scripts/                  # 脚本和工具
     evaluate_model.py       # 模型评估脚本
     convert_model.py        # 模型转换脚本
@@ -159,6 +165,8 @@ Sage/
   inference/configs/        # 模型配置文件
     config_1B.json          # 1B 参数模型配置
     config_16B.json         # 16B 参数模型配置
+  examples/                 # 示例代码
+    multimodal_quickstart.rs # 多模态快速开始示例
   docs/                     # 文档目录
     COMMANDS.md            # 命令行参数说明
     DATA_FORMAT.md         # 数据格式说明
@@ -169,6 +177,10 @@ Sage/
     ARCHITECTURE_REVIEW.md # 架构审阅与规范/取舍
     TROUBLESHOOTING.md     # 故障排查指南
     QUICK_TEST_GUIDE.md    # 全流程测试指南
+    IMAGE_GENERATION_GUIDE.md # 图像生成指南
+    MULTIMODAL_GUIDE.md    # 多模态功能指南
+    MULTIMODAL_USAGE.md    # 多模态使用指南
+    MULTIMODAL_QUICKSTART.md # 多模态快速开始
   test_scripts/             # 测试脚本
     test_concurrent.py      # Python 并发测试脚本
     test_concurrent.ps1     # PowerShell 并发测试脚本
@@ -180,7 +192,10 @@ Sage/
     test_tokenizer.rs      # 分词器测试
     test_integration.rs    # 集成测试
     test_dpo.rs            # DPO训练测试
+    test_vae.rs            # VAE模型测试
+    test_basic.rs          # 基础功能测试
   data/                     # 生成的数据文件目录
+  models/                   # 模型保存目录
   .gitignore
   Cargo.toml
   Cargo.lock

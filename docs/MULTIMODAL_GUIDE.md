@@ -193,11 +193,11 @@ ImagePreprocessingConfig {
 
 **启用多模态训练：**
 ```bash
-cargo run --release --bin train -- \
-    --multimodal \
-    --sft-jsonl data/multimodal_data.jsonl \
-    --output-dir ./tmp/mm_model \
-    --vision-out-dim 512 \
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/multimodal_data.jsonl `
+    --output-dir ./models/mm_model `
+    --vision-out-dim 512 `
     --fusion-strategy cross_attention
 ```
 
@@ -231,23 +231,23 @@ cargo run --release --bin train -- \
 
 **启用多模态推理：**
 ```bash
-cargo run --bin infer -- \
-    --model-dir ./tmp/mm_model \
-    --multimodal \
-    --image-path data/images/test.jpg \
+cargo run --bin infer -- `
+    --model-dir ./models/mm_model `
+    --multimodal `
+    --image-path data/images/test.jpg `
     --prompt "描述这张图片"
 ```
 
 **完整参数示例：**
 ```bash
-cargo run --bin infer -- \
-    --model-dir ./tmp/mm_model \
-    --use-best \
-    --multimodal \
-    --image-path data/images/test.jpg \
-    --prompt "描述这张图片" \
-    --num-tokens 100 \
-    --temperature 0.7 \
+cargo run --bin infer -- `
+    --model-dir ./models/mm_model `
+    --use-best `
+    --multimodal `
+    --image-path data/images/test.jpg `
+    --prompt "描述这张图片" `
+    --num-tokens 100 `
+    --temperature 0.7 `
     --backend gpu
 ```
 
@@ -320,18 +320,18 @@ MultimodalConfig {
 
 ```bash
 # 训练
-cargo run --release --bin train -- \
-    --multimodal \
-    --sft-jsonl data/multimodal_simple.jsonl \
-    --output-dir ./tmp/resnet_mm \
-    --vision-out-dim 512 \
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/multimodal_simple.jsonl `
+    --output-dir ./models/resnet_mm `
+    --vision-out-dim 512 `
     --fusion-strategy gated
 
 # 推理
-cargo run --bin infer -- \
-    --model-dir ./tmp/resnet_mm \
-    --multimodal \
-    --image-path data/images/sample.jpg \
+cargo run --bin infer -- `
+    --model-dir ./models/resnet_mm `
+    --multimodal `
+    --image-path data/images/sample.jpg `
     --prompt "这是什么？"
 ```
 
@@ -339,21 +339,21 @@ cargo run --bin infer -- \
 
 ```bash
 # 训练
-cargo run --release --bin train -- \
-    --multimodal \
-    --sft-jsonl data/multimodal_advanced.jsonl \
-    --output-dir ./tmp/vit_mm \
-    --vision-out-dim 512 \
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/multimodal_advanced.jsonl `
+    --output-dir ./models/vit_mm `
+    --vision-out-dim 512 `
     --fusion-strategy cross_attention
 
 # 推理
-cargo run --bin infer -- \
-    --model-dir ./tmp/vit_mm \
-    --use-best \
-    --multimodal \
-    --image-path data/images/complex.jpg \
-    --prompt "详细描述这张图片" \
-    --num-tokens 200 \
+cargo run --bin infer -- `
+    --model-dir ./models/vit_mm `
+    --use-best `
+    --multimodal `
+    --image-path data/images/complex.jpg `
+    --prompt "详细描述这张图片" `
+    --num-tokens 200 `
     --temperature 0.8
 ```
 

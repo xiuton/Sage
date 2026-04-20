@@ -93,11 +93,11 @@ cp ./tmp/your_model/tokenizer.json ./deploy/tokenizer.json
 
 ```bash
 # 使用训练好的模型进行推理测试
-cargo run --release --bin infer -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --prompt "什么是深度学习？" \
-    --num-tokens 100 \
+cargo run --release --bin infer -- `
+    --model-dir ./tmp/your_model `
+    --use-best `
+    --prompt "什么是深度学习？" `
+    --num-tokens 100 `
     --temperature 0.7
 ```
 
@@ -109,10 +109,10 @@ cargo run --release --bin infer -- \
 
 ```bash
 # 使用infer工具提供交互式推理服务
-cargo run --release --bin infer -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --chat \
+cargo run --release --bin infer -- `
+    --model-dir ./tmp/your_model `
+    --use-best `
+    --chat `
     --interactive
 ```
 
@@ -120,12 +120,12 @@ cargo run --release --bin infer -- \
 
 ```bash
 # 启用流式输出的交互式部署
-cargo run --release --bin infer -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --chat \
-    --interactive \
-    --stream \
+cargo run --release --bin infer -- `
+    --model-dir ./tmp/your_model `
+    --use-best `
+    --chat `
+    --interactive `
+    --stream `
     --stream-speed 10
 ```
 
@@ -133,11 +133,11 @@ cargo run --release --bin infer -- \
 
 ```bash
 # 使用GPU加速的交互式部署
-cargo run --release --bin infer -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --chat \
-    --interactive \
+cargo run --release --bin infer -- `
+    --model-dir ./tmp/your_model `
+    --use-best `
+    --chat `
+    --interactive `
     --backend gpu
 ```
 
@@ -158,16 +158,16 @@ Sage 支持基础的多模态能力，但请注意以下限制：
 #### 使用示例（仅推理）
 ```bash
 # 基本多模态推理
-cargo run --bin infer -- \
-    --multimodal \
-    --image-path ./test_image.jpg \
+cargo run --bin infer -- `
+    --multimodal `
+    --image-path ./test_image.jpg `
     --prompt "描述这张图片"
 
 # 多模态推理（使用GPU加速）
-cargo run --bin infer -- \
-    --multimodal \
-    --image-path ./test_image.jpg \
-    --prompt "描述这张图片" \
+cargo run --bin infer -- `
+    --multimodal `
+    --image-path ./test_image.jpg `
+    --prompt "描述这张图片" `
     --backend gpu
 ```
 
@@ -184,16 +184,16 @@ cargo run --bin infer -- \
 
 ```bash
 # 启动API服务器（默认端口8000，CPU后端）
-cargo run --release --bin api_server -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
+cargo run --release --bin api_server -- `
+    --model-dir ./tmp/your_model `
+    --use-best `
     --port 8000
 
 # 使用GPU后端加速推理
-cargo run --release --bin api_server -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --backend gpu \
+cargo run --release --bin api_server -- `
+    --model-dir ./tmp/your_model `
+    --use-best `
+    --backend gpu `
     --port 8000
 ```
 
@@ -222,7 +222,7 @@ curl http://localhost:8000/api/health
 ### 4.4 获取模型信息
 
 ```bash
-curl -X GET http://localhost:8000/api/model-info \
+curl -X GET http://localhost:8000/api/model-info `
   -H "Authorization: Bearer your-secret-key"
 ```
 
@@ -237,10 +237,10 @@ curl -X GET http://localhost:8000/api/model-info \
 docker build -t sage-api .
 
 # 运行Docker容器
-docker run -d \
-  -p 8000:8000 \
-  -v ./tmp/your_model:/app/models \
-  --name sage-api \
+docker run -d `
+  -p 8000:8000 `
+  -v ./tmp/your_model:/app/models `
+  --name sage-api `
   sage-api
 ```
 
@@ -399,9 +399,9 @@ export SAGE_API_KEY="your-secret-key"
 
 ```bash
 # 使用API密钥调用接口
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-secret-key" \
+curl -X POST http://localhost:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
   -d '{
     "model": "sage-model",
     "messages": [
@@ -437,8 +437,8 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 **请求示例：**
 ```bash
-curl -X POST http://localhost:8000/api/generate \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/api/generate `
+  -H "Content-Type: application/json" `
   -d '{"prompt": "你好，请介绍一下你自己", "max_length": 100}'
 ```
 
@@ -467,9 +467,9 @@ curl -X POST http://localhost:8000/api/generate \
 
 **请求示例（普通模式）：**
 ```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-secret-key" \
+curl -X POST http://localhost:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
   -d '{
     "model": "sage-model",
     "messages": [
@@ -485,9 +485,9 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 **请求示例（流式输出）：**
 ```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-secret-key" \
+curl -X POST http://localhost:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
   -d '{
     "model": "sage-model",
     "messages": [
@@ -539,9 +539,9 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242
 
 **请求示例：**
 ```bash
-curl -X POST http://localhost:8000/v1/batch-chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-secret-key" \
+curl -X POST http://localhost:8000/v1/batch-chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
   -d '{
     "requests": [
       {
@@ -614,9 +614,9 @@ curl -X POST http://localhost:8000/v1/batch-chat/completions \
 
 **请求示例：**
 ```bash
-curl -X POST http://localhost:8000/v1/async-chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-secret-key" \
+curl -X POST http://localhost:8000/v1/async-chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
   -d '{
     "model": "sage-model",
     "messages": [{"role": "user", "content": "什么是深度学习？"}],
@@ -638,7 +638,7 @@ curl -X POST http://localhost:8000/v1/async-chat/completions \
 
 **请求示例：**
 ```bash
-curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 \
+curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 `
   -H "Authorization: Bearer your-secret-key"
 ```
 
@@ -711,15 +711,15 @@ curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 
 
 #### 1. 列出所有模型
 ```bash
-curl -X GET http://localhost:8000/api/models \
+curl -X GET http://localhost:8000/api/models `
   -H "Authorization: Bearer your-api-key"
 ```
 
 #### 2. 加载新模型
 ```bash
-curl -X POST http://localhost:8000/api/models \
-  -H "Authorization: Bearer your-api-key" \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/api/models `
+  -H "Authorization: Bearer your-api-key" `
+  -H "Content-Type: application/json" `
   -d '{
     "model_id": "my-custom-model",
     "model_dir": "./models/custom-model"
@@ -728,27 +728,27 @@ curl -X POST http://localhost:8000/api/models \
 
 #### 3. 切换活动模型
 ```bash
-curl -X POST http://localhost:8000/api/models/my-custom-model/activate \
+curl -X POST http://localhost:8000/api/models/my-custom-model/activate `
   -H "Authorization: Bearer your-api-key"
 ```
 
 #### 4. 热更新模型
 ```bash
-curl -X POST http://localhost:8000/api/models/my-custom-model/reload \
+curl -X POST http://localhost:8000/api/models/my-custom-model/reload `
   -H "Authorization: Bearer your-api-key"
 ```
 
 #### 5. 卸载模型
 ```bash
-curl -X DELETE http://localhost:8000/api/models/my-custom-model \
+curl -X DELETE http://localhost:8000/api/models/my-custom-model `
   -H "Authorization: Bearer your-api-key"
 ```
 
 #### 6. 下载模型
 ```bash
-curl -X POST http://localhost:8000/api/models/download \
-  -H "Authorization: Bearer your-api-key" \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/api/models/download `
+  -H "Authorization: Bearer your-api-key" `
+  -H "Content-Type: application/json" `
   -d '{
     "model_id": "downloaded-model",
     "url": "https://example.com/models/model.mpk"
@@ -757,9 +757,9 @@ curl -X POST http://localhost:8000/api/models/download \
 
 #### 7. 更新模型
 ```bash
-curl -X POST http://localhost:8000/api/models/my-model/update \
-  -H "Authorization: Bearer your-api-key" \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/api/models/my-model/update `
+  -H "Authorization: Bearer your-api-key" `
+  -H "Content-Type: application/json" `
   -d '{
     "url": "https://example.com/models/model_v2.mpk"
   }'
@@ -767,19 +767,17 @@ curl -X POST http://localhost:8000/api/models/my-model/update \
 
 ### 10.2 模型导出使用
 
-#### 1. 导出为ONNX格式
-```bash
-cargo run --bin export -- \
-  --model-dir ./models/my-model \
-  --output ./exports/model.onnx \
+#### 导出为ONNX格式
+cargo run --bin export -- `
+  --model-dir ./models/my-model `
+  --output ./exports/model.onnx `
   --format onnx
 ```
 
-#### 2. 导出为GGUF格式
-```bash
-cargo run --bin export -- \
-  --model-dir ./models/my-model \
-  --output ./exports/model.gguf \
+#### 导出为GGUF格式
+cargo run --bin export -- `
+  --model-dir ./models/my-model `
+  --output ./exports/model.gguf `
   --format gguf
 ```
 
