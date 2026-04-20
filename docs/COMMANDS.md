@@ -7,16 +7,20 @@
 - `train`：训练
 - `infer`：推理/对话
 - `api_server`：API 服务器（模型管理、推理服务）
+- `gen_data`：综合数据生成工具（SFT/Web/多模态）
 - `accuracy_eval`：模型准确率评估工具
 - `benchmark`：性能基准测试工具
 - `export`：模型导出工具
-- `gen_sft`：生成 SFT jsonl 数据（测试/压测用）
+- `convert`：权重转换工具
+- `image_gen`：图像生成工具（VAE/Diffusion/文生图）
 
 相关文档：
 
 - 数据格式：`DATA_FORMAT.md`
 - 排错：`TROUBLESHOOTING.md`
 - 路线图：`PROJECT_STATUS.md`
+- 多模态详细文档：[MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)
+- 多模态使用指南：[MULTIMODAL_USAGE.md](MULTIMODAL_USAGE.md)
 
 ---
 
@@ -54,268 +58,55 @@ cargo run --release --bin train -- [OPTIONS]
 
 ### 1.2 常用示例
 
+> 说明：当前 `train` 实际参数以代码为准，核心输出参数是 `--output-dir`，学习率参数是 `--learning-rate`，模型规格通过 `--config-path` 指定；旧文档里的 `--artifact-dir`、`--lr`、`--model-size` 属历史写法。
+
 **A. 目录语料训练（续写 LM - 预训练）**
 
 ```bash
-cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --artifact-dir ./tmp/lm_cn --num-epochs 5 --max-seq-len 64
+cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./tmp/lm_cn --num-epochs 5 --max-seq-len 64
 ```
 
-**A4. 分布式训练（多GPU）**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl sft_data.jsonl --artifact-dir ./tmp/distributed_model --distributed --devices 0,1 --backend gpu --num-epochs 50 --batch-size 16 --force
-```
-
-**A5. DPO偏好对齐训练**
+**A4. 分布式训练（权重同步）**
 
 ```bash
-cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+cargo run --release --bin train -- --distributed --devices gpu:0,gpu:1 --sft-jsonl data.jsonl
 ```
+当前实现了基础的分布式权重平均与同步逻辑，支持多设备协同训练。
+
+**A5. LoRA 轻量化微调**
+
+```bash
+cargo run --release --bin train -- --use-lora --lora-rank 8 --lora-alpha 16 --sft-jsonl data.jsonl --output-dir ./tmp/lora_model
 ```
+LoRA 模式下仅训练低秩矩阵，可大幅降低显存占用。
+
+**A6. DPO偏好对齐训练**
+
+```bash
+cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --output-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
 ```
 
 **A2. 目录语料训练（限制读取大小 + 快速验证 - 预训练）**
 
 ```bash
-cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --artifact-dir ./tmp/lm_cn_quick --num-epochs 1 --max-seq-len 64 --max-bytes 10000000 --force --reset-tokenizer
+cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./tmp/lm_cn_quick --num-epochs 1 --max-seq-len 64 --max-bytes 10000000 --force --reset-tokenizer
 ```
 
 **A3. 大规模预训练（使用 GPU 和流式处理）**
 
 ```bash
-cargo run --release --bin train -- --corpus-dir ./corpus --max-bytes 1000000000 --stream --backend gpu --model-size 30m --artifact-dir ./models/large_pretrained
+cargo run --release --bin train -- --corpus-dir ./corpus --max-bytes 1000000000 --stream --backend gpu --config-path ./inference/configs/config_1B.json --output-dir ./models/large_pretrained
 ```
 
 **A4. 基本预训练（使用 CPU）**
 
 ```bash
-cargo run --release --bin train -- --corpus corpus_cn.txt --max-seq-len 256 --num-epochs 50 --batch-size 32 --lr 1e-4 --artifact-dir ./models/pretrained
+cargo run --release --bin train -- --corpus-dir ./corpus --output-dir ./tmp/lm_basic --num-epochs 1 --max-seq-len 64 --batch-size 4
 ```
-
-**B. 使用 JSONL 做 SFT（指令微调）**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
-```
-GPU 训练
-```bash
-cargo run --release --bin train -- --sft-jsonl ./data/sft_small.jsonl --artifact-dir ./tmp/sft_small --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer --backend gpu
-```
-
-如果你没有现成的数据，可以先用 `gen_sft` 生成一份：
-
-```bash
-cargo run --release --bin gen_sft -- --out sft_demo_5000.jsonl --count 5000 --seed 42
-```
-
-**B3. SFT 数据 smoke test（先跑 1000 条）**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --sft-max-records 1000 --artifact-dir ./tmp/sft_smoke --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
-```
-
-**B4. 使用 BPE 分词器训练 SFT（减少重复字符问题）**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl data/web_sft_demo.jsonl --artifact-dir ./tmp/sft_bpe --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
-```
-
-**B5. 快速开发模式（用于测试和迭代）**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_quick --quick-dev --force --reset-tokenizer
-```
-
-快速开发模式会自动设置：
-- 训练轮数：3（而非默认50）
-- 批次大小：8（而非默认32）
-- 学习率：0.001（而非默认0.0001）
-- 保留进度条显示（便于观察训练进度）
-
-**B6. 超快速开发模式 + BPE（闪电验证）**
-
-```bash
-cargo run --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_ultra_quick --ultra-quick --force --reset-tokenizer --use-bpe --bpe-vocab-size 1000 --max-seq-len 128
-```
-
-超快速开发模式会自动设置：
-- 训练轮数：1
-- 批次大小：2
-- 学习率：0.01（极高）
-- 数据限制：100条（如果未指定--sft-max-records）
-- 训练时间通常在10-30秒内完成
-
-**B7. 跳过 BPE 的快速验证**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_no_bpe_quick --quick-dev --force --reset-tokenizer
-```
-
-**B8. 使用 10M 模型训练（更大参数量）**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_10m --model-size 10m --use-bpe --bpe-vocab-size 10000 --num-epochs 30 --batch-size 16 --max-seq-len 256 --force --reset-tokenizer
-```
-
-**B9. 代码生成模式训练**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl code_data.jsonl --artifact-dir ./tmp/sft_code --training-mode code --use-bpe --bpe-vocab-size 8000 --num-epochs 50 --batch-size 32 --max-seq-len 512 --force --reset-tokenizer
-```
-
-**B10. 数学推理模式训练**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl math_data.jsonl --artifact-dir ./tmp/sft_math --training-mode math --use-bpe --bpe-vocab-size 5000 --num-epochs 50 --batch-size 32 --max-seq-len 256 --force --reset-tokenizer
-```
-
-**B11. 使用学习率调度器训练（推荐）**
-
-```bash
-# 基础学习率调度器训练（Cosine Annealing + Warmup）
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu --force --reset-tokenizer
-
-# 学习率调度器 + GPU + 大模型
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler_large --lr-scheduler --lr-max 0.0003 --lr-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu --force --reset-tokenizer
-
-# 学习率调度器说明：
-# - Warmup阶段（前 warmup-steps）：学习率从 0 线性增加到 lr-max
-# - Cosine阶段（之后）：学习率从 lr-max 余弦衰减到 lr-min
-# - 推荐设置：warmup-steps 为 total-steps 的 5%-10%
-# - 学习率调度器能显著提升训练稳定性和收敛效果
-```
-
-**B12. GPU 后端训练**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_gpu --backend gpu --use-bpe --num-epochs 20 --force --reset-tokenizer
-```
-
-**B13. 多模态训练**
-
-```bash
-# 基本多模态训练
-cargo run --bin train -- --multimodal --vision-out-dim 512 --fusion-strategy add --ultra-quick --sft-sample
-
-# 自定义多模态配置
-cargo run --bin train -- --multimodal --vision-out-dim 768 --fusion-strategy concatenate --num-epochs 5 --batch-size 16 --backend cpu --artifact-dir ./tmp/test_multimodal_custom --no-progress
-```
-
-**B2. JSONL 的 schema 示例**
-
-prompt/response：
-
-```json
-{"prompt":"你是谁？","response":"我是一个用 Rust 训练出来的小模型。"}
-```
-
-messages（多轮也可）：
-
-```json
-{"messages":[
-  {"role":"user","content":"你是谁？"},
-  {"role":"assistant","content":"我是一个用 Rust 训练出来的小模型。"}
-]}
-```
-
-**C. 从已有模型继续训练**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --continue --num-epochs 1
-```
-
-**D. 从 checkpoint 继续训练**
-
-```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --resume-epoch 3 --num-epochs 2
-```
-
-> 注意：当前继续训练仅恢复“模型权重”，不会恢复优化器状态。
->
-> `--force` / `--continue` / `--resume-epoch` 同时出现时：会优先走“继续训练/恢复训练”的逻辑。
-
-### 1.3 参数说明（来自 `train --help`）
-
-`cargo run --bin train -- --help` 输出的参数如下（含补充解释）：
-
-- `--corpus <CORPUS>`：单文件语料路径（不传时默认 `corpus_cn.txt`）。用于语言模型训练，文件内容会被按行分割处理。
-- `--corpus-dir <CORPUS_DIR>`：语料目录（递归收集 `.txt`）。会自动遍历目录下的所有 .txt 文件，按文件名排序后拼接成训练数据。
-- `--max-bytes <MAX_BYTES>`：最大读取字节数（默认 `50000000`，传 `0` 表示不限制）。
-- `--stream`：启用流式读取与磁盘 token 缓存（推荐用于大语料/大 JSONL，避免一次性读入内存）。
-- `--stream-direct`：不落盘边读边训（仅 SFT；需同时启用 `--stream`）。
-- `--sft-jsonl <SFT_JSONL>`：SFT 数据 jsonl 文件。每行一条 JSON 记录，支持 `{"prompt":"...","response":"..."}` 或 `{"messages":[...], "id": ...}` 格式。
-- `--sft-sample`：使用内置 prompt/response 样例数据（约 100 条）。用于快速测试 SFT 训练流程。
-- `--sft-sample-messages`：使用内置 messages 样例数据（约 100 条）。用于测试多轮对话格式的 SFT 训练。
-- `--sft-max-records <SFT_MAX_RECORDS>`：最多读取多少条 SFT 记录（默认 `0` 不限制）。
-- `--fast`：启用高速训练模式（更大batch、更高num_workers、关闭TUI）。在数据量大、CPU多核场景下可显著缩短训练时间。
-- `--num-workers <NUM_WORKERS>`：数据加载线程数（默认 `4`；`--fast` 设为最少8）。
-- `--artifact-dir <ARTIFACT_DIR>`：输出目录（默认 `./tmp/sage_model_formal`）。存放训练产物，包括模型权重、tokenizer、配置和checkpoint。
-- `--num-epochs <NUM_EPOCHS>`：训练 epoch（默认 `50`）。完整数据集被训练的轮数。更多的 epochs 可以提高模型性能，但也增加训练时间。建议监控验证损失来确定合适的 epoch 数。
-- `--batch-size <BATCH_SIZE>`：batch size（默认 `32`）。控制每次训练迭代处理的样本数量。较大的 batch-size（32-64）可以提高训练稳定性，减少梯度噪声，但需要更多内存；较小的 batch-size（8-16）可以节省内存，但可能导致训练不稳定。建议根据你的 GPU/CPU 内存情况选择合适的值。
-- `--lr <LR>`：学习率（默认 `0.0001`）。控制模型权重更新的步长，过大会导致训练不稳定，过小会使训练过慢收敛。
-- `--max-seq-len <MAX_SEQ_LEN>`：序列长度（默认 `256`）。限制输入序列的最大长度，过长会增加内存使用，过短可能丢失上下文信息。
-- `--use-bpe`：使用 BPE 分词器替代字符级分词器（推荐用于减少重复字符问题）。
-- `--bpe-vocab-size &lt;BPE_VOCAB_SIZE&gt;`：BPE 词汇表大小（默认 `5000`，仅在启用 `--use-bpe` 时有效）。
-- `--lr-scheduler`：启用学习率调度器（Cosine Annealing + Warmup），需要同时设置 `--lr-max`、`--lr-min`、`--warmup-steps`、`--total-steps`。
-- `--lr-max &lt;LR_MAX&gt;`：学习率调度器的最大学习率（默认 `0.0001`）。
-- `--lr-min &lt;LR_MIN&gt;`：学习率调度器的最小学习率（默认 `0.00001`）。
-- `--warmup-steps &lt;WARMUP_STEPS&gt;`：学习率预热步数（默认 `1000`）。
-- `--total-steps &lt;TOTAL_STEPS&gt;`：学习率调度总步数（默认 `10000`）。
-- `--force`：即使输出目录已有模型也强制重新训练/覆盖。会删除现有的模型文件。
-- `--continue`：从 `<artifact-dir>/model.mpk` 加载权重继续训练。用于增量训练或微调。
-- `--resume-epoch <RESUME_EPOCH>`：从 `<artifact-dir>/checkpoint/model-<epoch>.mpk` 加载权重继续训练。用于从特定checkpoint恢复训练。
-- `--reset-tokenizer`：忽略已有 `tokenizer.json`，从当前语料重新构建词表。当语料发生重大变化时使用。
-- `--quick-dev`：启用快速开发模式（3轮训练，小批量8，更高学习率1e-3）。用于快速迭代和测试训练流程。
-- `--ultra-quick`：启用超快速开发模式（1轮训练，极小批量2，极高学习率1e-2，自动限制数据为100条）。用于闪电验证代码修改和BPE调参，训练通常在10-30秒内完成。
-- `--no-progress`：禁用进度条和TUI显示，输出更清洁的日志。适合重定向输出或CI/CD环境。
-- `--tui`：强制启用TUI进度显示（注意：在Windows PowerShell中可能不工作，建议使用Windows Terminal或VS Code终端）
-- `--backend <BACKEND>`：训练后端选择，可选值为 `cpu` 或 `gpu`（默认 `cpu`）。GPU后端需要支持WGPU的显卡。
-- `--model-size <MODEL_SIZE>`：模型大小配置，可选值为 `default`（约1M参数）、`10m`（约10M参数）、`30m`（约30M参数）、`100m`（约0.1B参数）、`1b`（约1B参数）、`3b`（约3B参数）、`671b`（约671B参数）。默认 `default`。更大的模型需要更多内存和训练时间，但可能获得更好的效果。
-- `--training-mode <TRAINING_MODE>`：训练模式，可选值为 `general`（通用对话）、`code`（代码生成）、`math`（数学推理）。默认 `general`。不同模式会使用不同的对话模板优化特定场景。
-- `--force-tui`：强制启用TUI进度显示，即使在可能不支持的环境中。注意：在某些终端中可能导致显示问题。
-- `--distributed`：启用分布式训练模式。使用多GPU进行数据并行训练。
-- `--devices <DEVICES>`：指定使用的GPU设备ID列表（逗号分隔，如 `0,1,2`）。仅在启用 `--distributed` 时有效。
-- `--dpo`：启用DPO偏好对齐训练模式。使用偏好数据进行训练。
-- `--dpo-data <DPO_DATA>`：DPO训练数据文件路径。每行包含 `prompt`、`chosen`、`rejected` 字段。
-- `--dpo-beta <DPO_BETA>`：DPO损失的beta参数（默认 `0.1`）。控制偏好对齐的强度。
-- `--dpo-kl-weight <DPO_KL_WEIGHT>`：DPO KL散度权重参数（默认 `0.1`）。控制KL正则化的强度。
-- `--multimodal`：启用多模态训练。
-- `--vision-out-dim <VISION_OUT_DIM>`：视觉编码器输出维度（默认 `512`）。
-- `--fusion-strategy <FUSION_STRATEGY>`：融合策略（add/concatenate/attention，默认 `add`）。
-
-补充说明：
-
-- `--corpus-dir` 会递归读取所有 `.txt` 并按路径排序拼接；每个文件后追加换行。
-- TUI进度条在Windows PowerShell中可能无法正常显示，这是由于终端兼容性问题。建议使用Windows Terminal或VS Code终端以获得更好的TUI体验。
-- `--max-bytes` 同时作用于 `--corpus` / `--corpus-dir` / `--sft-jsonl`（用于限制读入大小）。
-- `--batch-size` 控制每次训练迭代处理的样本数量。较大的 batch-size（32-64）可以提高训练稳定性，减少梯度噪声，但需要更多内存；较小的 batch-size（8-16）可以节省内存，但可能导致训练不稳定。建议根据你的 GPU/CPU 内存情况选择合适的值。
-- `--use-bpe` 启用 BPE 分词器，能显著减少高频字符的重复问题（如中文中的"解"字符重复），建议在遇到重复生成问题时使用。
-- `--bpe-vocab-size` 控制 BPE 词汇表大小，较大的词汇表能提供更好的 token 多样性，但会增加模型参数量。
-- 语料变化较大时建议 `--reset-tokenizer`，否则新字符会大量映射到 `unk`，影响训练质量。
-- 训练与推理尽量使用同一个 `artifact-dir` 的 `tokenizer.json`，否则 token id 对不上，输出会严重跑偏。
-
-### 1.4 输出产物说明
-
-训练成功后，`artifact-dir` 内会出现：
-
-- `config.json`：训练配置（包含 `model` 超参）
-- `tokenizer.json`：Tokenizer 词表
-- `model.mpk`：最终权重
-- `checkpoint/`：epoch checkpoint（`model-<epoch>.mpk` 等）
-- `best_model.mpk`：根据 valid loss 选出来的最佳权重（如果能找到 valid 指标）
-
-当启用 `--stream` 时，`artifact-dir` 还会包含：
-
-- `cache/tokens.bin`：u32 小端序 token id 序列
-- `cache/mask.bin`：u8 mask 序列（SFT：只学习助手回复；LM：全为 1）
-
-当启用 `--stream --stream-direct` 时：
-
-- 不会生成 `cache/` 中间产物（直接流式训练）
 
 ---
 
-## 2) infer（推理 / 对话）
+## 2) infer（推理/对话）
 
 运行：
 
@@ -323,215 +114,209 @@ cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./
 cargo run --bin infer -- [OPTIONS]
 ```
 
-### 2.1 常用示例
+### 2.1 基础推理模式
 
-**A. 单次生成（续写）**
+**A. 基础文本生成**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --prompt "天地玄黄" -n 80
+cargo run --bin infer -- --prompt "你好，请介绍一下自己" --num-tokens 100
 ```
 
-**A2. 单次生成（控制可复现）**
+**B. 使用特定模型**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --prompt "天地玄黄" -n 80 -s 42
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --prompt "写一首关于春天的诗"
 ```
 
-**B. Chat 模式（助手回复）**
+**C. GPU 加速推理**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "你是谁？" -n 80
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --prompt "解释量子计算" --backend gpu
 ```
 
-**B2. Chat 模式（更干净的回复）**
+### 2.2 交互式对话
+
+**A. 交互模式**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "给我学习 Rust 的建议" \
-  -n 120 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.8 -s 42
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --interactive
 ```
 
-**C. 交互式对话**
+**B. 终端模式（推荐）**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --interactive
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --terminal
 ```
 
-**D. 采样参数推荐（减少标点、减少重复）**
+**C. Chat 模式**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "给我学习 Rust 的建议" -n 120 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.6 -s 42
+cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --chat --prompt "你好"
 ```
 
-**E. context window（避免超长输入/生成导致越界）**
+### 2.3 采样参数调优
+
+**A. 低温度（确定性输出）**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --prompt "天地玄黄" --context-len 64 -n 80
+cargo run --bin infer -- --prompt "1+1等于几" --temperature 0.1 --top-p 0.9
 ```
 
-如果 `context-len` 超过训练时 `max_seq_len`，程序会自动截断到 `max_seq_len` 并提示。
-
-**F. 使用自定义停止序列**
+**B. 高温度（创造性输出）**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "介绍一下Rust语言" -n 200 --stop-sequence "总结" --stop-sequence "END"
+cargo run --bin infer -- --prompt "写一个科幻故事开头" --temperature 1.2 --top-p 0.95
 ```
 
-**G. 禁用 stop-on-user（允许模型生成用户输入）**
+**C. 避免重复**
 
 ```bash
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "模拟一段对话" -n 200 --stop-on-user false
-```
-
-**H. 流式输出（逐字显示生成内容）**
-
-```bash
-# 标准流式输出（默认速度）
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "你好，请介绍一下你自己" --stream
-
-# 慢速流式输出（每秒10个token）
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "你好，请介绍一下你自己" --stream --stream-speed 10
-
-# 快速流式输出（每秒100个token）
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "你好，请介绍一下你自己" --stream --stream-speed 100
-
-# 交互式模式流式输出
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --interactive --stream
-
-# GPU 加速流式输出（推荐用于提升推理速度）
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "你好，请介绍一下你自己" --stream --backend gpu
-
-# 完整参数组合示例（推荐）
-cargo run --bin infer -- --model-dir ./tmp/full_flow_model --use-best --chat --prompt "你好，请介绍一下你自己" --stream --stream-speed 10 --backend gpu -n 50
-
-# 自定义采样参数的流式输出
-cargo run --bin infer -- --model-dir ./tmp/sft_cn --use-best --chat --prompt "请介绍一下 Rust 语言" --stream --stream-speed 20 --backend gpu -n 100 -t 0.7 -k 20 -p 0.9 -r 1.1 --punctuation-penalty 1.5
-
-# 多模态推理 模型权重文件默认：./tmp/sage_model_formal/model.mpk 可选路径为 best_model.mpk 或 model.mpk（如果使用 --use-best 但 first 失败会回退）。
-cargo run --bin infer -- --multimodal --image-path ./data/images/image.png --prompt "描述这张图片"
-
-# 多模态推理（使用 GPU 加速）
-cargo run --bin infer -- --multimodal --image-path ./data/images/image.png --prompt "描述这张图片" --backend gpu
-
-# 多模态推理 指定模型
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --multimodal --image-path ./data/images/image.png --prompt "描述这张图片"
-
-# 多模态推理（使用 GPU 加速） 指定模型
-cargo run --bin infer -- --model-dir ./tmp/sage_model_formal --use-best --multimodal --image-path ./data/images/image.png --prompt "描述这张图片" --backend gpu
-```
-
-### 2.2 参数说明（来自 `infer --help`）
-
-- `--prompt <PROMPT>`：输入提示词（单次模式必需；交互模式下从 stdin 输入）。
-- `-n, --num-tokens <NUM_TOKENS>`：生成 token 数（默认 `50`）。
-- `-t, --temperature <TEMPERATURE>`：温度（默认 `0.8`，越大越随机）。
-- `-k, --top-k <TOP_K>`：Top-K（默认 `10`）。
-- `-p, --top-p <TOP_P>`：Top-P（默认 `0.9`）。
-- `-r, --repetition-penalty <REPETITION_PENALTY>`：重复惩罚（默认 `1.1`，越大越抑制重复）。
-- `--punctuation-penalty <PUNCTUATION_PENALTY>`：标点惩罚（默认 `1.3`，越大越抑制标点/连续标点）。
-- `-s, --seed <SEED>`：随机种子（可复现）。
-- `--model-dir <MODEL_DIR>`：模型目录（默认 `./tmp/sage_model_formal`）。
-- `--use-best`：优先加载 `best_model.mpk`（若不存在则回退到 `model.mpk`）。
-- `--context-len <CONTEXT_LEN>`：上下文窗口长度（默认 `0`=自动使用 `model.max_seq_len`；如果传得比 `max_seq_len` 大，会自动截断避免越界）。
-- `-i, --interactive`：交互模式。
-- `--chat`：chat 模式（使用 `用户/助手` 模板生成，并从输出中提取"助手回复"部分）。
-- `--stop-on-user`：遇到 `<user>` 标签时停止生成（默认 `true`）。适用于 chat 模式，防止模型生成下一轮用户输入。
-- `--stop-sequence <STOP_SEQUENCE>`：自定义停止序列（可多次使用）。当生成内容包含指定序列时立即停止。例如：`--stop-sequence "用户：" --stop-sequence "END"`。
-- `--stream`：启用流式输出（逐字/逐词输出）。
-- `--stream-speed <STREAM_SPEED>`：流式输出速度（每秒 token 数，默认 `50`）。
-- `--backend <BACKEND>`：推理后端选择，可选值为 `cpu` 或 `gpu`（默认 `cpu`）。
-- `--multimodal`：启用多模态推理。
-- `--image-path <IMAGE_PATH>`：图像文件路径（用于多模态推理）。
-
-补充说明：
-- `-t, --temperature`：控制生成随机性。值越大（>1.0）生成更随机/创造性，值越小（<1.0）生成更保守/确定性。0.7-0.9 适合大多数应用。
-- `-k, --top-k`：只从概率最高的 K 个 token 中采样。较小的值（5-10）使输出更保守，较大的值（20-50）增加多样性。
-- `-p, --top-p`：核采样，只从累积概率达到 P 的 token 中采样。与 top-k 结合使用效果更好，通常设为 0.8-0.95。
-- `-r, --repetition-penalty`：对已生成的 token 施加惩罚，减少重复。1.0 表示无惩罚，>1.0 会抑制重复，1.1-1.3 是常用范围。
-- `--punctuation-penalty`：专门对标点符号施加额外惩罚，减少"标点雨"问题。1.0 表示无惩罚，>1.0 会抑制标点，1.3-2.0 是常用范围。
-- `-s, --seed`：设置随机种子保证结果可重现。用于调试或生成一致的结果。- `--chat` 会把输入包成 `用户：<prompt>\n助手：`，然后从生成结果里提取最后一次出现的“助手：”之后的内容作为回复。
-- 交互模式 `--interactive` 下会维护一个简单的文本 history（多轮），并受到 `context-len` 截断影响（只取最后 N 个 token）。
-- 若 `--use-best` 但目录中没有 `best_model.mpk`，会自动回退到 `model.mpk`。
-- `--stream`：启用流式输出模式，逐字/逐词实时显示生成内容，提供更流畅的交互体验。
-- `--stream-speed`：控制流式输出的速度，单位为每秒输出的 token 数。值越大输出速度越快，值为 0 时不限制速度（最快）。
-- `--backend`：选择推理后端。使用 `gpu` 可以大幅提升推理速度，尤其是对于较大的模型。需要支持 WGPU 的显卡。
-
----
-
-## 3) gen_sft（生成 SFT JSONL）
-
-运行：
-
-```bash
-cargo run --release --bin gen_sft -- --out <path> --count <n> --seed <seed>
-```
-
-这是一个用于快速生成**可训练** SFT 数据的工具，生成格式为 `{"messages":[...], "id": ...}`，与 `train --sft-jsonl` 兼容。
-
-参数：
-
-- `--out <path>`：输出文件（默认 `data/sft_demo.jsonl`）
-- `--count <n>`：生成条数（默认 `5000`）
-- `--seed <seed>`：随机种子（默认 `42`）
-
-建议用法：
-
-- 先生成小文件做 smoke test（例如 200 条）
-- 确认训练/推理闭环后再生成 5000/20000 条
-
-示例：
-
-```bash
-cargo run --release --bin gen_sft -- --out sft_demo_20000.jsonl --count 20000 --seed 123
+cargo run --bin infer -- --prompt "详细描述..." --repetition-penalty 1.5 --punctuation-penalty 1.8
 ```
 
 ---
 
-## 4) gen_web_sft（生成真实问答语料）
+## 3) image_gen（图像生成）⭐ 新功能
 
 运行：
 
 ```bash
-cargo run --release --features=web --bin gen_web_sft -- [OPTIONS]
+cargo run --bin image_gen -- [OPTIONS]
 ```
 
-⚠️ **重要提示**：gen_web_sft 需要启用 `web` feature，否则会报错："target `gen_web_sft` in package `sage` requires the features: `web`"
+### 3.1 VAE 直接生成模式（快速测试）
 
-这是一个用于生成真实问答语料的工具，支持从本地数据和网络API获取数据，生成格式为 `{"messages":[...], "id": ..., "domain": "..."}`，与 `train --sft-jsonl` 兼容。
+使用 VAE 模型直接生成图像，无需 Diffusion 采样过程，适合快速测试：
 
-参数：
-
-- `--out <path>`：输出文件（默认 `data/web_sft_demo.jsonl`）
-- `--count <n>`：生成条数（默认 `100`）
-- `--seed <seed>`：随机种子（默认 `42`）
-- `--web`：启用网络数据获取
-- `--web-only`：仅使用网络数据（不包含本地数据）
-
-环境变量（可选）：
-
-- `STACKEXCHANGE_API_KEY`：Stack Exchange API密钥（用于获取Stack Overflow技术问答）
-- `GITHUB_TOKEN`：GitHub个人访问令牌（用于获取热门开源项目信息）
-
-支持的数据源：
-
-- **本地预设数据**：内置高质量问答对（人工智能、编程语言、Web开发等）
-- **Stack Exchange API**：Stack Overflow技术问答（编程、开发相关问题）
-- **GitHub API**：热门开源项目信息（Rust项目介绍、描述）
-- **公开技术知识库**：技术概念解释（容器、DevOps、架构设计等）
-
-示例：
+**A. 基础 VAE 生成**
 
 ```bash
-# 生成真实问答语料（本地数据）
-cargo run --release --features=web --bin gen_web_sft -- --out real_qa.jsonl --count 500 --seed 42
+cargo run --bin image_gen -- --generate-only --image-size 64 --latent-dim 128
+```
 
-# 生成真实问答语料（本地+网络数据）
-cargo run --release --features=web --bin gen_web_sft -- --out real_qa_web.jsonl --count 500 --web --seed 42
+生成的图像会自动保存到 `assets/` 目录，文件名使用哈希值确保唯一，例如：
+- `image_050b88e85af48aa0.png`
 
-# 仅使用网络数据
-cargo run --release --features=web --bin gen_web_sft -- --out web_only.jsonl --count 500 --web --web-only --seed 42
+**B. 指定输出路径**
 
-# 完整参数示例
-cargo run --release --features=web --bin gen_web_sft -- --out multi_api_test.jsonl --count 50 --web --seed 123
+```bash
+cargo run --bin image_gen -- --generate-only --output ./my_image.png --image-size 64
+```
+
+### 3.2 Diffusion 完整生成模式
+
+使用完整的 Diffusion 模型进行去噪采样，生成质量更高：
+
+**A. 基础 Diffusion 生成**
+
+```bash
+cargo run --bin image_gen -- --image-size 64 --latent-dim 128 --steps 10
+```
+
+**B. 高质量生成（更多采样步数）**
+
+```bash
+cargo run --bin image_gen -- --image-size 64 --latent-dim 128 --steps 50
+```
+
+### 3.3 文生图模式（Text-to-Image）⭐
+
+使用文本提示词生成对应图像，支持 GPU 加速：
+
+**A. 基础文生图**
+
+```bash
+cargo run --bin image_gen -- --prompt "a beautiful landscape" --image-size 64 --steps 20
+```
+
+**B. GPU 加速文生图**
+
+```bash
+cargo run --bin image_gen -- --backend gpu --prompt "a sunset over the ocean" --image-size 64 --steps 30
+```
+
+**C. 自定义主题生成**
+
+```bash
+cargo run --bin image_gen -- --backend gpu --prompt "a red rose in the rain" --image-size 64 --steps 50 --output ./my_rose.png
+```
+
+### 3.4 图像生成参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--generate-only` | false | VAE 直接生成模式（跳过 Diffusion） |
+| `--output` | ./assets/generated_image.png | 输出图像路径 |
+| `--steps` | 50 | Diffusion 采样步数 |
+| `--image-size` | 64 | 输出图像尺寸（宽=高） |
+| `--latent-dim` | 128 | 潜在空间维度 |
+| `--backend` | cpu | 后端类型：`cpu` 或 `gpu` |
+| `--prompt` | "a beautiful landscape" | 文生图提示词 |
+| `--seed` | None | 随机种子（可选） |
+
+### 3.5 采样步数建议
+
+| 用途 | 推荐步数 | 生成时间 | 质量 |
+|------|----------|----------|------|
+| 快速预览 | 5-10 | ~1秒 | 中等 |
+| 标准质量 | 20-50 | ~3秒 | 良好 |
+| 高质量 | 50-100 | ~5秒 | 优秀 |
+
+### 3.6 完整示例
+
+```bash
+# 示例 1：VAE 快速生成（CPU）
+cargo run --bin image_gen -- --generate-only --image-size 64 --latent-dim 128
+
+# 示例 2：VAE 快速生成（GPU 加速）
+cargo run --bin image_gen -- --backend gpu --generate-only --image-size 64 --latent-dim 128
+
+# 示例 3：Diffusion 标准生成（GPU 加速）
+cargo run --bin image_gen -- --backend gpu --image-size 64 --latent-dim 128 --steps 20
+
+# 示例 4：高质量 Diffusion 生成（GPU 加速）
+cargo run --bin image_gen -- --backend gpu --image-size 64 --latent-dim 128 --steps 50
+
+# 示例 5：文生图 - 风景画
+cargo run --bin image_gen -- --backend gpu --prompt "a beautiful landscape with mountains and rivers" --image-size 64 --steps 30
+
+# 示例 6：文生图 - 动物
+cargo run --bin image_gen -- --backend gpu --prompt "a white cat sitting on a windowsill" --image-size 64 --steps 50
+
+# 示例 7：文生图 - 自定义输出路径
+cargo run --bin image_gen -- --backend gpu --prompt "a starry night sky" --output ./my_night_sky.png --steps 30
+```
+
+> **提示**：不同的提示词会产生不同的图像特征。提示词会被编码后作为扩散模型的 Conditioning 信息，引导生成过程。
+
+**详细文档：** 更多图像生成功能说明请参考 [MULTIMODAL_USAGE.md](MULTIMODAL_USAGE.md)
+
+---
+
+## 4) gen_data（数据生成）
+
+运行：
+
+```bash
+cargo run --release --bin gen_data -- [OPTIONS]
+```
+
+### 4.1 生成 SFT 训练数据
+
+```bash
+cargo run --release --bin gen_data -- --out data/sft_demo.jsonl --count 1000
+```
+
+### 4.2 生成多模态数据
+
+```bash
+cargo run --release --bin gen_data -- --out data/multimodal_data.jsonl --count 500 --multimodal --image-dir ./images
+```
+
+### 4.3 生成 Web 问答数据
+
+```bash
+cargo run --release --bin gen_data -- --out data/web_qa.jsonl --count 200 --web
 ```
 
 ---
@@ -541,197 +326,133 @@ cargo run --release --features=web --bin gen_web_sft -- --out multi_api_test.jso
 运行：
 
 ```bash
-cargo run --release --features=api --bin api_server -- [OPTIONS]
+cargo run --release --bin api_server -- [OPTIONS]
 ```
 
-⚠️ **重要提示**：api_server 需要启用 `api` feature，否则会报错："target `api_server` in package `sage` requires the features: `api`"
-
-API 服务器提供 HTTP REST API 接口，支持模型管理和推理服务。
+### 5.1 启动 API 服务器
 
 ```bash
-cargo run --release --features=api --bin api_server -- --port 8000 --model-dir ./tmp/test --log-level info
+cargo run --release --bin api_server -- --port 8080 --model-dir ./tmp/sage_model_formal
 ```
 
-### 5.1 参数说明
-
-- `--port <PORT>`：服务器端口（默认 `8000`）
-- `--host <HOST>`：服务器地址（默认 `0.0.0.0`）
-- `--model-dir <MODEL_DIR>`：模型存储目录（默认 `./models`）
-- `--log-level <LOG_LEVEL>`：日志级别（可选：`debug`, `info`, `warn`, `error`，默认 `info`）
-
-### 5.2 API 接口列表
-
-#### 推理接口
-- `POST /api/generate` - 简单文本生成
-- `POST /v1/chat/completions` - Chat Completion（OpenAI标准）
-- `POST /v1/batch-chat/completions` - 批量Chat Completion
-- `POST /v1/async-chat/completions` - 异步Chat Completion
-- `GET /api/task/:task_id` - 查询任务状态
-
-#### 模型管理接口
-- `GET /api/models` - 列出所有已加载模型
-- `POST /api/models` - 加载新模型
-- `DELETE /api/models/:model_id` - 卸载模型
-- `POST /api/models/:model_id/activate` - 切换活动模型
-- `POST /api/models/:model_id/reload` - 热更新模型
-
-#### 工具接口
-- `GET /api/health` - 健康检查
-- `GET /api/model-info` - 获取模型信息
-- `GET /api/performance` - 获取性能监控信息
-
-### 5.3 使用示例
+### 5.2 API 调用示例
 
 ```bash
-# 启动 API 服务器（必须添加 --features=api）
-cargo run --release --features=api --bin api_server -- --port 8080 --model-dir ./my_models
+# 文本生成
+curl -X POST http://localhost:8080/generate `
+  -H "Content-Type: application/json" `
+  -d '{"prompt": "你好", "max_tokens": 100}'
 
-# 使用 curl 测试 API
-curl http://localhost:8080/api/health
-curl -X POST http://localhost:8080/api/models -H "Content-Type: application/json" -d '{"model_id":"my_model","model_dir":"./models/my_model"}'
-```
-
-### 5.4 /api/generate 接口详解
-
-**请求格式**：
-```bash
-curl -X POST http://localhost:8080/api/generate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"你好，请介绍一下你自己","max_length":100}'
-```
-
-**请求参数**：
-- `prompt` (string, 必填)：用户输入文本
-- `max_length` (integer, 可选)：最大生成长度（默认 50）
-- `temperature` (float, 可选)：温度参数（默认 0.8）
-- `top_p` (float, 可选)：top-p 采样参数（默认 0.9）
-- `top_k` (integer, 可选)：top-k 采样参数（默认 10）
-
-**响应格式**：
-```json
-{
-  "prompt": "你好，请介绍一下你自己",
-  "text": "我叫Sage，是一个AI助手..."
-}
-```
-
-**响应字段说明**：
-- `prompt`：用户输入的原始问题
-- `text`：模型生成的助手回复
-
----
-
-## 6) accuracy_eval（模型准确率评估工具）
-
-运行：
-
-```bash
-cargo run --release --bin accuracy_eval -- [OPTIONS]
-```
-
-用于评估模型在测试数据集上的准确率和性能指标。
-
-### 6.1 参数说明
-
-- `--model-dir <MODEL_DIR>`：模型目录路径（必填）
-- `--test-data <TEST_DATA>`：测试数据文件路径（必填）
-- `--batch-size <BATCH_SIZE>`：批处理大小（默认 `32`）
-- `--use-best`：优先加载 `best_model.mpk`
-- `--metrics <METRICS>`：评估指标（可选：`accuracy`, `perplexity`, `all`，默认 `all`）
-
-### 6.2 使用示例
-
-```bash
-# 评估模型准确率和困惑度
-cargo run --release --bin accuracy_eval -- --model-dir ./models/my_model --test-data test_data.jsonl --metrics all
-
-# 使用最优模型评估
-cargo run --release --bin accuracy_eval -- --model-dir ./models/my_model --test-data test_data.jsonl --use-best --metrics accuracy
+# 多模态推理
+curl -X POST http://localhost:8080/multimodal `
+  -H "Content-Type: application/json" `
+  -d '{"prompt": "描述这张图片", "image_path": "./test.jpg"}'
 ```
 
 ---
 
-## 7) benchmark（性能基准测试工具）
+## 多模态训练与推理
 
-运行：
-
-```bash
-cargo run --release --bin benchmark -- [OPTIONS]
-```
-
-用于测试模型在不同硬件和配置下的性能表现。
-
-### 7.1 参数说明
-
-- `--model-dir <MODEL_DIR>`：模型目录路径（必填）
-- `--prompt <PROMPT>`：测试提示词（默认 `"测试性能基准"`）
-- `--max-length <MAX_LENGTH>`：最大生成长度（默认 `100`）
-- `--iterations <ITERATIONS>`：测试迭代次数（默认 `10`）
-- `--backend <BACKEND>`：后端（`cpu` 或 `gpu`，默认 `cpu`）
-
-### 7.2 使用示例
+### 多模态训练示例
 
 ```bash
-# CPU 性能测试
-cargo run --release --bin benchmark -- --model-dir ./models/my_model --prompt "性能测试" --max-length 200 --iterations 20
+# ResNet 编码器 + 门控融合
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/multimodal_data.jsonl `
+    --output-dir ./tmp/mm_resnet_gated `
+    --vision-out-dim 512 `
+    --fusion-strategy gated
 
-# GPU 性能测试
-cargo run --release --bin benchmark -- --model-dir ./models/my_model --backend gpu --iterations 50
+# Vision Transformer 编码器 + 跨模态注意力融合
+cargo run --release --bin train -- `
+    --multimodal `
+    --sft-jsonl data/multimodal_data.jsonl `
+    --output-dir ./tmp/mm_vit_cross `
+    --vision-out-dim 512 `
+    --fusion-strategy cross_attention
 ```
+
+### 多模态推理示例
+
+```bash
+# 基础多模态推理
+cargo run --bin infer -- `
+    --model-dir ./tmp/mm_resnet_gated `
+    --multimodal `
+    --image-path ./data/images/test.jpg `
+    --prompt "描述这张图片"
+
+# 使用最佳模型 + GPU + 详细参数
+cargo run --bin infer -- `
+    --model-dir ./tmp/mm_vit_cross `
+    --use-best `
+    --multimodal `
+    --image-path ./data/images/sample.jpg `
+    --prompt "详细描述这张图片，包括场景、物体和颜色" `
+    --num-tokens 150 `
+    --temperature 0.7 `
+    --backend gpu
+
+# 交互式多模态对话
+cargo run --bin infer -- `
+    --model-dir ./tmp/mm_model `
+    --use-best `
+    --multimodal `
+    --image-path ./data/images/demo.jpg `
+    --chat `
+    --interactive
+```
+
+**详细文档：** 更多多模态功能说明请参考 [MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)
 
 ---
 
-## 8) export（模型导出工具）
+## 参数速查表
 
-运行：
+### train 参数
 
-```bash
-cargo run --release --bin export -- [OPTIONS]
-```
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `--corpus-dir` | 语料目录 | `--corpus-dir ./data` |
+| `--sft-jsonl` | SFT数据文件 | `--sft-jsonl train.jsonl` |
+| `--output-dir` | 输出目录 | `--output-dir ./output` |
+| `--num-epochs` | 训练轮数 | `--num-epochs 5` |
+| `--batch-size` | 批次大小 | `--batch-size 8` |
+| `--learning-rate` | 学习率 | `--learning-rate 1e-4` |
+| `--max-seq-len` | 最大序列长度 | `--max-seq-len 512` |
+| `--backend` | 后端 | `--backend gpu` |
+| `--use-lora` | 启用LoRA | `--use-lora --lora-rank 8` |
+| `--multimodal` | 启用多模态 | `--multimodal` |
+| `--fusion-strategy` | 融合策略 | `--fusion-strategy gated` |
 
-用于将模型导出为不同格式，便于部署和集成。
+### infer 参数
 
-### 8.1 参数说明
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `--prompt` | 输入文本 | `--prompt "你好"` |
+| `--model-dir` | 模型目录 | `--model-dir ./model` |
+| `--num-tokens` | 生成token数 | `--num-tokens 200` |
+| `--temperature` | 温度参数 | `--temperature 0.8` |
+| `--top-p` | Top-p采样 | `--top-p 0.9` |
+| `--multimodal` | 多模态模式 | `--multimodal` |
+| `--image-path` | 图像路径 | `--image-path ./img.jpg` |
+| `--chat` | Chat模式 | `--chat` |
+| `--terminal` | 终端模式 | `--terminal` |
 
-- `--model-dir <MODEL_DIR>`：模型目录路径（必填）
-- `--output <OUTPUT>`：输出文件路径（必填）
-- `--format <FORMAT>`：导出格式（可选：`onnx`, `torch`, `safetensors`，默认 `onnx`）
-- `--use-best`：使用最优模型导出
-- `--quantize`：启用模型量化（减小模型大小）
+### image_gen 参数
 
-### 8.2 使用示例
-
-```bash
-# 导出为 ONNX 格式
-cargo run --release --bin export -- --model-dir ./models/my_model --output model.onnx --format onnx
-
-# 导出最优模型并量化
-cargo run --release --bin export -- --model-dir ./models/my_model --output model_quantized.onnx --use-best --quantize
-```
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `--text-to-image` | 文生图模式 | `--text-to-image` |
+| `--generate-only` | 纯图像生成 | `--generate-only` |
+| `--prompt` | 文本描述 | `--prompt "一只猫"` |
+| `--output` | 输出路径 | `--output ./out.png` |
+| `--steps` | 采样步数 | `--steps 50` |
+| `--image-size` | 图像尺寸 | `--image-size 64` |
+| `--latent-dim` | 潜在维度 | `--latent-dim 128` |
 
 ---
 
-## 9) 常见问题
-
-### 9.1 为什么会出现大量标点？
-
-小模型 + 字符级 tokenizer + 语料风格会导致标点容易被高概率采样。可以通过：
-
-- 增大 `--punctuation-penalty`
-- 降低 `--temperature` / `--top-p`
-- 增大 `--repetition-penalty`
-- 使用更多真实 SFT 数据训练
-
-### 9.2 为什么 `--context-len` 不能超过 `max_seq_len`？
-
-因为位置 embedding 只为 `max_seq_len` 个位置训练/初始化，超过会越界。infer 会自动截断，但如果你确实需要更长上下文，请在训练时提高 `--max-seq-len` 并重新训练。
-
-### 9.3 Windows 下遇到 LNK1104 无法写入 infer.exe？
-
-这是 Windows 常见的文件锁问题：之前运行的 exe 进程未完全退出，或被杀软/索引占用。
-
-可尝试：
-
-- 关闭残留的 `infer.exe` / `train.exe` 进程
-- 运行 `cargo clean` 后重试
-- 使用临时 target 目录：`cargo run --target-dir .\\target_tmp --bin infer -- ...`
+**最后更新：** 2026-04-19
+**版本：** v1.2

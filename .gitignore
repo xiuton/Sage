@@ -1,6 +1,72 @@
-/target
-/tmp
+# Rust Standard
+/target/
+**/*.rs.bk
+Cargo.lock.bk
+
+# LLM Weights & Artifacts
+# These files are typically large and should not be tracked
+*.mpk
+*.bin
+*.pth
+*.pt
+*.safetensors
+*.onnx
+*.weights
+/models/*.mpk
+/models/*.bin
+/models/*.safetensors
+
+# But ensure essential configuration files are tracked
+!/models/config.json
+!/models/tokenizer.json
+!/inference/configs/*.json
+
+# Data & Corpus
+# Ignore large datasets and generated data
+/data/
+/corpus/
 *.jsonl
 *.txt
-/deploy
-/data
+*.csv
+/tmp/
+/assets/
+
+# Exceptions for documentation or small sample files
+!/docs/**/*.txt
+!/docs/**/*.md
+!README.md
+!/scripts/README.md
+!/test_scripts/README.md
+
+# Logs & Performance
+*.log
+/logs/
+/perf_results/
+/bench_results/
+
+# Deployment & Environment
+/deploy/
+.env
+.env.*
+docker-compose.override.yml
+
+# IDE & OS Specific
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.settings/
+.classpath
+
+# Python (for support scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/

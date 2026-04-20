@@ -53,12 +53,8 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 ### 2.2 模型（Transformer LM）
 
 - Token Embedding + Position Embedding
-- **TransformerEncoder + 自回归掩码**（实现因果注意力，行为等价于 Decoder-only）
-  - 组件使用 `TransformerEncoder`
-  - 通过自回归掩码实现因果注意力，确保每个 token 只能关注前面的 token
-  - 行为上等价于 Decoder-only 架构
-- 自回归掩码生成函数：生成下三角矩阵掩码
-- TrainStep / ValidStep 接入 Burn Learner
+- TransformerEncoder + LM head（当前实现未在主路径中启用“因果注意力掩码/Decoder-only 等价”的严格语义）
+- 训练循环为自实现（不依赖 Burn Learner/TUI），按 epoch 跑 DataLoader、记录损失与保存 checkpoint
 - **多规模模型配置**：
   - `default`：约 1M 参数（默认）
   - `10m`：约 10M 参数
@@ -67,14 +63,14 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
   - `1b`：约 1B 参数
   - `3b`：约 3B 参数
   - `671b`：约 671B 参数（演示用）
-- **KV Cache**：用于加速自回归推理的键值缓存
+- **KV Cache**：结构/接口存在；当前生成路径仍是“每步全序列 forward”，未启用缓存加速
 
 ### 2.3 Tokenizer（字符级 + BPE + 中文）
 
 - Unicode `char` 字符级词表，天然支持中文
 - BPE (Byte Pair Encoding) 分词器，支持自定义词汇表大小
 - 特殊 token：`pad/unk/bos/eos`
-- 词表可保存/加载（`tokenizer.json` + `tokenizer.json.meta`）
+- 词表可保存/加载（`tokenizer.json`）
 - BPE 能显著减少高频字符重复问题（如中文"解"字符）
 
 ### 2.4 训练（LM/SFT）
@@ -96,7 +92,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 - 继续训练（权重级恢复）：
   - `--continue` 从 `model.mpk`
   - `--resume-epoch` 从 `checkpoint/model-<epoch>.mpk`
-- **快速开发模式**：`--quick-dev`（3轮 + 优化参数，适合测试迭代）
+- **快速开发模式**：`--quick-dev`（1轮 + 小批量 + 高学习率，适合测试迭代）
 - **可中断训练**：Ctrl+C 优雅关闭并保存检查点
 - **可选进度条**：`--no-progress` 禁用 TUI 显示，支持终端兼容性配置
 
@@ -153,8 +149,17 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 - **KV 缓存**：优化推理性能
 - **懒加载**：按需加载模型，减少内存占用
 - **日志系统**：完善的日志记录和监控
-- **LoRA 支持**：低秩适应训练
-- **量化功能**：模型压缩和优化
+- **LoRA 支持**：支持在 `Linear` 层注入低秩矩阵，实现参数高效微调，支持权重合并与冻结。
+- **量化功能**：支持 INT8/INT4 模拟量化推理，提供体积估算与压缩比分析。
+- **完整多模态能力**：
+  - 两种视觉编码器：ResNet 和 Vision Transformer (ViT)
+  - 四种融合策略：gated、concatenate、add、cross_attention
+  - 跨模态注意力机制：实现文本-视觉特征交互
+  - 图像预处理流水线：支持归一化、标准化
+  - 完整端到端训练与推理闭环
+  - 详细文档：[MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)
+- **分布式训练**：支持多设备间的权重同步。
+
 - **性能监控**：实时监控训练和推理性能
 - **学习率调度器**：Cosine Annealing + Warmup 学习率调整策略
 - **Perplexity 指标**：语言模型质量评估指标
@@ -212,36 +217,26 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
    - 已提供多个预设 config（~1M、~10M、~30M）按硬件选择
    - `--model-size` 参数支持：`default`、`10m`、`30m`、`100m`、`1b`、`3b`、`671b`
 4. **分布式训练支持** ✅ **已完成**
-   - 实现数据并行训练器 `DataParallelTrainer`
-   - 支持多 GPU/多机器训练配置
-   - 添加 `--distributed`、`--devices` 命令行参数
+   - 实现了 `DataParallelTrainer` 支持多设备协同。
+   - 实现了基础的权重同步与参数平均逻辑。
 5. **RLHF/DPO偏好对齐训练** ✅ **已完成**
    - 实现 `DPOTrainer` 和 `DPOLossCalculator`
    - 支持 beta 参数和 KL 散度正则化
    - 添加 `--dpo`、`--dpo-beta` 命令行参数
-6. **多模态能力** ✅ **已完成**
-   - 实现 `VisionEncoder` 图像编码器
-   - 实现 `MultimodalFusion` 多模态融合层
-   - 支持加法融合策略
-   - 模型支持多模态前向传播
+6. **多模态能力** ✅ **已完整实现**
+   - 已打通完整的端到端训练与推理闭环。
+   - 实现了两种视觉编码器：ResNet 和 Vision Transformer (ViT)。
+   - 实现了四种融合策略：gated、concatenate、add、cross_attention。
+   - 实现了跨模态注意力机制，支持文本-视觉特征交互。
+   - 实现了图像预处理流水线（归一化、标准化）。
+   - 添加了完整的多模态集成测试。
+   - 提供了详细的使用文档：[MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)。
 7. **模型量化优化** ✅ **已完成**
-   - 实现 `QuantizedModel` 量化模型封装
-   - 支持 INT4、INT8、动态量化模式
-   - 提供模型大小计算工具
-8. **自回归掩码实现** ✅ **已完成**
-   - 实现自回归掩码生成函数
-   - 通过 TransformerEncoder + 自回归掩码实现因果注意力机制
-   - 确保每个 token 只能关注前面的 token，不能看到后面的 token
-   - 支持多模态场景下的自回归掩码
-   - 行为上等价于 Decoder-only 架构（组件仍是 TransformerEncoder）
-9. **学习率调度器** ✅ **已完成**
-   - 实现 Cosine Annealing + Warmup 学习率调度策略
-   - 集成到训练循环中
-   - 支持灵活的参数配置（lr-max、lr-min、warmup-steps、total-steps）
-10. **评测指标** ✅ **已完成**
-    - 实现 Perplexity（困惑度）指标
-    - 实现 BLEU 分数指标
-    - 支持模型性能评估
+   - 实现了 `QuantizedLinear` 支持模拟 INT8/INT4 推理。
+   - 支持模型体积与压缩比实时估算。
+8. **LoRA 微调** ✅ **已完成**
+   - 实现了低秩矩阵注入与权重合并逻辑。
+   - 深度集成到 `train` 路径，支持高效微调。
 
 ---
 
@@ -466,8 +461,8 @@ cargo run --release --bin train -- --sft-jsonl code_instruction.jsonl --artifact
 ### 模型部署建议
 
 #### 推理优化
-- 使用量化（未来支持）
-- 启用KV缓存（未来支持）
+- 使用量化（未来支持；当前量化为框架/体积估算）
+- 启用 KV cache（未来支持；当前生成路径未启用）
 - 调整生成参数（temperature、top-p等）
 
 #### 服务化
@@ -480,19 +475,24 @@ cargo run --release --bin train -- --sft-jsonl code_instruction.jsonl --artifact
 ## 7) 下一步行动建议
 
 ### 立即行动（本周）
-1. **实现Stop sequences** - 在`generation.rs`中添加停止条件
-2. **优化SFT loss mask** - 在`data.rs`中实现ignore_index支持
+1. **梳理并收敛“占位特性”**：对 `--distributed`、`--quantize` 等仅框架能力在文档与 CLI 上明确标注/隐藏，避免误用
+2. **补齐/修正训练阶段文档**：确保“显存探测 vs 正式训练”与当前实现一致（不再引用 Learner/TUI 等历史描述）
 
 ### 短期目标（本月）
-3. **完善对话模板** - 统一训练和推理的格式
-4. **添加更多metrics** - 实现perplexity计算
+3. **完善对话模板**：训练与推理共用模板与 stop 规则，减少“训练/推理不一致”
+4. **完善评测**：提供一套可复现的离线评测脚本/基准样例（至少困惑度 + 固定提示回放）
 
 ### 中期目标（季度）
-5. **扩展模型规模** - 提供10M、30M参数配置
-6. **优化GPU性能** - 提升WGPU训练速度
-7. **增加训练模式** - 支持更多特定领域训练
+5. **推理性能优化**：KV cache 或更高效的推理路径（避免每步全序列 forward）
+6. **GPU 性能与稳定性**：WGPU 编译/显存策略、减少不必要的 GPU 分配
+7. **训练能力增强**：更严格的 SFT mask（显式 mask/ignore_index）、更完整的断点续训（恢复优化器/调度器）
 
 ### 长期规划
-8. **RLHF/DPO支持** - 实现偏好对齐
-9. **多模态能力** - 支持图像输入
-10. **分布式训练** - 支持多GPU/多机器训练
+8. **分布式训练**：补齐真实多 GPU 训练与同步，或移除/下线该入口
+9. **量化**：补齐真实权重量化与部署路径
+10. **多模态训练** ✅ **已完整实现**：
+    - 完整的多模态训练与推理闭环
+    - ResNet 和 Vision Transformer 两种视觉编码器
+    - 四种融合策略（gated、concatenate、add、cross_attention）
+    - 跨模态注意力机制
+    - 详细文档：[MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)

@@ -30,7 +30,7 @@
 - **操作系统**: Windows 10/11, Linux, macOS
 - **内存**: 最低 8GB，推荐 16GB+
 - **GPU**: 可选，支持 WGPU（Windows DirectX/Metal/Vulkan）
-- **Rust**: 版本 1.75+（推荐使用 rustup 安装）
+- **Rust**: 建议 1.85+（本项目使用 `edition = "2024"`；推荐使用 rustup 安装）
 
 ### 1.3 环境准备
 
@@ -60,7 +60,6 @@ cargo build --release
 ├── best_model.mpk     # 最佳模型权重（如果启用）
 ├── config.json        # 模型配置文件
 ├── tokenizer.json     # 分词器配置文件
-├── tokenizer.vocab    # 词表文件（BPE模式）
 └── checkpoint/        # 训练检查点目录
     ├── model-10.mpk   # 第10轮检查点
     ├── model-20.mpk   # 第20轮检查点
@@ -144,6 +143,19 @@ cargo run --release --bin infer -- \
 
 ### 3.4 多模态推理部署
 
+Sage 支持基础的多模态能力，但请注意以下限制：
+
+#### 支持的功能
+- **推理侧**：使用 `infer --multimodal --image-path <图像路径>` 进行图像输入推理
+- **核心组件**：已实现 `VisionEncoder` 和 `MultimodalFusion` 模块
+- **模型架构**：支持文本和图像特征融合
+
+#### 限制和未完成的功能
+- **训练侧**：尚未实现带图像的数据集加载和训练循环
+- **图像预处理**：缺少标准化、缩放等预处理步骤
+- **数据格式**：不支持包含图像路径的训练数据格式
+
+#### 使用示例（仅推理）
 ```bash
 # 基本多模态推理
 cargo run --bin infer -- \
@@ -158,6 +170,11 @@ cargo run --bin infer -- \
     --prompt "描述这张图片" \
     --backend gpu
 ```
+
+#### 注意事项
+- 多模态功能目前仅用于演示目的，不建议用于生产环境
+- 训练多模态模型需要额外的代码实现，包括数据集加载和预处理
+- 图像编码器目前是简单的线性投影，性能和效果有限
 
 ---
 
@@ -178,21 +195,6 @@ cargo run --release --bin api_server -- \
     --use-best \
     --backend gpu \
     --port 8000
-
-# 使用INT8量化优化
-cargo run --release --bin api_server -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --quantize \
-    --port 8000
-
-# 同时使用GPU和量化
-cargo run --release --bin api_server -- \
-    --model-dir ./tmp/your_model \
-    --use-best \
-    --backend gpu \
-    --quantize \
-    --port 8000
 ```
 
 ### 4.2 API服务器参数说明
@@ -203,10 +205,12 @@ cargo run --release --bin api_server -- \
 | `--use-best` | 使用最佳模型权重 | false |
 | `--port` | 服务器端口 | 8000 |
 | `--backend` | 推理后端（`cpu` 或 `gpu`） | cpu |
-| `--quantize` | 启用INT8量化优化 | false |
 | `--context-len` | 上下文长度 | 默认跟随模型配置 |
-| `--host` | 服务器地址 | 0.0.0.0 |
 | `--log-level` | 日志级别 | info |
+
+认证机制：
+- 若设置环境变量 `SAGE_API_KEY`，则除 `/api/health` 外的接口需要 `Authorization: Bearer <SAGE_API_KEY>`。
+- 若未设置 `SAGE_API_KEY`，则不做认证。
 
 ### 4.3 健康检查
 
@@ -273,7 +277,7 @@ docker-compose up -d sage-api-gpu
 
 ### 6.1 模型优化
 
-- **量化**：支持INT4/INT8动态量化和静态量化，减小模型体积并提高推理速度
+- **量化**：当前量化为框架/体积估算，未提供真实的权重量化推理加速；如需部署侧加速，需要补齐算子替换与端到端验证
 - **剪枝**：移除不重要的权重（未来支持）
 - **蒸馏**：知识蒸馏减小模型大小（未来支持）
 - **多模态支持**：支持图像输入的模型部署
@@ -313,47 +317,6 @@ $env:CUBECL_AUTOTUNE_LEVEL="balanced"
 - **使用ONNX格式**：导出为ONNX格式进行部署（未来支持）
 - **GPU加速**：在生产环境使用GPU加速推理
 - **内存管理**：优化内存使用减少资源消耗
-
-### 6.6 量化评估
-
-**性能测试：**
-```bash
-# 运行量化性能基准测试
-cargo run --release --bin benchmark
-```
-
-**精度评估：**
-```bash
-# 运行量化精度评估
-cargo run --release --bin accuracy_eval
-```
-
-**评估指标：**
-- **性能提升**：量化模型相对于原始模型的加速比
-- **精度损失**：量化模型与原始模型的输出相似度
-- **内存节省**：量化模型的内存占用减少比例
-
-**测试结果示例：**
-```
-=== 量化性能测试 ===
-配置文件: config.toml
-模型文件: sage_model.burn
-
-=== CPU性能测试 ===
-测试提示: 今天天气很好，我们去
-------------------------
-原始模型 (10次推理): 10.5s
-动态量化模型 (10次推理): 6.2s
-静态量化模型 (10次推理): 5.8s
-动态量化加速比: 1.7x
-静态量化加速比: 1.8x
-
-=== 量化精度评估 ===
-完全匹配率: 95.00% (19/20)
-字符匹配率: 98.75%
-```
-
----
 
 ## 7. 监控和维护
 
@@ -861,8 +824,8 @@ cargo run --bin export -- \
 #### 问题：推理速度慢
 **解决方案：**
 - 使用 GPU 加速：`--backend gpu`
-- 启用量化：`--quantize`
-- 调整批量大小和序列长度
+- 调小上下文长度：`--context-len`（过大时每步计算更慢）
+- 使用更小的模型配置（训练侧 `--model-size`），或降低生成长度（`infer -n`）
 
 #### 问题：内存不足
 **解决方案：**
@@ -872,10 +835,9 @@ cargo run --bin export -- \
 
 ### 12.2 性能调优建议
 
-- **批量大小**：根据 GPU 内存调整，GPU 模式推荐 64-256
-- **学习率**：初始学习率 1e-4，可逐步调整
-- **序列长度**：根据数据特点调整，一般 128-512
-- **训练轮数**：根据数据量调整，一般 50-200 轮
+- **推理上下文长度**：控制 `--context-len`，不超过训练时的 `max_seq_len`
+- **生成长度**：通过 `infer -n` 限制输出 token 数
+- **生成策略**：调低 `-t/-p/-k` 可提升稳定性并减少无效生成
 
 ---
 
@@ -884,9 +846,9 @@ cargo run --bin export -- \
 | 版本 | 主要特性 |
 |------|----------|
 | 0.1.0 | 初始版本，基础部署功能 |
-| 0.1.1 | 添加 GPU 优化和量化支持 |
+| 0.1.1 | 添加 GPU 推理支持与部署指南完善 |
 | 0.1.2 | 添加完整 API 接口支持 |
-| 1.0.0 | 添加分布式训练、DPO偏好对齐、多模态能力、INT4/INT8量化优化 |
+| 1.0.0 | 添加 DPO 偏好对齐与多模态推理支持（量化/分布式训练仍在规划中） |
 
 ---
 

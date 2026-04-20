@@ -4,10 +4,9 @@ use clap::Parser;
 use burn::backend::{ndarray::{NdArray, NdArrayDevice}, wgpu::Wgpu};
 use burn::prelude::Backend;
 use sage::{
-    generation::{GenerateOptions, generate},
-    lazy_load::LazyModel,
+    inference::{GenerateOptions, LazyModel, generate},
     performance::run_benchmark,
-    tokenizer::Tokenizer,
+    core::tokenizer::Tokenizer,
     TrainingConfig,
 };
 use std::fs;
@@ -79,6 +78,8 @@ fn main() {
                 context_len: config.model.max_seq_len,
                 stop_on_user: true,
                 stop_sequences: Vec::new(),
+                use_kv_cache: true,
+                streaming: false,
             };
             
             let response = generate(&*model_guard, &tokenizer, &args.prompt, &options, &device);
@@ -108,6 +109,8 @@ fn main() {
                 context_len: config.model.max_seq_len,
                 stop_on_user: true,
                 stop_sequences: Vec::new(),
+                use_kv_cache: true,
+                streaming: false,
             };
             
             let response = generate(&*model_guard, &tokenizer, &args.prompt, &options, &device);

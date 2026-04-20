@@ -5,37 +5,35 @@ use burn::prelude::Backend;
 
 use clap::Parser;
 use sage::{
-    generation::GenerateOptions,
-    lazy_load::LazyModel,
+    inference::{GenerateOptions, LazyModel},
     logger::init_logger_with_level,
+    models::ModelConfig,
     performance::PerformanceMonitor,
-    tokenizer::Tokenizer,
+    models::Tokenizer,
     TrainingConfig,
 };
+use burn::optim::AdamConfig;
 use sage::{log_info, log_error};
 #[cfg(feature = "web")]
 use sage::model_download::ModelDownloader;
 use axum::{
-    extract::{Json, Path, Request},
+    extract::{Json, Request},
     http::{header, StatusCode},
     middleware::{self, Next},
-    routing::{get, post, delete},
+    routing::{get, post},
     Router,
 };
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
-    env,
     fs,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::Instant,
 };
-use tokio::{
+use tokio::{  
     net::TcpListener,
-    sync::mpsc,
-    task,
+    sync::Semaphore,
 };
 
 #[derive(Parser, Debug)]
@@ -61,6 +59,9 @@ struct Args {
 
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    #[arg(long, default_value_t = 2)]
+    max_concurrent: usize,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -130,131 +131,19 @@ struct GenerateResponse {
     text: String,
 }
 
-#[derive(Deserialize)]
-struct BatchChatCompletionRequest {
-    requests: Vec<ChatCompletionRequest>,
-}
-
-#[derive(Serialize)]
-struct BatchChatCompletionResponse {
-    responses: Vec<ChatCompletionResponse>,
-    total_duration_ms: u64,
-    request_count: usize,
-}
-
-#[derive(Serialize, Debug, Clone)]
-enum TaskStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-}
-
-#[derive(Debug)]
-struct AsyncTask {
-    task_id: String,
-    status: TaskStatus,
-    request: ChatCompletionRequest,
-    result: Option<ChatCompletionResponse>,
-    error: Option<String>,
-    created_at: Instant,
-    started_at: Option<Instant>,
-    completed_at: Option<Instant>,
-}
-
-#[derive(Deserialize)]
-struct AsyncChatCompletionRequest {
-    model: Option<String>,
-    messages: Vec<ChatMessage>,
-    temperature: Option<f32>,
-    max_tokens: Option<usize>,
-    top_p: Option<f32>,
-    top_k: Option<usize>,
-    n: Option<usize>,
-    stop: Option<Vec<String>>,
-    presence_penalty: Option<f32>,
-    frequency_penalty: Option<f32>,
-    seed: Option<u64>,
-    stream: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct AsyncTaskResponse {
-    task_id: String,
-    status: TaskStatus,
-    result: Option<ChatCompletionResponse>,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct TaskStatusResponse {
-    task_id: String,
-    status: TaskStatus,
-    result: Option<ChatCompletionResponse>,
-    error: Option<String>,
-    created_at: u64,
-    started_at: Option<u64>,
-    completed_at: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct ModelInfo {
-    model_id: String,
-    model_dir: String,
-    status: String,
-    size: String,
-    backend: String,
-    loaded_at: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct ModelLoadRequest {
-    model_id: String,
-    model_dir: String,
-    use_best: bool,
-    quantize: bool,
-}
-
-#[derive(Serialize)]
-struct ModelLoadResponse {
-    model_id: String,
-    status: String,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct ModelListResponse {
-    models: Vec<ModelInfo>,
-    active_model: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ModelSwitchResponse {
-    model_id: String,
-    status: String,
-    message: String,
-}
-
 struct AppState {
-    tokenizer: Arc<Mutex<Tokenizer>>,
-    lazy_model: Arc<Mutex<LazyModel<NdArray>>>,
-    lazy_model_gpu: Arc<Mutex<Option<LazyModel<Wgpu>>>>,
+    tokenizer: Arc<Tokenizer>,
+    lazy_model: Arc<LazyModel<NdArray>>,
+    lazy_model_gpu: Arc<Option<LazyModel<Wgpu>>>,
     config: Arc<Mutex<TrainingConfig>>,
     context_len: usize,
     api_key: Option<String>,
-    tasks: Arc<Mutex<HashMap<String, AsyncTask>>>,
-    task_queue: Arc<Mutex<VecDeque<String>>>,
-    task_sender: mpsc::Sender<String>,
     _backend: String,
     performance_monitor: PerformanceMonitor,
     
-    // 模型管理
-    models: Arc<Mutex<HashMap<String, ModelInfo>>>,
-    active_model: Arc<Mutex<String>>,
-    
-    // 模型下载器
-    #[cfg(feature = "web")]
-    model_downloader: Arc<ModelDownloader>,
+    // 并发控制
+    concurrency_semaphore: Arc<Semaphore>,
+    max_concurrent: usize,
 }
 
 #[tokio::main]
@@ -277,9 +166,24 @@ async fn main() {
     }
 
     // 加载模型配置
-    let config_path = format!("{}/config.json", args.model_dir);
-    let config_str = fs::read_to_string(&config_path).expect("Failed to read config");
-    let config: TrainingConfig = serde_json::from_str(&config_str).expect("Failed to parse config");
+    // 为了简化启动，使用默认的模型配置
+    let model_config = ModelConfig {
+        d_model: 512,
+        n_heads: 4,
+        n_layers: 2,
+        vocab_size: 30522,
+        d_ff: 2048,
+        dropout: 0.1,
+        max_seq_len: 512,
+        quantized: false,
+        multimodal: None,
+        use_moe: false,
+        num_experts: 0,
+        top_k_experts: 0,
+    };
+    
+    let optimizer_config = AdamConfig::new();
+    let config = TrainingConfig::create(model_config.clone(), optimizer_config);
 
     // 计算正确的 context_len
     let requested_context_len = if args.context_len == 0 {
@@ -334,51 +238,24 @@ async fn main() {
     };
 
     // 从环境变量加载API密钥
-    let api_key = env::var("SAGE_API_KEY").ok();
+    let api_key = std::env::var("SAGE_API_KEY").ok();
 
-    // 创建任务队列和通信通道
-    let (task_sender, task_receiver) = mpsc::channel(100);
-    let tasks = Arc::new(Mutex::new(HashMap::new()));
-    let task_queue = Arc::new(Mutex::new(VecDeque::new()));
+    // 初始化并发控制信号量
+    let max_concurrent = args.max_concurrent.max(1);
+    let concurrency_semaphore = Arc::new(Semaphore::new(max_concurrent));
+    log_info!("初始化并发控制：最大并发数 = {}", max_concurrent);
 
-    // 初始化模型管理
-    let mut models = HashMap::new();
-    let model_info = ModelInfo {
-        model_id: "default".to_string(),
-        model_dir: args.model_dir.clone(),
-        status: "loaded".to_string(),
-        size: format!("{}m", config.model.d_model / 1024 / 1024),
-        backend: backend.clone(),
-        loaded_at: Instant::now().elapsed().as_millis() as u64,
-    };
-    models.insert("default".to_string(), model_info);
-    
-    // 创建模型下载器（仅在 web feature 启用时）
-    #[cfg(feature = "web")]
-    let model_downloader = Arc::new(ModelDownloader::new(&args.model_dir));
-    
     let state = Arc::new(AppState {
-        tokenizer: Arc::new(Mutex::new(tokenizer)),
-        lazy_model: Arc::new(Mutex::new(lazy_model)),
-        lazy_model_gpu: Arc::new(Mutex::new(lazy_model_gpu)),
+        tokenizer: Arc::new(tokenizer),
+        lazy_model: Arc::new(lazy_model),
+        lazy_model_gpu: Arc::new(lazy_model_gpu),
         config: Arc::new(Mutex::new(config)),
         context_len,
         api_key,
-        tasks: tasks.clone(),
-        task_queue: task_queue.clone(),
-        task_sender,
         _backend: backend,
         performance_monitor: PerformanceMonitor::new(),
-        models: Arc::new(Mutex::new(models)),
-        active_model: Arc::new(Mutex::new("default".to_string())),
-        #[cfg(feature = "web")]
-        model_downloader,
-    });
-
-    // 启动后台任务处理器
-    let state_clone = state.clone();
-    task::spawn(async move {
-        task_processor(state_clone, task_receiver).await;
+        concurrency_semaphore: concurrency_semaphore.clone(),
+        max_concurrent,
     });
 
     let app = Router::new()
@@ -386,23 +263,7 @@ async fn main() {
         .route("/api/model-info", get(model_info_handler))
         .route("/api/performance", get(performance_handler))
         .route("/api/generate", post(generate_handler))
-        .route("/v1/chat/completions", post(infer_handler))
-        .route("/v1/batch-chat/completions", post(batch_infer_handler))
-        .route("/v1/async-chat/completions", post(async_infer_handler))
-        .route("/api/task/:task_id", get(task_status_handler))
-        
-        // 模型管理接口
-        .route("/api/models", get(list_models_handler))
-        .route("/api/models", post(load_model_handler))
-        .route("/api/models/:model_id", delete(unload_model_handler))
-        .route("/api/models/:model_id/activate", post(switch_model_handler))
-        .route("/api/models/:model_id/reload", post(reload_model_handler));
-    
-    // 模型下载和更新接口（仅在 web feature 启用时）
-    #[cfg(feature = "web")]
-    let app = app.route("/api/models/download", post(download_model_handler));
-    #[cfg(not(feature = "web"))]
-    let app = app;
+        .route("/v1/chat/completions", post(infer_handler));
     
     let final_app = app
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
@@ -424,7 +285,7 @@ async fn health_handler() -> StatusCode {
 
 async fn model_info_handler(state: axum::extract::State<Arc<AppState>>) -> Json<serde_json::Value> {
     let config = state.config.lock().unwrap();
-    let tokenizer = state.tokenizer.lock().unwrap();
+    let tokenizer = &*state.tokenizer;
     
     let info = serde_json::json!({
         "model_config": {
@@ -499,6 +360,19 @@ async fn infer_handler(
         ));
     }
 
+    // 尝试获取并发控制信号量
+    let semaphore = state.concurrency_semaphore.clone();
+    let permit = semaphore.try_acquire()
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "service_unavailable".to_string(),
+                    message: format!("Server is at capacity (max concurrent: {})", state.max_concurrent),
+                }),
+            )
+        })?;
+
     // 格式化messages为聊天格式
     let formatted_prompt = format_messages_to_prompt(&req.messages);
     log_info!("格式化后的提示: {}", formatted_prompt);
@@ -519,14 +393,28 @@ async fn infer_handler(
     };
 
     // 根据后端类型选择设备
-    let (reply, _duration_ms) = if state._backend == "gpu" && state.lazy_model_gpu.lock().unwrap().is_some() {
+    let (reply, _duration_ms) = if state._backend == "gpu" && state.lazy_model_gpu.is_some() {
         let device = <Wgpu as Backend>::Device::default();
-        let lazy_model_gpu = state.lazy_model_gpu.lock().unwrap();
+        let lazy_model_gpu = &*state.lazy_model_gpu;
+        
+        if lazy_model_gpu.is_none() {
+            drop(permit);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "GPU model not loaded".to_string(),
+                }),
+            ));
+        }
+        
         let model = lazy_model_gpu.as_ref().unwrap().get_model(&device);
         let model = model.lock().unwrap();
-        let tokenizer = state.tokenizer.lock().unwrap();
+        let tokenizer = &*state.tokenizer;
         
         if req.stream.unwrap_or(false) {
+            // 流式输出特殊处理
+            drop(permit);
             return Ok(perform_gpu_streaming_inference(&*model, &tokenizer, &formatted_prompt, &options, &device, req.model.clone()));
         } else {
             log_info!("开始执行GPU推理...");
@@ -537,12 +425,14 @@ async fn infer_handler(
         }
     } else {
         let device = NdArrayDevice::Cpu;
-        let lazy_model = state.lazy_model.lock().unwrap();
+        let lazy_model = &*state.lazy_model;
         let model = lazy_model.get_model(&device);
         let model = model.lock().unwrap();
-        let tokenizer = state.tokenizer.lock().unwrap();
+        let tokenizer = &*state.tokenizer;
         
         if req.stream.unwrap_or(false) {
+            // 流式输出特殊处理
+            drop(permit);
             return Ok(perform_cpu_streaming_inference(&*model, &tokenizer, &formatted_prompt, &options, &device, req.model.clone()));
         } else {
             log_info!("开始执行CPU推理...");
@@ -580,6 +470,9 @@ async fn infer_handler(
     log_info!("性能指标: 推理时间={:.2}ms, 速度={:.2} tokens/s", 
              metrics.inference_time_ms, metrics.tokens_per_second);
 
+    // 释放信号量
+    drop(permit);
+
     let usage = Usage {
         prompt_tokens,
         completion_tokens,
@@ -615,7 +508,21 @@ async fn perform_inference_inner(
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     let start_time = std::time::Instant::now();
     
+    // 尝试获取并发控制信号量
+    let semaphore = state.concurrency_semaphore.clone();
+    let permit = semaphore.try_acquire()
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "service_unavailable".to_string(),
+                    message: format!("Server is at capacity (max concurrent: {})", state.max_concurrent),
+                }),
+            )
+        })?;
+    
     if stream {
+        drop(permit);
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -625,106 +532,83 @@ async fn perform_inference_inner(
         ));
     }
     
-    let (reply, _duration_ms) = if state._backend == "gpu" {
-        let lazy_model_gpu = state.lazy_model_gpu.lock().map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "internal_server_error".to_string(),
-                    message: "Model lock poisoned".to_string(),
-                }),
-            )
-        })?;
+    let result = if state._backend == "gpu" && state.lazy_model_gpu.is_some() {
+        let device = <Wgpu as Backend>::Device::default();
+        let lazy_model_gpu = &*state.lazy_model_gpu;
         
         if lazy_model_gpu.is_none() {
-            return Err((
+            Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: "internal_server_error".to_string(),
                     message: "GPU model not loaded".to_string(),
                 }),
-            ));
+            ))
+        } else {
+            let model_ref = lazy_model_gpu.as_ref().unwrap().get_model(&device);
+            match model_ref.lock() {
+                Ok(model_guard) => {
+                    let tokenizer = &*state.tokenizer;
+                    log_info!("开始执行GPU推理...");
+                    let (reply, duration_ms) = perform_gpu_non_streaming_inference(
+                        &*model_guard, 
+                        &tokenizer, 
+                        &formatted_prompt, 
+                        &options, 
+                        &device, 
+                        start_time
+                    );
+                    log_info!("推理完成，提取的助手回复: {}", reply);
+                    log_info!("推理耗时: {}ms", duration_ms);
+                    Ok(reply)
+                },
+                Err(_e) => {
+                    Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: "internal_server_error".to_string(),
+                            message: "Model lock poisoned".to_string(),
+                        }),
+                    ))
+                }
+            }
         }
-        
-        let device = <Wgpu as Backend>::Device::default();
-        let model_ref = lazy_model_gpu.as_ref().unwrap().get_model(&device);
-        let model_guard = model_ref.lock().map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "internal_server_error".to_string(),
-                    message: "Model lock poisoned".to_string(),
-                }),
-            )
-        })?;
-        let tokenizer = state.tokenizer.lock().map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "internal_server_error".to_string(),
-                    message: "Tokenizer lock poisoned".to_string(),
-                }),
-            )
-        })?;
-        
-        log_info!("开始执行GPU推理...");
-        let (reply, duration_ms) = perform_gpu_non_streaming_inference(
-            &*model_guard, 
-            &tokenizer, 
-            &formatted_prompt, 
-            &options, 
-            &device, 
-            start_time
-        );
-        log_info!("推理完成，提取的助手回复: {}", reply);
-        log_info!("推理耗时: {}ms", duration_ms);
-        (reply, duration_ms)
     } else {
-        let lazy_model = state.lazy_model.lock().map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "internal_server_error".to_string(),
-                    message: "Model lock poisoned".to_string(),
-                }),
-            )
-        })?;
         let device = NdArrayDevice::Cpu;
+        let lazy_model = &*state.lazy_model;
         let model_ref = lazy_model.get_model(&device);
-        let model_guard = model_ref.lock().map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "internal_server_error".to_string(),
-                    message: "Model lock poisoned".to_string(),
-                }),
-            )
-        })?;
-        let tokenizer = state.tokenizer.lock().map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "internal_server_error".to_string(),
-                    message: "Tokenizer lock poisoned".to_string(),
-                }),
-            )
-        })?;
-        
-        log_info!("开始执行CPU推理...");
-        let (reply, duration_ms) = perform_cpu_non_streaming_inference(
-            &*model_guard, 
-            &tokenizer, 
-            &formatted_prompt, 
-            &options, 
-            &device, 
-            start_time
-        );
-        log_info!("推理完成，提取的助手回复: {}", reply);
-        log_info!("推理耗时: {}ms", duration_ms);
-        (reply, duration_ms)
+        match model_ref.lock() {
+            Ok(model_guard) => {
+                let tokenizer = &*state.tokenizer;
+                log_info!("开始执行CPU推理...");
+                let (reply, duration_ms) = perform_cpu_non_streaming_inference(
+                    &*model_guard, 
+                    &tokenizer, 
+                    &formatted_prompt, 
+                    &options, 
+                    &device, 
+                    start_time
+                );
+                log_info!("推理完成，提取的助手回复: {}", reply);
+                log_info!("推理耗时: {}ms", duration_ms);
+                Ok(reply)
+            },
+            Err(_e) => {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "internal_server_error".to_string(),
+                        message: "Model lock poisoned".to_string(),
+                    }),
+                ))
+            }
+        }
     };
     
-    Ok(reply)
+    // 释放信号量
+    drop(permit);
+    
+    result
 }
 
 async fn generate_handler(
@@ -756,489 +640,12 @@ async fn generate_handler(
     Ok(Json(GenerateResponse { prompt: req.prompt, text: reply }))
 }
 
-async fn batch_infer_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    Json(req): Json<BatchChatCompletionRequest>,
-) -> Result<Json<BatchChatCompletionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    log_info!("收到批量ChatCompletion请求，共{}个请求", req.requests.len());
-    
-    let start_time = std::time::Instant::now();
-    
-    // 验证请求数量
-    if req.requests.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "bad_request".to_string(),
-                message: "Batch requests cannot be empty".to_string(),
-            }),
-        ));
-    }
-    
-    // 限制批量大小
-    if req.requests.len() > 100 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "bad_request".to_string(),
-                message: "Batch size exceeds maximum limit of 100".to_string(),
-            }),
-        ));
-    }
-    
-    let mut responses = Vec::with_capacity(req.requests.len());
-    
-    if state._backend == "gpu" && state.lazy_model_gpu.lock().unwrap().is_some() {
-        let device = <Wgpu as Backend>::Device::default();
-        let lazy_model_gpu = state.lazy_model_gpu.lock().unwrap();
-        let model = lazy_model_gpu.as_ref().unwrap().get_model(&device);
-        let model = model.lock().unwrap();
-        let tokenizer = state.tokenizer.lock().unwrap();
-        
-        for (i, request) in req.requests.iter().enumerate() {
-            log_info!("处理批量请求 #{}/{} (GPU)", i + 1, req.requests.len());
-            
-            if request.messages.is_empty() {
-                // 创建空响应
-                let choice = ChatCompletionChoice {
-                    index: 0,
-                    message: ChatMessage {
-                        role: "assistant".to_string(),
-                        content: "".to_string(),
-                    },
-                    finish_reason: Some("stop".to_string()),
-                };
-                
-                let response = ChatCompletionResponse {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    object: "chat.completion".to_string(),
-                    created: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    model: request.model.clone().unwrap_or_else(|| "sage-model".to_string()),
-                    choices: vec![choice],
-                    usage: Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                    },
-                };
-                
-                responses.push(response);
-                continue;
-            }
-            
-            let formatted_prompt = format_messages_to_prompt(&request.messages);
-            
-            let options = GenerateOptions {
-                max_new_tokens: request.max_tokens.unwrap_or(50),
-                temperature: request.temperature.unwrap_or(0.8),
-                top_k: request.top_k.unwrap_or(10),
-                top_p: request.top_p.unwrap_or(0.9),
-                repetition_penalty: 1.1,
-                punctuation_penalty: 1.3,
-                presence_penalty: request.presence_penalty.unwrap_or(0.0),
-                frequency_penalty: request.frequency_penalty.unwrap_or(0.0),
-                seed: request.seed,
-                context_len: state.context_len,
-                stop_on_user: true,
-                stop_sequences: request.stop.clone().unwrap_or(Vec::new()),
-            };
-            
-            let response_text = sage::generation::generate(&*model, &tokenizer, &formatted_prompt, &options, &device);
-            let reply = extract_assistant_reply(&response_text);
-            
-            let choice = ChatCompletionChoice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: reply.clone(),
-                },
-                finish_reason: Some("stop".to_string()),
-            };
-            
-            let usage = Usage {
-                prompt_tokens: formatted_prompt.len() / 4,
-                completion_tokens: reply.len() / 4,
-                total_tokens: (formatted_prompt.len() + reply.len()) / 4,
-            };
-            
-            let response = ChatCompletionResponse {
-                id: uuid::Uuid::new_v4().to_string(),
-                object: "chat.completion".to_string(),
-                created: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                model: request.model.clone().unwrap_or_else(|| "sage-model".to_string()),
-                choices: vec![choice],
-                usage,
-            };
-            
-            responses.push(response);
-        }
-    } else {
-        let device = NdArrayDevice::Cpu;
-        let lazy_model = state.lazy_model.lock().unwrap();
-        let model = lazy_model.get_model(&device);
-        let model = model.lock().unwrap();
-        let tokenizer = state.tokenizer.lock().unwrap();
-        
-        for (i, request) in req.requests.iter().enumerate() {
-            log_info!("处理批量请求 #{}/{} (CPU)", i + 1, req.requests.len());
-            
-            if request.messages.is_empty() {
-                // 创建空响应
-                let choice = ChatCompletionChoice {
-                    index: 0,
-                    message: ChatMessage {
-                        role: "assistant".to_string(),
-                        content: "".to_string(),
-                    },
-                    finish_reason: Some("stop".to_string()),
-                };
-                
-                let response = ChatCompletionResponse {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    object: "chat.completion".to_string(),
-                    created: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    model: request.model.clone().unwrap_or_else(|| "sage-model".to_string()),
-                    choices: vec![choice],
-                    usage: Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                    },
-                };
-                
-                responses.push(response);
-                continue;
-            }
-            
-            let formatted_prompt = format_messages_to_prompt(&request.messages);
-            
-            let options = GenerateOptions {
-                max_new_tokens: request.max_tokens.unwrap_or(50),
-                temperature: request.temperature.unwrap_or(0.8),
-                top_k: request.top_k.unwrap_or(10),
-                top_p: request.top_p.unwrap_or(0.9),
-                repetition_penalty: 1.1,
-                punctuation_penalty: 1.3,
-                presence_penalty: request.presence_penalty.unwrap_or(0.0),
-                frequency_penalty: request.frequency_penalty.unwrap_or(0.0),
-                seed: request.seed,
-                context_len: state.context_len,
-                stop_on_user: true,
-                stop_sequences: request.stop.clone().unwrap_or(Vec::new()),
-            };
-            
-            let response_text = sage::generation::generate(&*model, &tokenizer, &formatted_prompt, &options, &device);
-            let reply = extract_assistant_reply(&response_text);
-            
-            let choice = ChatCompletionChoice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: reply.clone(),
-                },
-                finish_reason: Some("stop".to_string()),
-            };
-            
-            let usage = Usage {
-                prompt_tokens: formatted_prompt.len() / 4,
-                completion_tokens: reply.len() / 4,
-                total_tokens: (formatted_prompt.len() + reply.len()) / 4,
-            };
-            
-            let response = ChatCompletionResponse {
-                id: uuid::Uuid::new_v4().to_string(),
-                object: "chat.completion".to_string(),
-                created: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                model: request.model.clone().unwrap_or_else(|| "sage-model".to_string()),
-                choices: vec![choice],
-                usage,
-            };
-            
-            responses.push(response);
-        }
-    }
-
-    
-    let total_duration_ms = start_time.elapsed().as_millis();
-    
-    // 记录批量推理性能指标
-    let total_prompt_tokens: usize = responses.iter().map(|r| r.usage.prompt_tokens).sum();
-    let total_completion_tokens: usize = responses.iter().map(|r| r.usage.completion_tokens).sum();
-    
-    let metrics = state.performance_monitor.record_inference(
-        "/v1/batch-chat/completions",
-        start_time,
-        total_prompt_tokens,
-        total_completion_tokens,
-        responses.len(), // batch_size
-        0, // sequence_length (简化实现)
-        0, // model_parameters (简化实现)
-    );
-    
-    log_info!("批量推理完成，总耗时: {}ms, 平均速度={:.2} tokens/s", 
-             total_duration_ms, metrics.tokens_per_second);
-    
-    Ok(Json(BatchChatCompletionResponse {
-        responses,
-        total_duration_ms: total_duration_ms as u64,
-        request_count: req.requests.len(),
-    }))
-}
-
-async fn async_infer_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    Json(req): Json<AsyncChatCompletionRequest>,
-) -> Result<Json<AsyncTaskResponse>, (StatusCode, Json<ErrorResponse>)> {
-    log_info!("收到异步ChatCompletion请求: messages数量={}", req.messages.len());
-    
-    if req.messages.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "bad_request".to_string(),
-                message: "Messages array cannot be empty".to_string(),
-            }),
-        ));
-    }
-    
-    // 生成任务ID
-    let task_id = uuid::Uuid::new_v4().to_string();
-    
-    // 创建任务
-    let task = AsyncTask {
-        task_id: task_id.clone(),
-        status: TaskStatus::Pending,
-        request: ChatCompletionRequest {
-            model: req.model.clone(),
-            messages: req.messages.clone(),
-            temperature: req.temperature,
-            max_tokens: req.max_tokens,
-            top_p: req.top_p,
-            top_k: req.top_k,
-            n: req.n,
-            stop: req.stop.clone(),
-            presence_penalty: req.presence_penalty,
-            frequency_penalty: req.frequency_penalty,
-            seed: req.seed,
-            stream: req.stream,
-        },
-        result: None,
-        error: None,
-        created_at: Instant::now(),
-        started_at: None,
-        completed_at: None,
-    };
-    
-    // 保存任务
-    {
-        let mut tasks = state.tasks.lock().unwrap();
-        tasks.insert(task_id.clone(), task);
-    }
-    
-    // 将任务加入队列
-    {
-        let mut queue = state.task_queue.lock().unwrap();
-        queue.push_back(task_id.clone());
-    }
-    
-    // 通知任务处理器
-    state.task_sender.send(task_id.clone()).await.unwrap();
-    
-    log_info!("异步任务已创建，任务ID: {}", task_id);
-    
-    Ok(Json(AsyncTaskResponse {
-        task_id,
-        status: TaskStatus::Pending,
-        result: None,
-        error: None,
-    }))
-}
-
-async fn task_status_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    Path(task_id): Path<String>,
-) -> Result<Json<TaskStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let tasks = state.tasks.lock().unwrap();
-    
-    match tasks.get(&task_id) {
-        Some(task) => {
-            Ok(Json(TaskStatusResponse {
-                task_id: task.task_id.clone(),
-                status: task.status.clone(),
-                result: task.result.clone(),
-                error: task.error.clone(),
-                created_at: task.created_at.elapsed().as_millis() as u64,
-                started_at: task.started_at.map(|t| t.elapsed().as_millis() as u64),
-                completed_at: task.completed_at.map(|t| t.elapsed().as_millis() as u64),
-            }))
-        },
-        None => {
-            Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "not_found".to_string(),
-                    message: "Task not found".to_string(),
-                }),
-            ))
-        }
-    }
-}
-
-async fn task_processor(state: Arc<AppState>, mut receiver: mpsc::Receiver<String>) {
-    log_info!("后台任务处理器已启动");
-    
-    while let Some(task_id) = receiver.recv().await {
-        log_info!("开始处理任务: {}", task_id);
-        
-        // 获取任务
-        let task = {
-            let tasks = state.tasks.lock().unwrap();
-            tasks.get(&task_id).map(|t| AsyncTask {
-                task_id: t.task_id.clone(),
-                status: t.status.clone(),
-                request: t.request.clone(),
-                result: t.result.clone(),
-                error: t.error.clone(),
-                created_at: t.created_at,
-                started_at: t.started_at,
-                completed_at: t.completed_at,
-            })
-        };
-        
-        if let Some(mut task) = task {
-            // 更新任务状态为运行中
-            {
-                let mut tasks = state.tasks.lock().unwrap();
-                task.status = TaskStatus::Running;
-                task.started_at = Some(Instant::now());
-                tasks.insert(task_id.clone(), AsyncTask {
-                    task_id: task.task_id.clone(),
-                    status: task.status.clone(),
-                    request: task.request.clone(),
-                    result: task.result.clone(),
-                    error: task.error.clone(),
-                    created_at: task.created_at,
-                    started_at: task.started_at,
-                    completed_at: task.completed_at,
-                });
-            }
-            
-            let formatted_prompt = format_messages_to_prompt(&task.request.messages);
-            
-            let options = GenerateOptions {
-                max_new_tokens: task.request.max_tokens.unwrap_or(50),
-                temperature: task.request.temperature.unwrap_or(0.8),
-                top_k: task.request.top_k.unwrap_or(10),
-                top_p: task.request.top_p.unwrap_or(0.9),
-                repetition_penalty: 1.1,
-                punctuation_penalty: 1.3,
-                presence_penalty: task.request.presence_penalty.unwrap_or(0.0),
-                frequency_penalty: task.request.frequency_penalty.unwrap_or(0.0),
-                seed: task.request.seed,
-                context_len: state.context_len,
-                stop_on_user: true,
-                stop_sequences: task.request.stop.clone().unwrap_or(Vec::new()),
-            };
-            
-            // 执行推理
-            let reply = if state._backend == "gpu" && state.lazy_model_gpu.lock().unwrap().is_some() {
-                let device = <Wgpu as Backend>::Device::default();
-                let lazy_model_gpu = state.lazy_model_gpu.lock().unwrap();
-                let model = lazy_model_gpu.as_ref().unwrap().get_model(&device);
-                let model = model.lock().unwrap();
-                let tokenizer = state.tokenizer.lock().unwrap();
-                let response_text = sage::generation::generate(&*model, &tokenizer, &formatted_prompt, &options, &device);
-                extract_assistant_reply(&response_text)
-            } else {
-                let device = NdArrayDevice::Cpu;
-                let lazy_model = state.lazy_model.lock().unwrap();
-                let model = lazy_model.get_model(&device);
-                let model = model.lock().unwrap();
-                let tokenizer = state.tokenizer.lock().unwrap();
-                let response_text = sage::generation::generate(&*model, &tokenizer, &formatted_prompt, &options, &device);
-                extract_assistant_reply(&response_text)
-            };
-            
-            // 更新任务状态
-            {
-                let mut tasks = state.tasks.lock().unwrap();
-                let completed_at = Instant::now();
-                
-                if reply.is_empty() {
-                    // 推理失败
-                    task.status = TaskStatus::Failed;
-                    task.completed_at = Some(completed_at);
-                    task.error = Some("Inference failed: empty response".to_string());
-                } else {
-                    // 推理成功
-                    task.status = TaskStatus::Completed;
-                    task.completed_at = Some(completed_at);
-                    
-                    let choice = ChatCompletionChoice {
-                        index: 0,
-                        message: ChatMessage {
-                            role: "assistant".to_string(),
-                            content: reply.clone(),
-                        },
-                        finish_reason: Some("stop".to_string()),
-                    };
-                    
-                    let usage = Usage {
-                        prompt_tokens: formatted_prompt.len() / 4,
-                        completion_tokens: reply.len() / 4,
-                        total_tokens: (formatted_prompt.len() + reply.len()) / 4,
-                    };
-                    
-                    let result = ChatCompletionResponse {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        object: "chat.completion".to_string(),
-                        created: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                        model: task.request.model.clone().unwrap_or_else(|| "sage-model".to_string()),
-                        choices: vec![choice],
-                        usage,
-                    };
-                    
-                    task.result = Some(result);
-                }
-                
-                tasks.insert(task_id.clone(), AsyncTask {
-                    task_id: task.task_id.clone(),
-                    status: task.status.clone(),
-                    request: task.request.clone(),
-                    result: task.result.clone(),
-                    error: task.error.clone(),
-                    created_at: task.created_at,
-                    started_at: task.started_at,
-                    completed_at: task.completed_at,
-                });
-            }
-            
-            log_info!("任务处理完成: {}", task_id);
-        }
-    }
-}
-
 /// 为 WGPU 后端执行流式推理
 fn perform_gpu_streaming_inference(
-    model: &sage::core::model::Model<Wgpu>,
-    tokenizer: &sage::core::tokenizer::Tokenizer,
+    model: &sage::core::Model<Wgpu>,
+    tokenizer: &sage::core::Tokenizer,
     formatted_prompt: &str,
-    options: &sage::core::generation::GenerateOptions,
+    options: &sage::inference::GenerateOptions,
     device: &<Wgpu as Backend>::Device,
     req_model: Option<String>,
 ) -> axum::response::Response {
@@ -1249,8 +656,8 @@ fn perform_gpu_streaming_inference(
     let request_id = uuid::Uuid::new_v4().to_string();
     let model_name = req_model.unwrap_or_else(|| "sage-model".to_string());
     
-    let mut generation_state = sage::generation::GenerationState::new(
-        sage::generation::ModelType::Normal(model),
+    let mut generation_state = sage::inference::GenerationState::new(
+        sage::inference::ModelType::Normal(model),
         tokenizer,
         formatted_prompt,
         options,
@@ -1326,10 +733,10 @@ fn perform_gpu_streaming_inference(
 
 /// 为 NdArray 后端执行流式推理
 fn perform_cpu_streaming_inference(
-    model: &sage::core::model::Model<NdArray>,
-    tokenizer: &sage::core::tokenizer::Tokenizer,
+    model: &sage::core::Model<NdArray>,
+    tokenizer: &sage::core::Tokenizer,
     formatted_prompt: &str,
-    options: &sage::core::generation::GenerateOptions,
+    options: &sage::inference::GenerateOptions,
     device: &NdArrayDevice,
     req_model: Option<String>,
 ) -> axum::response::Response {
@@ -1340,8 +747,8 @@ fn perform_cpu_streaming_inference(
     let request_id = uuid::Uuid::new_v4().to_string();
     let model_name = req_model.unwrap_or_else(|| "sage-model".to_string());
     
-    let mut generation_state = sage::generation::GenerationState::new(
-        sage::generation::ModelType::Normal(model),
+    let mut generation_state = sage::inference::GenerationState::new(
+        sage::inference::ModelType::Normal(model),
         tokenizer,
         formatted_prompt,
         options,
@@ -1417,14 +824,14 @@ fn perform_cpu_streaming_inference(
 
 /// 为 WGPU 后端执行非流式推理
 fn perform_gpu_non_streaming_inference(
-    model: &sage::core::model::Model<Wgpu>,
-    tokenizer: &sage::core::tokenizer::Tokenizer,
+    model: &sage::core::Model<Wgpu>,
+    tokenizer: &sage::core::Tokenizer,
     formatted_prompt: &str,
-    options: &sage::core::generation::GenerateOptions,
+    options: &sage::inference::GenerateOptions,
     device: &<Wgpu as Backend>::Device,
     start_time: std::time::Instant,
 ) -> (String, u128) {
-    let response = sage::generation::generate(model, tokenizer, formatted_prompt, options, device);
+    let response = sage::inference::generate(model, tokenizer, formatted_prompt, options, device);
     let reply = extract_assistant_reply(&response);
     let duration_ms = start_time.elapsed().as_millis();
     (reply, duration_ms)
@@ -1432,14 +839,14 @@ fn perform_gpu_non_streaming_inference(
 
 /// 为 NdArray 后端执行非流式推理
 fn perform_cpu_non_streaming_inference(
-    model: &sage::core::model::Model<NdArray>,
-    tokenizer: &sage::core::tokenizer::Tokenizer,
+    model: &sage::core::Model<NdArray>,
+    tokenizer: &sage::core::Tokenizer,
     formatted_prompt: &str,
-    options: &sage::core::generation::GenerateOptions,
+    options: &sage::inference::GenerateOptions,
     device: &NdArrayDevice,
     start_time: std::time::Instant,
 ) -> (String, u128) {
-    let response = sage::generation::generate(model, tokenizer, formatted_prompt, options, device);
+    let response = sage::inference::generate(model, tokenizer, formatted_prompt, options, device);
     let reply = extract_assistant_reply(&response);
     let duration_ms = start_time.elapsed().as_millis();
     (reply, duration_ms)
@@ -1538,315 +945,4 @@ fn extract_assistant_reply(full: &str) -> String {
     };
     full[start..start + end].trim().to_string()
 }
-
-async fn list_models_handler(
-    state: axum::extract::State<Arc<AppState>>,
-) -> axum::Json<ModelListResponse> {
-    let models = state.models.lock().unwrap();
-    let active_model = state.active_model.lock().unwrap();
-    
-    let models_list: Vec<ModelInfo> = models.values().cloned().collect();
-    
-    axum::Json(ModelListResponse {
-        models: models_list,
-        active_model: Some(active_model.clone()),
-    })
-}
-
-async fn load_model_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    axum::Json(req): axum::Json<ModelLoadRequest>,
-) -> Result<axum::Json<ModelLoadResponse>, (StatusCode, axum::Json<ErrorResponse>)> {
-    let model_id = req.model_id;
-    let model_dir = req.model_dir;
-    
-    // 检查模型目录是否存在
-    if !std::path::Path::new(&model_dir).exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            axum::Json(ErrorResponse {
-                error: "not_found".to_string(),
-                message: format!("Model directory not found: {}", model_dir),
-            }),
-        ));
-    }
-    
-    // 检查配置文件是否存在
-    let config_path = format!("{}/config.json", model_dir);
-    if !std::path::Path::new(&config_path).exists() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            axum::Json(ErrorResponse {
-                error: "invalid_model".to_string(),
-                message: format!("Config file not found: {}", config_path),
-            }),
-        ));
-    }
-    
-    // 读取模型配置
-    let config_str = fs::read_to_string(&config_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(ErrorResponse {
-                error: "read_error".to_string(),
-                message: format!("Failed to read config: {}", e),
-            }),
-        )
-    })?;
-    
-    let config: TrainingConfig = serde_json::from_str(&config_str).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            axum::Json(ErrorResponse {
-                error: "parse_error".to_string(),
-                message: format!("Failed to parse config: {}", e),
-            }),
-        )
-    })?;
-    
-    // 创建模型信息
-    let model_info = ModelInfo {
-        model_id: model_id.clone(),
-        model_dir: model_dir.clone(),
-        status: "loading".to_string(),
-        size: format!("{}m", config.model.d_model / 1024 / 1024),
-        backend: "cpu".to_string(),
-        loaded_at: Instant::now().elapsed().as_millis() as u64,
-    };
-    
-    // 添加到模型列表
-    let mut models = state.models.lock().unwrap();
-    models.insert(model_id.clone(), model_info);
-    
-    log_info!("Model {} loaded from {}", model_id, model_dir);
-    
-    Ok(axum::Json(ModelLoadResponse {
-        model_id,
-        status: "loaded".to_string(),
-        message: "Model loaded successfully".to_string(),
-    }))
-}
-
-async fn unload_model_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    axum::extract::Path(model_id): axum::extract::Path<String>,
-) -> Result<axum::Json<ModelLoadResponse>, (StatusCode, axum::Json<ErrorResponse>)> {
-    // 不允许卸载默认模型
-    if model_id == "default" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            axum::Json(ErrorResponse {
-                error: "forbidden".to_string(),
-                message: "Cannot unload default model".to_string(),
-            }),
-        ));
-    }
-    
-    let mut models = state.models.lock().unwrap();
-    
-    if !models.contains_key(&model_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            axum::Json(ErrorResponse {
-                error: "not_found".to_string(),
-                message: format!("Model not found: {}", model_id),
-            }),
-        ));
-    }
-    
-    // 检查是否是当前活动模型
-    let active_model = state.active_model.lock().unwrap();
-    if *active_model == model_id {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            axum::Json(ErrorResponse {
-                error: "active_model".to_string(),
-                message: "Cannot unload active model".to_string(),
-            }),
-        ));
-    }
-    
-    models.remove(&model_id);
-    
-    log_info!("Model {} unloaded", model_id);
-    
-    Ok(axum::Json(ModelLoadResponse {
-        model_id,
-        status: "unloaded".to_string(),
-        message: "Model unloaded successfully".to_string(),
-    }))
-}
-
-async fn switch_model_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    axum::extract::Path(model_id): axum::extract::Path<String>,
-) -> Result<axum::Json<ModelSwitchResponse>, (StatusCode, axum::Json<ErrorResponse>)> {
-    let models = state.models.lock().unwrap();
-    
-    if !models.contains_key(&model_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            axum::Json(ErrorResponse {
-                error: "not_found".to_string(),
-                message: format!("Model not found: {}", model_id),
-            }),
-        ));
-    }
-    
-    let mut active_model = state.active_model.lock().unwrap();
-    *active_model = model_id.clone();
-    
-    log_info!("Switched active model to {}", model_id);
-    
-    Ok(axum::Json(ModelSwitchResponse {
-        model_id,
-        status: "switched".to_string(),
-        message: "Model switched successfully".to_string(),
-    }))
-}
-
-async fn reload_model_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    axum::extract::Path(model_id): axum::extract::Path<String>,
-) -> Result<axum::Json<ModelLoadResponse>, (StatusCode, axum::Json<ErrorResponse>)> {
-    let models = state.models.lock().unwrap();
-    
-    let model_info = models.get(&model_id).ok_or((
-        StatusCode::NOT_FOUND,
-        axum::Json(ErrorResponse {
-            error: "not_found".to_string(),
-            message: format!("Model not found: {}", model_id),
-        }),
-    ))?;
-    
-    let model_dir = model_info.model_dir.clone();
-    
-    // 检查配置文件是否存在
-    let config_path = format!("{}/config.json", model_dir);
-    if !std::path::Path::new(&config_path).exists() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            axum::Json(ErrorResponse {
-                error: "invalid_model".to_string(),
-                message: format!("Config file not found: {}", config_path),
-            }),
-        ));
-    }
-    
-    // 读取模型配置
-    let config_str = fs::read_to_string(&config_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(ErrorResponse {
-                error: "read_error".to_string(),
-                message: format!("Failed to read config: {}", e),
-            }),
-        )
-    })?;
-    
-    let config: TrainingConfig = serde_json::from_str(&config_str).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            axum::Json(ErrorResponse {
-                error: "parse_error".to_string(),
-                message: format!("Failed to parse config: {}", e),
-            }),
-        )
-    })?;
-    
-    // 加载分词器
-    let tokenizer_path = format!("{}/tokenizer.json", model_dir);
-    let tokenizer = Tokenizer::load(&tokenizer_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(ErrorResponse {
-                error: "tokenizer_error".to_string(),
-                message: format!("Failed to load tokenizer: {}", e),
-            }),
-        )
-    })?;
-    
-    // 加载模型权重
-    let model_path = format!("{}/model.mpk", model_dir);
-    let best_model_path = format!("{}/best_model.mpk", model_dir);
-    let final_model_path = if std::path::Path::new(&best_model_path).exists() {
-        best_model_path
-    } else {
-        model_path
-    };
-    
-    // 更新模型
-    let mut state_tokenizer = state.tokenizer.lock().unwrap();
-    *state_tokenizer = tokenizer;
-    
-    let mut state_config = state.config.lock().unwrap();
-    *state_config = config.clone();
-    
-    let mut state_lazy_model = state.lazy_model.lock().unwrap();
-    *state_lazy_model = LazyModel::new(config.model.clone(), final_model_path.clone());
-    
-    // 更新GPU模型（如果启用）
-    if let Some(_) = state.lazy_model_gpu.lock().unwrap().as_ref() {
-        let mut state_lazy_model_gpu = state.lazy_model_gpu.lock().unwrap();
-        *state_lazy_model_gpu = Some(LazyModel::new(config.model.clone(), final_model_path));
-    }
-    
-    log_info!("Model {} reloaded from {}", model_id, model_dir);
-    
-    Ok(axum::Json(ModelLoadResponse {
-        model_id,
-        status: "reloaded".to_string(),
-        message: "Model reloaded successfully".to_string(),
-    }))
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg(feature = "web")]
-struct DownloadModelRequest {
-    model_id: String,
-    url: String,
-}
-
-#[cfg(feature = "web")]
-async fn download_model_handler(
-    state: axum::extract::State<Arc<AppState>>,
-    axum::extract::Json(req): axum::extract::Json<DownloadModelRequest>,
-) -> Result<axum::Json<ModelLoadResponse>, (StatusCode, axum::Json<ErrorResponse>)> {
-    log_info!("开始下载模型: {}", req.model_id);
-    
-    match state.model_downloader.download_model(&req.model_id, &req.url).await {
-        Ok(model_dir) => {
-            log_info!("模型下载完成: {}", req.model_id);
-            
-            // 添加到模型列表
-            let mut models = state.models.lock().unwrap();
-            let model_info = ModelInfo {
-                model_id: req.model_id.clone(),
-                model_dir: model_dir.to_str().unwrap().to_string(),
-                status: "loaded".to_string(),
-                size: "unknown".to_string(),
-                backend: "cpu".to_string(),
-                loaded_at: std::time::Instant::now().elapsed().as_millis() as u64,
-            };
-            models.insert(req.model_id.clone(), model_info);
-            
-            Ok(axum::Json(ModelLoadResponse {
-                model_id: req.model_id,
-                status: "downloaded".to_string(),
-                message: "Model downloaded successfully".to_string(),
-            }))
-        }
-        Err(e) => {
-            log_error!("模型下载失败: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(ErrorResponse {
-                    error: "download_error".to_string(),
-                    message: format!("Failed to download model: {}", e),
-                }),
-            ))
-        }
-    }
-}
-
 

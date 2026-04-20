@@ -6,12 +6,23 @@
 
 ## 0) 总览
 
-Sage 目前支持四类训练目标：
+Sage 目前支持三类训练目标：
 
 1. **LM（Language Modeling / 续写）**：从纯文本中学习预测下一个 token。
 2. **SFT（Supervised Fine-Tuning / 指令微调）**：从对话/问答数据中学习“用户提问 → 助手回答”。
 3. **DPO（Direct Preference Optimization / 偏好对齐）**：从偏好数据中学习区分好回复和坏回复。
-4. **多模态训练**：从图像和文本数据中学习多模态融合表示。
+另外：Sage 已全面支持**多模态训练与推理**。你可以在 SFT 数据中包含图像路径，实现图文理解能力。
+
+---
+
+## 1) 数据生成工具
+
+推荐使用内置的 `gen_data` 工具生成各种格式的示例数据：
+
+```bash
+# 生成包含 Web 问答和多模态路径的综合 SFT 数据
+cargo run --release --bin gen_data -- --out data/train.jsonl --count 1000 --web --multimodal
+```
 
 ---
 
@@ -96,10 +107,25 @@ cargo run --release --bin train -- --stream --stream-direct --sft-jsonl your_dat
 ```
 
 规则：
-
 - `role` 支持：`system` / `user` / `assistant`
-- `system` 角色用于设置系统提示词（可选）
 - 多轮对话推荐顺序：`system → user → assistant → user → assistant ...`
+- 该 schema **必须至少包含一条** `assistant` 消息。
+
+#### C) 多模态消息（含图像路径）
+
+```json
+{
+  "messages": [
+    {"role": "user", "content": "这张图片里有什么？"},
+    {"role": "assistant", "content": "这是一张示例图片，包含了一些常见的物体。"}
+  ],
+  "image_path": "assets/sample_image.jpg"
+}
+```
+
+规则：
+- `image_path`：可选字段，指向本地图像文件路径。
+- 如果该行包含 `image_path`，训练时会自动加载该图像并通过视觉编码器处理。
 
 ### 2.3 Sage 内部对话模板（训练时）
 
@@ -150,6 +176,12 @@ Sage 会把 SFT 数据转换成内部模板文本进行训练：
 
 这能显著减少“模型复读用户问题”的倾向。
 
+实现细节（重要）：
+
+- SFT 的 assistant mask 是通过扫描模板文本里的 `<assistant> ... </assistant>` 区间生成的（而不是按 `role` 字段直接生成）。
+- 因此**不建议**你在 `prompt/response/content` 里手工插入 `<assistant>` / `</assistant>` / `<user>` 等标签；这些标签会被当作普通文本进入模板，从而影响 mask 与训练目标。
+- 推荐做法：数据里只放“纯文本内容”，让 `train` 在内部统一套模板。
+
 ---
 
 ## 3) 数据质量建议（强烈建议）
@@ -170,15 +202,15 @@ Sage 会把 SFT 数据转换成内部模板文本进行训练：
 
 ---
 
-## 3) DPO：偏好对齐数据
+## 4) DPO：偏好对齐数据
 
-### 3.1 DPO 训练命令
+### 4.1 DPO 训练命令
 
 ```bash
 cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
 ```
 
-### 3.2 DPO 数据格式
+### 4.2 DPO 数据格式
 
 DPO 训练需要包含偏好信息的数据，每行一个 JSON 对象，包含以下字段：
 
@@ -195,7 +227,13 @@ DPO 训练需要包含偏好信息的数据，每行一个 JSON 对象，包含�
 - `chosen`：偏好的回复（更好的回答）
 - `rejected`：被拒绝的回复（较差的回答）
 
-### 3.3 数据质量建议
+实现细节（重要）：
+
+- 当前 DPO 的实现是把 token 序列直接拼接：`full_chosen = encode(prompt) + encode(chosen)`，`full_rejected = encode(prompt) + encode(rejected)`。
+- DPO 路径**不会**像 SFT 一样自动套 `<user>/<assistant>` 模板，也不会自动插入 BOS/EOS 控制字符。
+- 这意味着：如果你希望 DPO 对齐到“对话模型”的输出格式，建议把 `prompt` 写成你希望的前缀（例如以 `<assistant>` 结尾的对话模板前缀），并让 `chosen/rejected` 是对该前缀的续写内容。
+
+### 4.3 数据质量建议
 
 - 确保 `chosen` 和 `rejected` 的差异有意义
 - 偏好应该基于相同的 prompt
@@ -204,7 +242,7 @@ DPO 训练需要包含偏好信息的数据，每行一个 JSON 对象，包含�
 
 ---
 
-## 4) 最小校验（Smoke Test）
+## 5) 最小校验（Smoke Test）
 
 当你拿到一份新数据集时，建议先做：
 
@@ -222,65 +260,26 @@ cargo run --bin infer -- --model-dir ./tmp/sft_smoke --use-best --chat --prompt 
 
 ---
 
-## 5) 多模态数据格式
+## 5) 多模态数据
 
-### 5.1 多模态训练命令
-
-```bash
-cargo run --bin train -- --multimodal --vision-out-dim 512 --fusion-strategy add --ultra-quick --sft-sample
-```
-
-### 5.2 多模态数据格式
-
-多模态训练需要包含图像路径的 SFT 数据，支持以下格式：
-
-#### A) 带图像路径的 prompt/response 格式
-
-```json
-{"prompt":"描述这张图片","response":"这是一张风景照片，展示了一座山和一片湖泊。","image_path":"./images/mountain.jpg"}
-```
-
-#### B) 带图像路径的 messages 格式
-
-```json
-{
-  "messages": [
-    {"role":"user","content":"描述这张图片","image_path":"./images/mountain.jpg"},
-    {"role":"assistant","content":"这是一张风景照片，展示了一座山和一片湖泊。"}
-  ]
-}
-```
-
-字段说明：
-- `image_path`：图像文件的相对或绝对路径
-- `prompt`/`content`：文本提示或问题
-- `response`：助手的文本回复
-
-### 5.3 支持的图像格式
+### 5.1 支持的图像格式
 
 - JPEG (.jpg, .jpeg)
 - PNG (.png)
 - BMP (.bmp)
 
-### 5.4 图像预处理
+### 5.2 自动流水线
 
-在多模态训练和推理中，图像会被自动预处理：
-1. 调整大小为 224x224 像素
-2. 转换为 RGB 格式
-3. 归一化像素值到 0-1 范围
+在训练与推理中，Sage 提供自动化的图像预处理：
+1. **自动加载**：从 `image_path` 指定的路径实时读取。
+2. **Resizing**：自动缩放为 224x224 像素。
+3. **归一化**：将像素值缩放到 0.0 - 1.0 范围。
 
-### 5.5 多模态数据质量建议
+### 5.3 数据准备示例
 
-- 确保图像路径正确且文件存在
-- 使用清晰、内容明确的图像
-- 文本描述应准确反映图像内容
-- 避免使用过大的图像文件（建议小于 10MB）
-- 确保图像内容与文本描述匹配
-
-### 5.6 多模态推理数据
-
-在推理时，使用 `--image-path` 参数指定图像文件：
+你可以使用 `gen_data --multimodal` 快速生成测试集：
 
 ```bash
-cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
+cargo run --release --bin gen_data -- --multimodal --out data/mm_test.jsonl --count 100
 ```
+生成的数据会自动包含一个模拟的 `assets/sample_image.jpg` 路径。

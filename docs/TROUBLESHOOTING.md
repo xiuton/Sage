@@ -4,16 +4,18 @@
 
 ---
 
-## 1) Windows：`LNK1104 cannot open file infer.exe/train.exe`
+## 1) Windows：`LNK1104 cannot open file infer.exe/train.exe` / `os error 4551`
 
 ### 现象
 
 - `cargo run --bin infer ...` 或 `cargo run --bin train ...` 失败
 - 链接器报错：`LNK1104 cannot open file '...infer.exe'`
+- 或运行时报错：`could not execute process ... (never executed)`，并提示 `应用程序控制策略已阻止此文件。 (os error 4551)`
 
 ### 原因
 
-Windows 上可执行文件被占用（常见于：上一次运行的进程未退出、被杀软/索引占用、IDE 终端残留）。
+- `LNK1104`：Windows 上可执行文件被占用（常见于：上一次运行的进程未退出、被杀软/索引占用、IDE 终端残留）。
+- `os error 4551`：系统的应用程序控制策略（AppLocker/WDAC/ASR 等）拦截了新生成的 `target\\...\\*.exe` 执行。
 
 ### 解决方案（按推荐顺序）
 
@@ -24,11 +26,16 @@ Windows 上可执行文件被占用（常见于：上一次运行的进程未退
 cargo clean
 ```
 
-3. 使用临时 target 目录（绕过锁定）
+3. 使用自定义 target 目录（同时可绕过“文件锁定”和部分策略拦截点）
 
-```bash
-cargo run --target-dir .\target_tmp --bin infer -- --help
+```powershell
+cargo run --target-dir "$env:LOCALAPPDATA\cargo-target\sage" --bin infer -- --help
 ```
+
+4. 如果仍是 `os error 4551`
+
+- 尝试把工程移动到 `C:\Users\<你>\...`（部分公司策略会对 D:\ / 共享盘 / 下载目录更严格）。
+- 如环境受管控，需要管理员将你的 target 目录或 Rust 构建产物加入白名单。
 
 ---
 
@@ -159,7 +166,13 @@ cargo run --release --bin train -- --sft-jsonl sft_smoke_200.jsonl --sft-max-rec
 ```
 
 2) 降低 `--max-bytes` 或减少 `--num-epochs`
-3) 后续考虑切换 GPU 后端（计划任务）
+3) 可切换 GPU 后端（如果显卡/驱动支持 WGPU）：
+
+```bash
+cargo run --release --bin train -- --backend gpu [其他参数]
+```
+
+若 GPU 显存吃紧，优先用 `--no-auto-vram` + `--gradient-accumulation` 手动把物理 batch 降下来（等效 batch 保持不变）。
 
 ---
 
@@ -174,7 +187,7 @@ cargo run --release --bin train -- --sft-jsonl sft_smoke_200.jsonl --sft-max-rec
 tokenizers crate API 版本兼容性问题。
 
 #### 解决方案
-- 确保使用项目指定的 `tokenizers = "0.19.1"` 版本
+- 确保使用项目指定的 `tokenizers = "0.19.*"` 版本
 - 如果仍有问题，暂时使用字符级分词器：移除 `--use-bpe` 参数
 
 ### 7.2 BPE 训练速度慢
@@ -261,9 +274,9 @@ cargo run --release --bin train -- --quick-dev [其他参数]
 
 使用 `--quick-dev` 参数启用快速开发模式，会自动设置以下参数以加快训练速度：
 
-- 训练轮数：3（而非默认50）
-- 批次大小：8（而非默认32）
-- 学习率：0.001（而非默认0.0001）
+- 训练轮数：1（而非默认50）
+- 批次大小：CPU 通常为 4；GPU 通常为 8（以实际日志输出为准）
+- 学习率：显著提高（CPU 通常为 1e-2；GPU 通常为 2e-2）
 - 保留进度条显示（便于观察训练进度）
 
 ### 使用场景
@@ -287,17 +300,20 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 
 ---
 
-## 11) GPU 训练崩溃：`wgpu error: Validation Error` / `Not enough memory left`
+## 11) GPU 训练崩溃：`wgpu error: Validation Error` / `Out of Memory` / `Not enough memory left`
 
 ### 现象
 
 - 训练启动后很快 panic
 - 典型报错包含：`In Device::create_buffer` 与 `Not enough memory left`
+ - 或出现：`wgpu error: Out of Memory`
+ - 或出现：`wgpu error: Validation Error` / `Encoder is invalid`
 
 ### 原因
 
 - GPU 显存不足（batch 太大、序列太长、模型太大、或者同时跑了其他占显存程序）。
 - 旧版本在构建 batch 时会产生大量小的 GPU buffer 分配，容易触发显存分配失败。
+- 如果训练日志中出现 `Loss: NaN`，随后也可能触发 WGPU 的 `Validation Error / Encoder is invalid`（非法数值导致后续 GPU 命令编码失败）。
 
 ### 解决方案
 
@@ -306,76 +322,38 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 - 降低 `--batch-size`（例如 8/16）
 - 降低 `--max-seq-len`（例如 64/128）
 - 不要开启 `--fast`（会提高 batch/worker/lr）
+- 保持等效 batch：例如把 `--batch-size 8` 改为 `--batch-size 2 --gradient-accumulation 4`
 
-2) 使用 CPU 后端验证流程：
+2) 用 `--no-auto-vram` 手动控制（避免探测阶段的自动改参）：
+
+```bash
+cargo run --release --bin train -- --backend gpu --no-auto-vram --batch-size 2 --gradient-accumulation 4 [其他参数]
+```
+
+3) 使用 CPU 后端验证流程：
 
 ```bash
 cargo run --release --bin train -- --backend cpu [其他参数]
 ```
 
-3) 更新到最新代码并重新编译：
+4) 更新到最新代码并重新编译：
 
 - 已优化 batch 构建方式，减少 GPU 端临时分配，缓解该类 OOM。
 
+5) 如果出现 `Loss: NaN`
+
+- 优先检查训练数据是否包含模板标签（`<assistant>...</assistant>` 等）作为普通文本：SFT 训练会在内部套模板，并基于模板的 `<assistant>` 区间生成 loss mask；把标签混进内容会干扰 mask 与训练目标。
+- 先做 smoke test：`--sft-max-records 200 --num-epochs 1 --max-seq-len 64`，观察是否仍然在前几个 batch 就 NaN。
+
 ---
 
-## 12) 分布式训练问题
+## 12) 分布式训练（`--distributed`）说明
 
-### 12.1 分布式训练启动失败
+当前版本的分布式训练属于**框架/占位实现**：CLI 参数已提供，但未完成真实的多 GPU 训练与权重/梯度同步。
 
-#### 现象
-- 使用 `--distributed` 参数时训练无法启动
-- 报错：`No available GPU devices found` 或类似设备错误
-
-#### 原因
-- 指定的 GPU 设备不可用或不存在
-- WGPU 后端无法检测到 GPU
-
-#### 解决方案
-1) 检查可用的 GPU 设备：
-```bash
-# 使用系统工具检查 GPU
-# Windows: 使用任务管理器查看 GPU
-# Linux: nvidia-smi
-# macOS: system_profiler SPDisplaysDataType
-```
-
-2) 确保指定的设备 ID 有效：
-```bash
-# 尝试使用单个设备测试
-cargo run --release --bin train -- --distributed --devices 0 --backend gpu ...
-```
-
-3) 如果没有可用 GPU，使用 CPU 后端：
-```bash
-cargo run --release --bin train -- --backend cpu ...
-```
-
-### 12.2 分布式训练内存不足
-
-#### 现象
-- 分布式训练时出现显存不足错误
-- 报错：`Not enough memory left`
-
-#### 原因
-- 每个 GPU 分配的批量大小太大
-- 模型在多 GPU 上的内存占用超过可用显存
-
-#### 解决方案
-1) 降低批量大小：
-```bash
---batch-size 8  # 而非默认的 32
-```
-
-2) 使用更小的模型配置：
-```bash
---model-size 10m  # 而非默认的 30m
-```
-
-3) 减少序列长度：
-```bash
---max-seq-len 128  # 而非默认的 256
-```
+建议：
+- 需要稳定训练时不要使用 `--distributed`，直接用单 GPU（`--backend gpu`）或 CPU
+- 如果你在受限环境里需要“多卡训练”，建议先等待该模块补齐或自行实现同步逻辑后再启用
 
 ---
 
@@ -401,9 +379,11 @@ cargo run --release --bin train -- --backend cpu ...
 }
 ```
 
-2) 使用 `--sft-max-records` 限制读取数量进行测试：
+2) 先用小文件做 smoke test（例如只保留前 100 行）：
 ```bash
---dpo-jsonl dpo_data.jsonl --sft-max-records 100
+# PowerShell:
+#   Get-Content .\dpo_data.jsonl -TotalCount 100 | Set-Content .\dpo_data_small.jsonl
+--dpo-data dpo_data_small.jsonl
 ```
 
 ### 13.2 DPO训练不稳定
@@ -428,24 +408,22 @@ cargo run --release --bin train -- --backend cpu ...
 
 ---
 
-## 14) 多模态训练问题
+## 14) 多模态推理问题
 
-### 14.1 图像编码器错误
+### 14.1 图像加载/预处理错误
 
 #### 现象
-- 多模态训练时出现图像编码错误
+- 多模态推理时出现图像加载/预处理错误
 - 报错：`Failed to process image`
 
 #### 原因
 - 图像格式不支持
-- 图像尺寸不符合要求
+- 图像文件损坏或路径不正确
 
 #### 解决方案
 1) 确保使用支持的图像格式（JPEG、PNG）
-2) 调整图像尺寸参数：
-```bash
---image-size 224  # 设置合适的图像尺寸
-```
+2) 检查传入的图片路径/权限，确保文件可读取
+3) 目前训练命令不提供 `--image-size` 参数；如需调整输入分辨率，请在数据预处理阶段完成
 
 ### 14.2 多模态融合错误
 
@@ -462,52 +440,19 @@ cargo run --release --bin train -- --backend cpu ...
 
 ---
 
-## 15) 量化相关问题
+## 15) 量化相关说明
 
-### 15.1 量化模型加载失败
+当前版本的量化属于**框架/体积估算**：仓库内存在 `QuantizedModel` 包装器与量化模式枚举，但未提供稳定的“量化推理/量化导出”命令行参数，也未实现权重量化与算子替换带来的真实加速。
 
-#### 现象
-- 加载量化模型时出现错误
-- 报错：`Failed to load quantized model`
-
-#### 原因
-- 量化模型文件损坏
-- 量化配置不匹配
-
-#### 解决方案
-1) 重新生成量化模型
-2) 验证量化配置是否正确
-
-### 15.2 量化精度损失
-
-#### 现象
-- 量化后模型生成质量明显下降
-- 输出内容不连贯或语义错误
-
-#### 原因
-- 量化参数设置不当
-- 模型结构不适合量化
-
-#### 解决方案
-1) 尝试不同的量化模式：
-```bash
-# INT8 量化（精度更高）
---quantize-mode int8
-
-# 动态量化（速度更快）
---quantize-mode dynamic
-```
-
-2) 对于关键层禁用量化：
-```bash
---no-quantize-output
-```
+因此：
+- 文档中若出现 `--quantize-mode`、`--no-quantize-output` 等参数，属于过时内容或其他分支实现，可忽略
+- 如需部署侧量化，请先补齐真实量化实现后再对齐文档与 CLI
 
 ---
 
 ## 16) 流式数据加载问题
 
-### 12.1 流式加载速度慢
+### 16.1 流式加载速度慢
 
 #### 现象
 

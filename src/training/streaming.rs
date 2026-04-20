@@ -393,7 +393,22 @@ impl<B: Backend> Iterator for StreamingSftIterator<B> {
             TensorData::new(mask_data, [self.loader.batch_size, self.loader.seq_len]),
             &self.loader.device,
         );
-        Some(TextBatch { inputs, targets, mask })
+        
+        // 创建全1的attention_mask，表示所有位置都被关注
+        let attention_mask_data = vec![1i32; self.loader.batch_size * self.loader.seq_len];
+        let attention_mask = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(attention_mask_data, [self.loader.batch_size, self.loader.seq_len]),
+            &self.loader.device,
+        );
+        
+        // 创建全0的token_type_ids，表示单一序列
+        let token_type_ids_data = vec![0i32; self.loader.batch_size * self.loader.seq_len];
+        let token_type_ids = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(token_type_ids_data, [self.loader.batch_size, self.loader.seq_len]),
+            &self.loader.device,
+        );
+        
+        Some(TextBatch { inputs, targets, mask, attention_mask, token_type_ids, images: None })
     }
 }
 

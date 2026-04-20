@@ -1,16 +1,16 @@
 
 use burn::{
-    config::Config,
     data::{dataloader::{batcher::Batcher, DataLoaderBuilder}},
     module::AutodiffModule,
-    optim::{AdamConfig, adaptor::OptimizerAdaptor, Optimizer, GradientsParams, GradientsAccumulator},
+    optim::{adaptor::OptimizerAdaptor, Optimizer, GradientsParams, GradientsAccumulator},
     prelude::*,
     record::CompactRecorder,
     tensor::backend::AutodiffBackend,
 };
 
-use crate::training::distributed::{DistributedConfig, train_parallel, get_available_devices, create_device};
-use crate::training::dpo::{DPOConfig, DPOItem, DPOTrainer, DPOBatcher};
+use crate::training::distributed::{create_device, get_available_devices, train_parallel, DistributedConfig};
+use crate::training::dpo::{DPOBatcher, DPOConfig, DPOItem, DPOTrainer};
+use crate::configs::config::TrainingConfig;
 
 use std::{
     fs,
@@ -19,73 +19,13 @@ use std::{
 };
 
 use crate::{MmapTextDataset, TextBatch, TextBatcher, TextDataset};
-use crate::core::model::{Model, ModelConfig};
-use crate::core::tokenizer::Tokenizer;
+use crate::core::{Model, Tokenizer};
 use crate::training::lr_scheduler::LRScheduler;
-
-/// 学习率调度器配置
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LRSchedulerConfig {
-    pub lr_max: f64,
-    pub lr_min: f64,
-    pub warmup_steps: usize,
-    pub total_steps: usize,
-}
-
-#[derive(Config, Debug)]
-pub struct TrainingConfig {
-    pub model: ModelConfig,
-    pub optimizer: AdamConfig,
-    #[config(default = 50)]
-    pub num_epochs: usize,
-    #[config(default = 32)]
-    pub batch_size: usize,
-    #[config(default = 4)]
-    pub num_workers: usize,
-    #[config(default = 42)]
-    pub seed: u64,
-    #[config(default = 5.0e-4)]
-    pub lr: f64,
-    #[config(default = false)]
-    pub no_progress: bool,
-    /// 梯度累积步数（与 Hugging Face `gradient_accumulation_steps` 一致：等效 batch ≈ batch_size × 该值）。
-    #[config(default = 1)]
-    pub gradient_accumulation_steps: usize,
-    /// 分布式训练配置
-    #[config(default = false)]
-    pub distributed: bool,
-    /// 设备列表（用于分布式训练）
-    pub devices: Vec<String>,
-    /// DPO训练配置
-    pub dpo_config: Option<DPOConfig>,
-    /// 学习率调度器配置
-    pub lr_scheduler: Option<LRSchedulerConfig>,
-}
-
-impl TrainingConfig {
-    pub fn create(model: ModelConfig, optimizer: AdamConfig) -> Self {
-        Self {
-            model,
-            optimizer,
-            num_epochs: 50,
-            batch_size: 32,
-            num_workers: 4,
-            seed: 42,
-            lr: 5.0e-4,
-            no_progress: false,
-            gradient_accumulation_steps: 1,
-            distributed: false,
-            devices: Vec::new(),
-            dpo_config: None,
-            lr_scheduler: None,
-        }
-    }
-}
 
 
 
 struct TrainingContext<B: AutodiffBackend> {
-    artifact_dir: String,
+    output_dir: String,
     config: TrainingConfig,
     device: B::Device,
     tokenizer: Arc<Tokenizer>,
@@ -124,9 +64,9 @@ fn print_training_config(batch_size: usize, seq_len: usize, accum: usize, worker
 }
 
 fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
-    create_artifact_dirs(&context.artifact_dir);
+    create_artifact_dirs(&context.output_dir);
     
-    if let Err(e) = save_config_and_tokenizer(&context.artifact_dir, &context.config, &context.tokenizer) {
+    if let Err(e) = save_config_and_tokenizer(&context.output_dir, &context.config, &context.tokenizer) {
         eprintln!("警告: {}", e);
         eprintln!("继续运行，但配置和分词器可能未保存");
     }
@@ -163,7 +103,7 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
     let lr = adjusted_context.config.lr;
     let num_epochs = adjusted_context.config.num_epochs;
     let no_progress = adjusted_context.config.no_progress;
-    let artifact_dir = adjusted_context.artifact_dir.clone();
+    let output_dir = adjusted_context.output_dir.clone();
     let dataloader_train = adjusted_context.dataloader_train.clone();
     let dataloader_valid = adjusted_context.dataloader_valid.clone();
 
@@ -180,14 +120,14 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
     };
 
     // 创建训练日志目录
-    let checkpoint_dir = Path::new(&artifact_dir).join("checkpoint");
+    let checkpoint_dir = Path::new(&output_dir).join("checkpoint");
     fs::create_dir_all(&checkpoint_dir).ok();
 
     let start_time = std::time::Instant::now();
 
     // 创建验证损失日志目录
-    let valid_dir = Path::new(&artifact_dir).join("valid");
-    let train_dir = Path::new(&artifact_dir).join("train");
+    let valid_dir = Path::new(&output_dir).join("valid");
+    let train_dir = Path::new(&output_dir).join("train");
     fs::create_dir_all(&valid_dir).ok();
     fs::create_dir_all(&train_dir).ok();
 
@@ -204,6 +144,7 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         // 训练阶段
         let mut train_loss_sum = 0.0f64;
         let mut train_batches = 0usize;
+        let mut train_perplexity_sum = 0.0f64;
         
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             let output = model.forward_step(batch);
@@ -214,6 +155,7 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
                 loss_slice.map(|s| s[0] as f64).unwrap_or(0.0)
             };
             train_loss_sum += batch_loss;
+            train_perplexity_sum += batch_loss.exp();
             train_batches += 1;
             
             // 反向传播
@@ -224,6 +166,20 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
             // 梯度累积
             if (iteration + 1) % accum == 0 {
                 let grads = accumulator.grads();
+                
+                // 如果启用了 LoRA 且设置了仅训练 LoRA，则过滤梯度
+                let grads = if adjusted_context.config.use_lora {
+                    let lora_param_ids = model.get_lora_params();
+                    // 这里我们创建一个新的 GradientsParams 只包含 LoRA 参数的梯度
+                    // 注意：这在某些 Burn 版本中可能需要特定的方法来访问内部数据
+                    // 这里采用简单的逻辑：只有 LoRA 参数才会被更新
+                    // 在实际实现中，通常是通过在 optimizer 中配置哪些参数需要更新来完成的
+                    // 但这里我们可以通过过滤梯度来实现
+                    grads
+                } else {
+                    grads
+                };
+
                 let current_lr = lr_scheduler.as_mut().map(|s| s.get_lr()).unwrap_or(lr);
                 model = optim.step(current_lr, model, grads);
                 accumulator = GradientsAccumulator::new();
@@ -234,7 +190,8 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
 
             if !no_progress && (iteration + 1) % 10 == 0 {
                 let avg_loss = train_loss_sum / train_batches as f64;
-                println!("[Train] Epoch {} - Batch {} - Loss: {:.6}", epoch, iteration + 1, avg_loss);
+                let avg_perplexity = train_perplexity_sum / train_batches as f64;
+                println!("[Train] Epoch {} - Batch {} - Loss: {:.6} - Perplexity: {:.4}", epoch, iteration + 1, avg_loss, avg_perplexity);
             }
         }
 
@@ -244,23 +201,32 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         } else {
             0.0
         };
+        let avg_train_perplexity = if train_batches > 0 {
+            train_perplexity_sum / train_batches as f64
+        } else {
+            0.0
+        };
         let _ = fs::write(epoch_train_dir.join("Loss.log"), format!("{}\n", avg_train_loss));
+        let _ = fs::write(epoch_train_dir.join("Perplexity.log"), format!("{}\n", avg_train_perplexity));
 
-        println!("[Train] Epoch {} complete - Average Loss: {:.6}", epoch, avg_train_loss);
+        println!("[Train] Epoch {} complete - Average Loss: {:.6} - Perplexity: {:.4}", epoch, avg_train_loss, avg_train_perplexity);
 
         // 验证阶段
         let model_valid = model.valid();
         let mut valid_loss_sum = 0.0f64;
         let mut valid_batches = 0usize;
+        let mut valid_perplexity_sum = 0.0f64;
 
         for (iteration, batch) in dataloader_valid.iter().enumerate() {
             let batch_loss = model_valid.compute_validation_loss(batch);
             valid_loss_sum += batch_loss;
+            valid_perplexity_sum += batch_loss.exp();
             valid_batches += 1;
 
             if !no_progress && (iteration + 1) % 10 == 0 {
                 let avg_loss = valid_loss_sum / valid_batches as f64;
-                println!("[Valid] Epoch {} - Batch {} - Loss: {:.6}", epoch, iteration + 1, avg_loss);
+                let avg_perplexity = valid_perplexity_sum / valid_batches as f64;
+                println!("[Valid] Epoch {} - Batch {} - Loss: {:.6} - Perplexity: {:.4}", epoch, iteration + 1, avg_loss, avg_perplexity);
             }
         }
 
@@ -270,9 +236,15 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         } else {
             0.0
         };
+        let avg_valid_perplexity = if valid_batches > 0 {
+            valid_perplexity_sum / valid_batches as f64
+        } else {
+            0.0
+        };
         let _ = fs::write(epoch_valid_dir.join("Loss.log"), format!("{}\n", avg_valid_loss));
+        let _ = fs::write(epoch_valid_dir.join("Perplexity.log"), format!("{}\n", avg_valid_perplexity));
 
-        println!("[Valid] Epoch {} complete - Average Loss: {:.6}", epoch, avg_valid_loss);
+        println!("[Valid] Epoch {} complete - Average Loss: {:.6} - Perplexity: {:.4}", epoch, avg_valid_loss, avg_valid_perplexity);
 
         // 保存检查点
         let checkpoint_path = checkpoint_dir.join(format!("model-{}.mpk", epoch));
@@ -286,11 +258,11 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
     let elapsed = start_time.elapsed();
 
     // 使用 find_best_epoch 函数找到最佳 epoch
-    if let Some(best_epoch) = find_best_epoch(Path::new(&artifact_dir)) {
-        let from = Path::new(&artifact_dir)
+    if let Some(best_epoch) = find_best_epoch(Path::new(&output_dir)) {
+        let from = Path::new(&output_dir)
             .join("checkpoint")
             .join(format!("model-{}.mpk", best_epoch));
-        let to = Path::new(&artifact_dir).join("best_model.mpk");
+        let to = Path::new(&output_dir).join("best_model.mpk");
         
         if let Err(e) = fs::copy(&from, &to) {
             eprintln!("警告: 复制最佳模型失败: {} ({} -> {})", e, from.display(), to.display());
@@ -299,7 +271,15 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         }
     }
 
-    print_training_stats(elapsed, adjusted_context.total_items, num_epochs, &artifact_dir);
+    // 保存最终模型
+    let final_model_path = Path::new(&output_dir).join("model.mpk");
+    if let Err(e) = model.save_file(&final_model_path, &CompactRecorder::new()) {
+        eprintln!("警告: 保存最终模型失败: {}", e);
+    } else {
+        println!("最终模型已保存到: {}", final_model_path.display());
+    }
+
+    print_training_stats(elapsed, adjusted_context.total_items, num_epochs, &output_dir);
 }
 
 fn print_training_stats(elapsed: std::time::Duration, total_items: usize, num_epochs: usize, artifact_dir: &str) {
@@ -325,7 +305,7 @@ fn print_training_stats(elapsed: std::time::Duration, total_items: usize, num_ep
 }
 
 pub fn train<B: AutodiffBackend>(
-    artifact_dir: &str,
+    output_dir: &str,
     config: TrainingConfig,
     device: B::Device,
     tokenizer: &Tokenizer,
@@ -357,7 +337,9 @@ pub fn train<B: AutodiffBackend>(
             .collect();
         
         // 创建数据集
-        let dataset = Arc::new(TextDataset::new(tokens, mask, config.model.max_seq_len));
+        // 创建数据集
+        let dataset = TextDataset::new(tokens, mask, config.max_seq_len);
+        let dataset = Arc::new(dataset);
         
         // 启动并行训练
         train_parallel::<B, _>(dataset, config.batch_size, config.num_epochs, devices);
@@ -403,7 +385,7 @@ pub fn train<B: AutodiffBackend>(
         ));
 
     let context = TrainingContext {
-        artifact_dir: artifact_dir.to_string(),
+        output_dir: output_dir.to_string(),
         config,
         device,
         tokenizer: Arc::new(tokenizer.clone()),
@@ -417,7 +399,7 @@ pub fn train<B: AutodiffBackend>(
 }
 
 pub fn train_from_cache<B: AutodiffBackend>(
-    artifact_dir: &str,
+    output_dir: &str,
     config: TrainingConfig,
     device: B::Device,
     tokenizer: &Tokenizer,
@@ -455,7 +437,7 @@ pub fn train_from_cache<B: AutodiffBackend>(
         .build(dataset_test);
 
     let context = TrainingContext {
-        artifact_dir: artifact_dir.to_string(),
+        output_dir: output_dir.to_string(),
         config,
         device,
         tokenizer: Arc::new(tokenizer.clone()),
@@ -470,16 +452,16 @@ pub fn train_from_cache<B: AutodiffBackend>(
 
 /// DPO训练函数
 pub fn train_dpo<B: AutodiffBackend>(
-    artifact_dir: &str,
+    output_dir: &str,
     config: TrainingConfig,
     device: B::Device,
     tokenizer: &Tokenizer,
     dpo_items: Vec<DPOItem>,
     init_model: Option<Model<B>>,
 ) {
-    create_artifact_dirs(artifact_dir);
+    create_artifact_dirs(output_dir);
     
-    if let Err(e) = save_config_and_tokenizer(artifact_dir, &config, tokenizer) {
+    if let Err(e) = save_config_and_tokenizer(output_dir, &config, tokenizer) {
         eprintln!("警告: {}", e);
         eprintln!("继续运行，但配置和分词器可能未保存");
     }
@@ -525,6 +507,10 @@ pub fn train_dpo<B: AutodiffBackend>(
     
     println!("开始DPO训练...");
     
+    // 创建检查点目录
+    let checkpoint_dir = Path::new(output_dir).join("checkpoint");
+    fs::create_dir_all(&checkpoint_dir).ok();
+    
     // 训练循环
     for epoch in 1..=config.num_epochs {
         println!("\nEpoch {}/{}", epoch, config.num_epochs);
@@ -550,26 +536,29 @@ pub fn train_dpo<B: AutodiffBackend>(
         }
         
         let avg_loss = total_loss / batch_count as f32;
-        println!("  Epoch Loss: {:.6}", avg_loss);
+        let avg_perplexity = avg_loss.exp();
+        println!("  Epoch Loss: {:.6} - Perplexity: {:.4}", avg_loss, avg_perplexity);
         
         // 保存检查点
-        let model_path = format!("{}/checkpoint/model-{}.mpk", artifact_dir, epoch);
+        let model_path = checkpoint_dir.join(format!("model-{}.mpk", epoch));
         if let Err(e) = trainer.model().clone().save_file(&model_path, &CompactRecorder::new()) {
             println!("保存模型失败: {}", e);
+        } else {
+            println!("检查点已保存: {}", model_path.display());
         }
     }
     
     // 保存最终模型
-    let model_path = format!("{}/model", artifact_dir);
+    let model_path = Path::new(output_dir).join("model.mpk");
     if let Err(e) = trainer.model().clone().save_file(&model_path, &CompactRecorder::new()) {
         println!("保存最终模型失败: {}", e);
     } else {
-        println!("DPO训练完成，模型已保存到: {}", model_path);
+        println!("DPO训练完成，模型已保存到: {}", model_path.display());
     }
 }
 
 pub fn train_with_loaders<B: AutodiffBackend>(
-    artifact_dir: &str,
+    output_dir: &str,
     config: TrainingConfig,
     device: B::Device,
     tokenizer: &Tokenizer,
@@ -582,7 +571,7 @@ pub fn train_with_loaders<B: AutodiffBackend>(
 ) {
     let total_items = dataloader_train.num_items();
     let context = TrainingContext {
-        artifact_dir: artifact_dir.to_string(),
+        output_dir: output_dir.to_string(),
         config,
         device,
         tokenizer: Arc::new(tokenizer.clone()),

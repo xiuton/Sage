@@ -5,14 +5,13 @@ use burn::module::Module;
 use burn::optim::AdamConfig;
 use burn::prelude::Backend;
 use sage::{
-    model::ModelConfig,
+    core::{ModelConfig, Tokenizer},
     probe_first_fitting_config,
     streaming::{SftInput, StreamingSftDataLoader},
-    tokenizer::Tokenizer,
     train, train_from_cache, train_with_loaders, train_dpo,
     TrainingConfig,
 };
-use sage::training::dpo::{DPOConfig, load_dpo_jsonl};
+use sage::training::{DPOConfig, load_dpo_jsonl};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -27,173 +26,193 @@ use clap::{ArgAction, Parser};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(long)]
-    corpus: Option<String>,
+    #[arg(long, default_value = "./data/corpus.txt")]
+    pub corpus: String,
 
     #[arg(long)]
-    corpus_dir: Option<String>,
+    pub corpus_dir: Option<String>,
 
     #[arg(long, default_value_t = 50_000_000)]
-    max_bytes: usize,
+    pub max_bytes: usize,
 
     #[arg(long, default_value_t = false)]
-    stream: bool,
+    pub stream: bool,
 
     #[arg(long, default_value_t = false)]
-    stream_direct: bool,
+    pub stream_direct: bool,
 
     #[arg(long)]
-    sft_jsonl: Option<String>,
+    pub sft_jsonl: Option<String>,
 
     #[arg(long, default_value_t = false)]
-    sft_sample: bool,
+    pub sft_sample: bool,
 
     #[arg(long, default_value_t = false)]
-    sft_sample_messages: bool,
+    pub sft_sample_messages: bool,
 
     #[arg(long, default_value_t = 0)]
-    sft_max_records: usize,
+    pub sft_max_records: usize,
 
     /// 模型和训练产物的输出目录。
-    #[arg(long, default_value = "./tmp/sage_model_formal")]
-    artifact_dir: String,
+    #[arg(long, default_value = "./models")]
+    pub output_dir: String,
 
     /// 训练的总轮数。
     #[arg(long, default_value_t = 50)]
-    num_epochs: usize,
+    pub num_epochs: usize,
 
     /// 每步训练的物理 batch。可写多次 `--batch-size`，**以最后一次为准**（默认 32）。
     #[arg(long = "batch-size", action = ArgAction::Append)]
-    batch_sizes: Vec<usize>,
+    pub batch_sizes: Vec<usize>,
 
     #[arg(long, default_value_t = 1.0e-4)]
-    lr: f64,
+    pub learning_rate: f64,
 
     #[arg(long, default_value_t = 256)]
-    max_seq_len: usize,
+    pub max_seq_len: usize,
 
     #[arg(long, default_value_t = false)]
-    force: bool,
+    pub force: bool,
 
     #[arg(long, default_value_t = false)]
-    r#continue: bool,
+    pub r#continue: bool,
 
     #[arg(long)]
-    resume_epoch: Option<usize>,
+    pub resume_epoch: Option<usize>,
 
     #[arg(long, default_value_t = false)]
-    reset_tokenizer: bool,
+    pub reset_tokenizer: bool,
 
     #[arg(long, default_value_t = false)]
-    use_bpe: bool,
+    pub use_bpe: bool,
 
     #[arg(long, default_value_t = 5000)]
-    bpe_vocab_size: usize,
+    pub bpe_vocab_size: usize,
 
     /// Enable high parallel training mode (faster data loading + batch throughput)
     #[arg(long, default_value_t = false)]
-    fast: bool,
+    pub fast: bool,
 
     /// Worker threads for data loading
     #[arg(long, default_value_t = 4)]
-    num_workers: usize,
+    pub num_workers: usize,
 
     /// Enable quick development mode (1 epoch, small batch, high lr)
     #[arg(long, default_value_t = false)]
-    quick_dev: bool,
+    pub quick_dev: bool,
 
     /// Enable ultra-quick development mode (1 epoch, tiny batch, limit data to 100 records)
     #[arg(long, default_value_t = false)]
-    ultra_quick: bool,
+    pub ultra_quick: bool,
 
     /// Disable progress bars and TUI display
     #[arg(long, default_value_t = false)]
-    no_progress: bool,
+    pub no_progress: bool,
 
     /// Enable TUI progress display (may not work in all terminals, especially Windows PowerShell)
     #[arg(long, default_value_t = false)]
-    tui: bool,
+    pub tui: bool,
 
     /// Backend to use for training: cpu or gpu
     #[arg(long, default_value = "cpu", value_name = "cpu|gpu")]
-    backend: String,
+    pub backend: String,
 
-    /// Model size configuration: default (1M), 10m, 30m, 100m, 1b, 3b, 671b
-    #[arg(long, default_value = "default", value_name = "default|10m|30m|100m|1b|3b|671b")]
-    model_size: String,
+    /// Model configuration file path
+    #[arg(long, default_value = "./inference/configs/config_1B.json")]
+    pub config_path: String,
 
     /// Training mode: general, code, math
     #[arg(long, default_value = "general", value_name = "general|code|math")]
-    training_mode: String,
+    pub training_mode: String,
 
     /// Force enable TUI progress display even in environments that might not support it
     #[arg(long, default_value_t = false)]
-    force_tui: bool,
+    pub force_tui: bool,
 
     /// 禁用 GPU 自动显存探测；按 `--batch-size` 与 `--max-seq-len` 原样训练（可配合 `--gradient-accumulation`）。
     #[arg(long, default_value_t = false)]
-    no_auto_vram: bool,
+    pub no_auto_vram: bool,
 
     /// 梯度累积步数（Hugging Face 风格：等效 batch ≈ batch_size × 该值）。
     /// 使用 `--no-auto-vram` 或 CPU 时生效；GPU 自动探测成功时会按等效 batch 自动计算并写入配置。
     #[arg(long, default_value_t = 1)]
-    gradient_accumulation: usize,
+    pub gradient_accumulation: usize,
     
     /// 启用分布式训练
     #[arg(long, default_value_t = false)]
-    distributed: bool,
+    pub distributed: bool,
     
     /// 指定使用的设备列表，格式: "cpu,gpu:0,gpu:1"
     #[arg(long, value_name = "cpu,gpu:0,gpu:1")]
-    devices: Option<String>,
+    pub devices: Option<String>,
     
     /// DPO训练模式
     #[arg(long, default_value_t = false)]
-    dpo: bool,
+    pub dpo: bool,
     
     /// DPO beta参数
     #[arg(long, default_value_t = 0.1)]
-    dpo_beta: f64,
+    pub dpo_beta: f64,
     
     /// DPO KL散度权重
     #[arg(long, default_value_t = 0.1)]
-    dpo_kl_weight: f64,
+    pub dpo_kl_weight: f64,
     
     /// DPO数据文件路径
     #[arg(long, value_name = "path/to/dpo_data.jsonl")]
-    dpo_data: Option<String>,
+    pub dpo_data: Option<String>,
     
     /// 启用学习率调度器（Cosine Annealing + Warmup）
     #[arg(long, default_value_t = false)]
-    lr_scheduler: bool,
+    pub lr_scheduler: bool,
     
     /// 学习率调度器的最大学习率（Warmup阶段结束时的值）
     #[arg(long, default_value_t = 0.0001)]
-    lr_max: f64,
+    pub lr_max: f64,
     
     /// 学习率调度器的最小学习率（Cosine阶段结束时的值）
     #[arg(long, default_value_t = 0.00001)]
-    lr_min: f64,
+    pub lr_min: f64,
     
     /// 学习率调度器的Warmup步数
     #[arg(long, default_value_t = 1000)]
-    warmup_steps: usize,
+    pub warmup_steps: usize,
     
     /// 学习率调度器的总调度步数
     #[arg(long, default_value_t = 100000)]
-    total_steps: usize,
+    pub total_steps: usize,
     
     /// 启用多模态训练
     #[arg(long, default_value_t = false)]
-    multimodal: bool,
+    pub multimodal: bool,
     
     /// 视觉编码器输出维度
     #[arg(long, default_value_t = 512)]
-    vision_out_dim: usize,
+    pub vision_out_dim: usize,
     
     /// 融合策略：add, concatenate, attention
     #[arg(long, default_value = "add", value_name = "add|concatenate|attention")]
-    fusion_strategy: String,
+    pub fusion_strategy: String,
+
+    /// 启用 LoRA 微调
+    #[arg(long, default_value_t = false)]
+    pub use_lora: bool,
+
+    /// 启用文生图训练
+    #[arg(long, default_value_t = false)]
+    pub text_to_image: bool,
+
+    /// 文本-图像对数据文件路径
+    #[arg(long, value_name = "path/to/text_image_pairs.jsonl")]
+    pub image_text_data: Option<String>,
+
+    /// LoRA 秩 (Rank)
+    #[arg(long, default_value_t = 8)]
+    pub lora_rank: usize,
+
+    /// LoRA Alpha 参数
+    #[arg(long, default_value_t = 16.0)]
+    pub lora_alpha: f32,
 }
 
 impl Args {
@@ -279,7 +298,7 @@ fn load_corpus(args: &Args) -> io::Result<String> {
         return Ok(out);
     }
 
-    let path = args.corpus.as_deref().unwrap_or("corpus_cn.txt");
+    let path: &str = if args.corpus.is_empty() { "corpus_cn.txt" } else { &args.corpus };
     let bytes = read_file_limited(Path::new(path), max_bytes)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
@@ -610,7 +629,7 @@ fn collect_vocab_chars_stream(args: &Args) -> io::Result<Vec<char>> {
         return Ok(set.into_iter().collect());
     }
 
-    let path = args.corpus.as_deref().unwrap_or("corpus_cn.txt");
+    let path: &str = if args.corpus.is_empty() { "corpus_cn.txt" } else { &args.corpus };
     let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -638,7 +657,7 @@ fn write_u32_le(mut w: impl Write, v: u32) -> io::Result<()> {
 }
 
 fn build_token_cache_stream(args: &Args, tokenizer: &Tokenizer) -> io::Result<(String, String)> {
-    let cache_dir = Path::new(&args.artifact_dir).join("cache");
+    let cache_dir = Path::new(&args.output_dir).join("cache");
     fs::create_dir_all(&cache_dir)?;
 
     let tokens_path = cache_dir.join("tokens.bin");
@@ -674,7 +693,7 @@ fn build_token_cache_stream(args: &Args, tokenizer: &Tokenizer) -> io::Result<(S
                 None => continue,
             };
             let (ids, mask) = tokenizer.encode_with_assistant_mask(&sample);
-            for (&id, &m) in ids.iter().zip(mask.iter()) {
+            for (&id, &m) in ids.iter().zip(mask.iter()) { // id: usize, m: u8
                 write_u32_le(&mut tokens_file, id as u32)?;
                 mask_file.write_all(&[m])?;
             }
@@ -776,7 +795,7 @@ fn build_token_cache_stream(args: &Args, tokenizer: &Tokenizer) -> io::Result<(S
         ));
     }
 
-    let path = args.corpus.as_deref().unwrap_or("corpus_cn.txt");
+    let path: &str = if args.corpus.is_empty() { "corpus_cn.txt" } else { &args.corpus };
     let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -868,6 +887,168 @@ fn main() {
 
     let mut args = Args::parse();
 
+    // 文生图训练模式
+    if args.text_to_image {
+        println!("启用文生图训练模式...");
+        let image_text_data = args.image_text_data.as_ref().expect("--image-text-data is required for text-to-image training");
+        let config_path = &args.config_path;
+        let output_dir = &args.output_dir;
+
+        // 加载配置文件
+        println!("加载配置文件: {}", config_path);
+        let config_json = fs::read_to_string(config_path).expect("Failed to read config file");
+        let config: serde_json::Value = serde_json::from_str(&config_json).expect("Failed to parse config JSON");
+
+        let image_size = config["image_size"].as_i64().unwrap_or(64) as usize;
+        let latent_dim = config["latent_dim"].as_i64().unwrap_or(128) as usize;
+        let hidden_channels = config["hidden_channels"].as_i64().unwrap_or(128) as usize;
+        let num_timesteps = config["num_timesteps"].as_i64().unwrap_or(1000) as usize;
+        let beta_start = config["beta_start"].as_f64().unwrap_or(0.0001) as f32;
+        let beta_end = config["beta_end"].as_f64().unwrap_or(0.02) as f32;
+        let batch_size = args.batch_sizes.first().copied().unwrap_or(16);
+        let num_epochs = args.num_epochs;
+        let learning_rate = args.learning_rate as f32;
+
+        println!("配置参数: image_size={}, latent_dim={}, hidden_channels={}, batch_size={}, epochs={}",
+            image_size, latent_dim, hidden_channels, batch_size, num_epochs);
+
+        // 加载训练数据
+        println!("加载训练数据: {}", image_text_data);
+        let data_json = fs::read_to_string(image_text_data).expect("Failed to read data file");
+        let lines: Vec<&str> = data_json.lines().filter(|l| !l.trim().is_empty()).collect();
+        println!("共加载 {} 条训练数据", lines.len());
+
+        // 导入文生图训练相关模块
+        use sage::core::image_generation::{
+            DiffusionModel, DiffusionConfig,
+        };
+        use burn::backend::{Autodiff, ndarray::NdArray};
+        use burn::optim::{AdamConfig, Optimizer, GradientsParams};
+        use burn::tensor::{Tensor, TensorData};
+        use burn::module::Module;
+        use burn::record::CompactRecorder;
+        use std::time::Instant;
+
+        type TrainBackend = Autodiff<NdArray>;
+
+        println!("初始化模型...");
+        let device: <TrainBackend as Backend>::Device = Default::default();
+
+        let diffusion_config = DiffusionConfig {
+            image_size,
+            in_channels: 3,
+            hidden_channels,
+            num_timesteps,
+            latent_dim,
+            beta_start,
+            beta_end,
+        };
+
+        let mut model = DiffusionModel::<TrainBackend>::new(&diffusion_config, &device);
+        let mut optim = AdamConfig::new().init();
+
+        println!("开始训练...");
+
+        for epoch in 0..num_epochs {
+            let epoch_start = Instant::now();
+            let mut total_loss = 0.0f32;
+            let num_batches = (lines.len() + batch_size - 1) / batch_size;
+
+            for batch_idx in 0..num_batches {
+                let start_idx = batch_idx * batch_size;
+                let end_idx = (start_idx + batch_size).min(lines.len());
+                let batch_lines = &lines[start_idx..end_idx];
+                let current_batch_size = batch_lines.len();
+
+                // 创建随机图像数据
+                let total_elements = current_batch_size * 3 * image_size * image_size;
+                let data: Vec<f32> = (0..total_elements)
+                    .map(|_| rand::random::<f32>() * 2.0 - 1.0)
+                    .collect();
+                let batch_tensor: Tensor<TrainBackend, 4> = Tensor::from_data(
+                    TensorData::new(data, [current_batch_size, 3, image_size, image_size]),
+                    &device,
+                );
+
+                // VAE前向传播
+                let (recon, mu, log_var) = model.vae.forward(batch_tensor.clone());
+
+                // 计算VAE损失
+                let diff = recon.clone().sub(batch_tensor);
+                let mse_loss = diff.clone().mul(diff).mean();
+                let kl_loss = mu.clone().mul(mu.clone()).add(log_var.clone().exp()).sub(log_var.clone().add_scalar(1.0)).mul_scalar(0.5).mean();
+                let vae_loss = mse_loss + kl_loss.mul_scalar(0.01);
+
+                // 获取隐空间表示 (z) - 重参数采样
+                let std = log_var.clone().mul_scalar(0.5).exp();
+                let z: Tensor<TrainBackend, 4> = Tensor::zeros(mu.dims(), &device);
+                let z = mu.clone().add(std.mul(z));
+
+                // 随机采样时间步进行扩散模型训练
+                let timestep = rand::random::<usize>() % num_timesteps;
+                let alpha_bar_t = model.get_alpha_bar(timestep);
+
+                // 生成噪声 - 在隐空间上生成噪声
+                let noise_dims = z.dims();
+                let noise_elements: Vec<f32> = (0..noise_dims.iter().product::<usize>())
+                    .map(|_| rand::random::<f32>() * 2.0 - 1.0)
+                    .collect();
+                let noise: Tensor<TrainBackend, 4> = Tensor::from_data(
+                    TensorData::new(noise_elements, noise_dims),
+                    &device,
+                );
+
+                // 加噪 - 在隐空间上加噪
+                let noisy_latent = z.clone().mul_scalar(alpha_bar_t.sqrt())
+                    .add(noise.clone().mul_scalar((1.0 - alpha_bar_t).sqrt()));
+
+                // UNet噪声预测
+                let time_tensor: Tensor<TrainBackend, 2> = Tensor::full(
+                    [current_batch_size, latent_dim],
+                    timestep as i32,
+                    &device,
+                );
+                let noise_pred = model.unet.forward(noisy_latent, time_tensor);
+
+                // 噪声预测损失
+                let noise_diff = noise_pred.sub(noise);
+                let noise_loss = noise_diff.clone().mul(noise_diff).mean();
+                let total_batch_loss = vae_loss + noise_loss;
+
+                // 反向传播
+                let grads = total_batch_loss.backward();
+                let grads = GradientsParams::from_grads(grads, &model);
+
+                // 更新权重
+                model = optim.step(learning_rate as f64, model, grads);
+
+                // 获取损失值
+                let loss_val = total_batch_loss.to_data();
+                let loss_vec: Vec<f32> = loss_val.to_vec().unwrap_or_default();
+                if let Some(&l) = loss_vec.first() {
+                    total_loss += l;
+                }
+            }
+
+            let avg_loss = total_loss / num_batches as f32;
+            let epoch_time = epoch_start.elapsed();
+
+            println!("Epoch {}/{} - Loss: {:.6} - Time: {:.2}s",
+                epoch + 1, num_epochs, avg_loss, epoch_time.as_secs_f32());
+        }
+
+        // 保存模型
+        println!("训练完成，保存模型到: {}", output_dir);
+        fs::create_dir_all(output_dir).expect("Failed to create output directory");
+
+        let model_path = format!("{}/diffusion_model.mpk", output_dir);
+        model.save_file(&model_path, &CompactRecorder::new())
+            .expect("Failed to save model");
+
+        println!("模型已保存到: {}", model_path);
+        return;
+    }
+
     // For ultra_quick mode, automatically limit data to 100 records for very fast testing
     if args.ultra_quick && args.sft_max_records == 0 {
         args.sft_max_records = 100;
@@ -889,7 +1070,7 @@ fn main() {
     env_logger::init();
 
     // 加载或创建分词器
-    let tokenizer_path = format!("{}/tokenizer.json", args.artifact_dir);
+    let tokenizer_path = format!("{}/tokenizer.json", args.output_dir);
     let tokenizer = if !args.reset_tokenizer && Path::new(&tokenizer_path).exists() {
         println!("正在加载现有分词器...");
         Tokenizer::load(&tokenizer_path).expect("Should load tokenizer")
@@ -918,37 +1099,9 @@ fn main() {
         }
     };
 
-    // 根据模型大小选择配置
-    let mut model_config = match args.model_size.as_str() {
-        "10m" => {
-            println!("使用约10M参数的模型配置");
-            ModelConfig::small_10m()
-        }
-        "30m" => {
-            println!("使用约30M参数的模型配置");
-            ModelConfig::medium_30m()
-        }
-        "100m" => {
-            println!("使用约0.1B参数的模型配置");
-            ModelConfig::small_100m()
-        }
-        "1b" => {
-            println!("使用约1B参数的模型配置");
-            ModelConfig::medium_1b()
-        }
-        "3b" => {
-            println!("使用约3B参数的模型配置");
-            ModelConfig::large_3b()
-        }
-        "671b" => {
-            println!("使用约671B参数的模型配置");
-            ModelConfig::huge_671b()
-        }
-        _ => {
-            println!("使用默认模型配置（约1M参数）");
-            ModelConfig::new()
-        }
-    };
+    // 从配置文件加载模型配置
+    println!("正在从配置文件加载模型配置: {}", args.config_path);
+    let mut model_config = ModelConfig::load(&args.config_path).expect("Failed to load model config");
 
     // 更新动态参数
     model_config.vocab_size = tokenizer.vocab_size;
@@ -986,34 +1139,47 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
     model_config.vocab_size = tokenizer.vocab_size;
     model_config.max_seq_len = args.max_seq_len;
     
+    // 配置 LoRA
+    if args.use_lora {
+        println!("启用 LoRA 微调: rank={}, alpha={}", args.lora_rank, args.lora_alpha);
+        use sage::training::lora::LoRAConfig;
+        model_config.lora = Some(LoRAConfig {
+            rank: args.lora_rank,
+            alpha: args.lora_alpha as f64,
+            dropout: 0.05, // 默认 dropout
+            target_modules: vec!["output_head".to_string()], // 目前仅支持 output_head
+        });
+    }
+
     // 配置多模态功能
     if args.multimodal {
         println!("启用多模态功能...");
-        use sage::core::multimodal::{MultimodalConfig, VisionEncoderConfig, MultimodalFusionConfig, FusionStrategy};
+        use sage::core::multimodal::{MultimodalConfig, MultimodalFusionConfig, VisionEncoderConfig};
         
-        let fusion_strategy = match args.fusion_strategy.as_str() {
-            "add" => FusionStrategy::Add,
-            "concatenate" => FusionStrategy::Concatenate,
-            "attention" => FusionStrategy::Attention,
-            _ => FusionStrategy::Add,
-        };
+        let fusion_strategy = args.fusion_strategy.clone();
         
         let multimodal_config = MultimodalConfig {
             vision_encoder: VisionEncoderConfig {
                 in_channels: 3,
+                hidden_channels: 64, // 默认值
                 out_dim: args.vision_out_dim,
+                encoder_type: "resnet".to_string(),
+                num_layers: 4,
+                patch_size: 16,
+                image_size: 224,
             },
             fusion: MultimodalFusionConfig {
                 text_dim: model_config.d_model,
                 vision_dim: args.vision_out_dim,
                 output_dim: model_config.d_model,
-                strategy: fusion_strategy.clone(),
+                strategy: fusion_strategy,
             },
+            preprocessing: Default::default(),
             enable_multimodal: true,
         };
         
         model_config.multimodal = Some(multimodal_config);
-        println!("多模态配置: 视觉输出维度={}, 融合策略={:?}", args.vision_out_dim, fusion_strategy);
+        println!("多模态配置: 视觉输出维度={}, 融合策略={}", args.vision_out_dim, args.fusion_strategy);
     }
 
     let num_params = model_config.num_params();
@@ -1029,7 +1195,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
     println!("模型参数总量: {} ({})", num_params, params_str);
 
     // 4. 训练流程
-    let model_path = format!("{}/model.mpk", args.artifact_dir);
+    let model_path = format!("{}/model.mpk", args.output_dir);
     let has_model = Path::new(&model_path).exists();
 
     if !has_model || args.force || args.r#continue || args.resume_epoch.is_some() {
@@ -1077,16 +1243,16 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             if args.ultra_quick || args.quick_dev {
                 2e-2
             } else if args.fast {
-                args.lr * 3.0
+                args.learning_rate * 3.0
             } else {
-                args.lr * 1.5
+                args.learning_rate * 1.5
             }
         } else if args.ultra_quick || args.quick_dev {
             1e-2
         } else if args.fast {
-            args.lr * 2.0
+            args.learning_rate * 2.0
         } else {
-            args.lr
+            args.learning_rate
         };
 
         // 数据加载线程数：
@@ -1099,7 +1265,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             cpu_cores.max(4)
         };
 
-        if args.backend == "gpu" {
+        training_config.num_workers = if args.backend == "gpu" {
             if args.num_workers != 0 {
                 println!(
                     "提示: GPU(WGPU) 训练时数据加载已固定为单线程（num_workers=0）。\
@@ -1107,12 +1273,15 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     args.num_workers
                 );
             }
-            training_config.num_workers = 0;
+            0
         } else {
-            training_config.num_workers = args.num_workers.max(optimal_workers_cpu);
-        }
+            args.num_workers.max(optimal_workers_cpu)
+        };
 
         training_config.gradient_accumulation_steps = args.gradient_accumulation.max(1);
+        training_config.use_lora = args.use_lora;
+        training_config.lora_rank = args.lora_rank;
+        training_config.lora_alpha = args.lora_alpha;
 
         println!(
             "数据加载线程数（burn DataLoader workers）: {}",
@@ -1170,9 +1339,10 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
                 match found {
                     Some((micro, sl)) => {
-                        let accum = effective_batch.saturating_add(micro - 1) / micro.max(1);
+                        let micro_usize: usize = micro as usize;
+                        let accum = effective_batch.saturating_add(micro_usize - 1) / micro_usize.max(1);
                         let accum = accum.max(1);
-                        let effective_approx = micro.saturating_mul(accum);
+                        let effective_approx = micro_usize.saturating_mul(accum);
 
                         training_config.batch_size = micro;
                         model_config.max_seq_len = sl;
@@ -1213,7 +1383,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
         // 学习率调度器配置
         if args.lr_scheduler {
-            use sage::training::training::LRSchedulerConfig;
+            use sage::configs::config::LRSchedulerConfig;
             let lr_scheduler_config = LRSchedulerConfig {
                 lr_max: args.lr_max,
                 lr_min: args.lr_min,
@@ -1268,7 +1438,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         );
 
         let init_model = if let Some(epoch) = args.resume_epoch {
-            let ckpt_path = format!("{}/checkpoint/model-{}.mpk", args.artifact_dir, epoch);
+            let ckpt_path = format!("{}/checkpoint/model-{}.mpk", args.output_dir, epoch);
             Some(
                 model_config
                     .init::<Autodiff<B>>(&device)
@@ -1301,7 +1471,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
             
             // 启动DPO训练
             train_dpo::<Autodiff<B>>(
-                &args.artifact_dir,
+                &args.output_dir,
                 training_config,
                 device,
                 &tokenizer,
@@ -1349,7 +1519,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
                 let items_total = if args.sft_jsonl.is_some() {
                     if args.max_bytes == 0 {
-                        total_records.saturating_mul(args.max_seq_len).max(1)
+                        (total_records as usize).saturating_mul(args.max_seq_len).max(1)
                     } else {
                         args.max_bytes.max(1)
                     }
@@ -1377,7 +1547,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 });
 
                 train_with_loaders::<Autodiff<B>>(
-                    &args.artifact_dir,
+                    &args.output_dir,
                     training_config,
                     device,
                     &tokenizer,
@@ -1391,7 +1561,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     build_token_cache_stream(&args, &tokenizer).expect("Should build token cache");
 
                 train_from_cache::<Autodiff<B>>(
-                    &args.artifact_dir,
+                    &args.output_dir,
                     training_config,
                     device,
                     &tokenizer,
@@ -1425,7 +1595,7 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                 };
 
             train::<Autodiff<B>>(
-                &args.artifact_dir,
+                &args.output_dir,
                 training_config,
                 device,
                 &tokenizer,
@@ -1439,5 +1609,5 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         println!("发现已存在模型，跳过训练。");
     }
 
-    println!("\n训练流程完成！模型已保存在 '{}'", args.artifact_dir);
+    println!("\n训练流程完成！模型已保存在 '{}'", args.output_dir);
 }

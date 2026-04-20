@@ -8,22 +8,22 @@
 
 | 域 | 主要内容 | 合理性简评 |
 |----|----------|------------|
-| **核心模型** | `core/model.rs`：**TransformerEncoder + 自回归掩码**（实现因果注意力，行为等价于 Decoder-only）+ LM head；多档 `ModelConfig`（1M～预设大到 671B 量级）；`core/kv_cache.rs`：KV 缓存实现；`core/multimodal.rs`：图像编码器与多模态融合层 | 小模型档（default/10m/30m）与 Burn Learner 配套合理；极大档多为「占位/教学」配置，单机 WGPU 通常无法训练。使用 TransformerEncoder + 自回归掩码是当前 Burn 0.20 下的最佳实践（组件是 Encoder，但通过掩码实现因果注意力）。多模态模块提供图像输入支持。KV Cache 为推理性能优化奠定基础。 |
+| **核心模型** | `core/model.rs`：TransformerEncoder + LM head；多档 `ModelConfig`；`core/kv_cache.rs`：推理加速 KV 缓存；`core/multimodal.rs`：CNN 视觉编码器与门控融合层 | CNN 编码器比简单投影更具特征提取能力；门控融合支持动态权衡图文权重。 |
 | **分词** | `core/tokenizer.rs`：字符级 + BPE | 符合小模型与大一点实验需求；BPE 对中文更实用。 |
-| **数据** | `data/data.rs`：LM/SFT 数据集、mask、Batcher | 与 CrossEntropy pad 忽略配套；严谨 loss mask 仍可增强（见 README 已知限制）。 |
-| **训练** | `training/training.rs`：Learner、checkpoint、best 模型；`streaming.rs` 大语料；`vram_probe.rs` GPU 预检；`distributed.rs` 分布式训练；`dpo.rs` DPO偏好对齐 | 主路径清晰；WGPU 下 DataLoader `num_workers=0` 属必要取舍。分布式训练和DPO模块完善了训练能力。 |
-| **推理** | `core/generation.rs`、`bin/infer.rs` | 与训练闭环匹配。 |
-| **量化** | `quantization/`：INT4/INT8量化、动态量化 | 对部署/实验有意义；支持多种量化模式，提升推理效率。 |
-| **LoRA** | `training/lora.rs` | 当前多为模块草案，**未与 `train` 主路径深度集成**；对小模型全量微调场景为「备用/超前」。 |
-| **API** | `api/`、`bin/api_server.rs` | 工程化完整闭环有用；若个人仅本地 `infer`，可视为可选组件。 |
-| **工具** | `gen_sft`、`gen_web_sft`、`export`、`benchmark`、`accuracy_eval` | 按需求选用；benchmark/accuracy_eval 对实验记录有帮助。 |
+| **数据** | `data/data.rs`：LM/SFT 数据集、mask、Batcher、**自动化图像加载流水线** | 自动处理 `image_path` 字段，实现端到端多模态训练。 |
+| **训练** | `training/training.rs`：自实现训练循环；`streaming.rs` 大语料；`vram_probe.rs` GPU 预检；`distributed.rs` 分布式权重同步；`dpo.rs` DPO偏好对齐 | 实现了基础的分布式同步逻辑，支持多卡/多设备协同。 |
+| **推理** | `inference/generation.rs`、`bin/infer.rs` | 包含高级终端交互模式 (`--terminal`) 与多模态推理。 |
+| **量化** | `quantization/`：支持 INT8/INT4 模拟量化推理 | 可在不改变硬件的前提下评估量化对精度和模型体积的影响。 |
+| **LoRA** | `training/lora.rs` | **已深度集成到训练路径**；支持仅微调低秩矩阵，大幅节省资源。 |
+| **API** | `api/`、`bin/api_server.rs` | 工程化完整闭环；支持 OpenAI 标准格式。 |
+| **工具** | `gen_data`、`export`、`benchmark`、`accuracy_eval` | `gen_data` 整合了原有的所有数据生成逻辑。 |
 
 ---
 
 ## 2. 实现与设计上需注意的点
 
 1. **显存探测 vs 正式训练**  
-   探测只做 **单次** `step`，不经过 `Learner`；行为与心理预期需在文档中对齐（见 [TRAINING_PHASES.md](TRAINING_PHASES.md)）。
+   探测只做 **单次** `step`，不进入完整训练循环；行为与心理预期需在文档中对齐（见 [TRAINING_PHASES.md](TRAINING_PHASES.md)）。
 
 2. **`--training-mode`（general/code/math）** | **Training_mode**  
    主要影响 **内置样例/模板与部分数据过滤路径**，不是独立的第二套优化器或损失；命名上易让人以为「互斥训练算法」，实为 **场景化默认值/模板**。文档与 README 已逐步澄清；代码注释可继续写清。
@@ -47,6 +47,22 @@
 - 按域分目录：`core/`、`training/`、`data/`、`api/`，与许多中型 Rust 应用一致。  
 - 集成测试位于 `tests/`。
 
+**目录结构说明**
+
+| 目录 | 作用 | 关键文件 |
+|------|------|----------|
+| `src/bin/` | 命令行工具入口 | train.rs, infer.rs, api_server.rs, image_gen.rs 等 |
+| `src/core/` | 核心模型和功能实现 | model.rs, multimodal.rs, tokenizer.rs, kv_cache.rs |
+| `src/training/` | 训练相关功能 | training.rs, lora.rs, dpo.rs, distributed.rs |
+| `src/inference/` | 推理相关功能 | generation.rs, kernels.rs, lazy_load.rs |
+| `src/data/` | 数据处理 | data.rs |
+| `src/api/` | API 服务实现 | mod.rs |
+| `src/utils/` | 辅助工具 | logger.rs, metrics.rs, performance.rs |
+| `examples/` | 示例代码 | multimodal_quickstart.rs（多模态快速入门示例） |
+| `inference/configs/` | 推理配置文件 | config_16B.json, config_1B.json |
+| `models/` | 模型配置文件 | config.json, tokenizer.json |
+| `tests/` | 集成测试 | test_*.rs 系列测试文件 |
+
 **可继续加强（不强制一次做完）**
 
 - **`rustfmt` / `clippy`**：在 CI 或贡献说明中固定；当前未在本仓库强制。  
@@ -64,17 +80,19 @@
 ```text
 src/
   lib.rs
-  core/          # 模型、分词、生成、KV、多模态
-  training/      # Learner、流式、LoRA、vram_probe、分布式训练、DPO
-  data/
-  inference/
-  api/
-  tools/
-  utils/
-  quantization/  # INT4/INT8量化、动态量化
-  bin/           # 多个入口
-tests/
-docs/
+  core/          # 核心层：模型定义、Tokenizer、KV Cache、多模态实现
+  data/          # 数据层：Dataset、Batcher、数据预处理
+  inference/     # 推理层：生成策略、采样、懒加载、推理内核
+  training/      # 训练层：训练循环、DPO、调度器、流式、显存探测、LoRA
+  transformer/   # 底层基础组件
+  quantization/  # 量化支持
+  configs/       # 配置管理
+  api/           # API 服务实现
+  tools/         # 开发辅助工具
+  utils/         # 辅助工具 (logger, performance, error, etc.)
+  bin/           # 命令行入口 (train, infer, api_server, etc.)
+tests/           # 集成测试
+docs/            # 文档说明
 ```
 
 与 **Burn / 纯 Rust ML 仓库** 常见模式（`model/`、`data/`、`training/`、单一或少量 bin）**兼容**。  

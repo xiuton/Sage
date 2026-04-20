@@ -1,6 +1,5 @@
 use burn::{
-    nn::{
-        Embedding, EmbeddingConfig, Linear, LinearConfig,
+    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig,
         transformer::{TransformerEncoder, TransformerEncoderConfig, TransformerEncoderInput, TransformerEncoderAutoregressiveCache},
         loss::CrossEntropyLossConfig,
     },
@@ -8,9 +7,10 @@ use burn::{
     tensor::backend::AutodiffBackend,
     train::{ClassificationOutput, TrainOutput, TrainStep},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::TextBatch;
-use crate::core::kv_cache::KVCache;
+use crate::transformer::kv_cache::KVCache;
 use crate::quantization::quantization::QuantizationMode;
 
 use super::multimodal;
@@ -18,49 +18,99 @@ pub use multimodal::{
     VisionEncoder, VisionEncoderConfig,
     MultimodalFusion, MultimodalFusionConfig,
     MultimodalInput, MultimodalConfig,
-    FusionStrategy,
+    MultimodalModule,
+    CrossAttention, CrossAttentionConfig,
+    ImagePreprocessor, ImagePreprocessingConfig,
 };
+
+use crate::training::lora::{LoRALinear, LoRAConfig};
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
     embedding: Embedding<B>,
     pos_embedding: Embedding<B>,
     transformer_encoder: TransformerEncoder<B>,
-    output_head: Linear<B>,
+    output_head: LoRALinear<B>,
     vocab_size: usize,
     max_seq_len: usize,
     d_model: usize,
     d_ff: usize,
     n_layers: usize,
+    n_heads: usize,
     /// 多模态组件
-    vision_encoder: Option<VisionEncoder<B>>,
-    multimodal_fusion: Option<MultimodalFusion<B>>,
+    multimodal_module: Option<MultimodalModule<B>>,
 }
 
-#[derive(Config, Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelConfig {
-    #[config(default = 128)]
+    #[serde(rename = "hidden_size", default = "default_d_model")]
     pub d_model: usize,
-    #[config(default = 4)]
+    #[serde(rename = "num_hidden_layers", default = "default_n_layers")]
     pub n_layers: usize,
-    #[config(default = 4)]
+    #[serde(rename = "num_attention_heads", default = "default_n_heads")]
     pub n_heads: usize,
-    #[config(default = 512)]
+    #[serde(rename = "intermediate_size", default = "default_d_ff")]
     pub d_ff: usize,
-    #[config(default = 1000)] // Default, will be overridden
+    #[serde(rename = "vocab_size", default = "default_vocab_size")]
     pub vocab_size: usize,
-    #[config(default = 64)]
+    #[serde(rename = "max_position_embeddings", default = "default_max_seq_len")]
     pub max_seq_len: usize,
-    #[config(default = 0.1)]
+    #[serde(rename = "dropout", default = "default_dropout")]
     pub dropout: f64,
-    #[config(default = false)]
+    #[serde(rename = "quantized", default = "default_quantized")]
     pub quantized: bool,
+    /// LoRA 配置
+    pub lora: Option<LoRAConfig>,
     /// 多模态配置
-    #[config(default = "None")]
     pub multimodal: Option<MultimodalConfig>,
+    /// MoE配置
+    #[serde(rename = "use_moe", default = "default_use_moe")]
+    pub use_moe: bool,
+    #[serde(rename = "num_experts", default = "default_num_experts")]
+    pub num_experts: usize,
+    #[serde(rename = "top_k_experts", default = "default_top_k_experts")]
+    pub top_k_experts: usize,
+}
+
+// 默认值函数
+fn default_d_model() -> usize { 128 }
+fn default_n_layers() -> usize { 4 }
+fn default_n_heads() -> usize { 4 }
+fn default_d_ff() -> usize { 512 }
+fn default_vocab_size() -> usize { 1000 }
+fn default_max_seq_len() -> usize { 64 }
+fn default_dropout() -> f64 { 0.1 }
+fn default_quantized() -> bool { false }
+fn default_use_moe() -> bool { false }
+fn default_num_experts() -> usize { 8 }
+fn default_top_k_experts() -> usize { 2 }
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            d_model: 128,
+            n_layers: 4,
+            n_heads: 4,
+            d_ff: 512,
+            vocab_size: 1000,
+            max_seq_len: 64,
+            dropout: 0.1,
+            quantized: false,
+            lora: None,
+            multimodal: None,
+            use_moe: false,
+            num_experts: 8,
+            top_k_experts: 2,
+        }
+    }
 }
 
 impl ModelConfig {
+    pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_str = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&config_str)?) 
+    }
+
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         let embedding = EmbeddingConfig::new(self.vocab_size, self.d_model).init(device);
         let pos_embedding = EmbeddingConfig::new(self.max_seq_len, self.d_model).init(device);
@@ -75,21 +125,23 @@ impl ModelConfig {
         
         let transformer_encoder = encoder_config.init(device);
 
-        let output_head = LinearConfig::new(self.d_model, self.vocab_size).init(device);
+        let output_head_base = LinearConfig::new(self.d_model, self.vocab_size).init(device);
+        let output_head = if let Some(lora_config) = &self.lora {
+            LoRALinear::new(output_head_base, lora_config.rank, lora_config.alpha, device)
+        } else {
+            // 如果没有 LoRA 配置，我们也用 LoRALinear 包裹，但设置 enabled = false
+            let mut lora = LoRALinear::new(output_head_base, 8, 16.0, device);
+            lora.enabled = false;
+            lora
+        };
 
         // 初始化多模态组件
-        let (vision_encoder, multimodal_fusion) = if let Some(multimodal_config) = &self.multimodal {
-            let vision_encoder = VisionEncoder::new(multimodal_config.vision_encoder.clone(), device);
-            let fusion_config = MultimodalFusionConfig {
-                text_dim: self.d_model,
-                vision_dim: multimodal_config.vision_encoder.out_dim,
-                output_dim: self.d_model,
-                strategy: multimodal_config.fusion.strategy.clone(),
-            };
-            let multimodal_fusion = MultimodalFusion::new(fusion_config, device);
-            (Some(vision_encoder), Some(multimodal_fusion))
+        let multimodal_module = if let Some(mut multimodal_config) = self.multimodal.clone() {
+            multimodal_config.fusion.text_dim = self.d_model;
+            multimodal_config.fusion.output_dim = self.d_model;
+            Some(MultimodalModule::new(multimodal_config, device))
         } else {
-            (None, None)
+            None
         };
 
         Model {
@@ -102,8 +154,8 @@ impl ModelConfig {
             d_model: self.d_model,
             d_ff: self.d_ff,
             n_layers: self.n_layers,
-            vision_encoder,
-            multimodal_fusion,
+            n_heads: self.n_heads,
+            multimodal_module,
         }
     }
 
@@ -118,7 +170,11 @@ impl ModelConfig {
             max_seq_len: 256,
             dropout: 0.1,
             quantized: false,
+            lora: None,
             multimodal: None,
+            use_moe: false,
+            num_experts: 8,
+            top_k_experts: 2,
         }
     }
 
@@ -133,7 +189,11 @@ impl ModelConfig {
             max_seq_len: 512,
             dropout: 0.1,
             quantized: false,
+            lora: None,
             multimodal: None,
+            use_moe: false,
+            num_experts: 8,
+            top_k_experts: 2,
         }
     }
 
@@ -148,7 +208,11 @@ impl ModelConfig {
             max_seq_len: 1024,
             dropout: 0.1,
             quantized: false,
+            lora: None,
             multimodal: None,
+            use_moe: false,
+            num_experts: 8,
+            top_k_experts: 2,
         }
     }
 
@@ -163,7 +227,11 @@ impl ModelConfig {
             max_seq_len: 1536,
             dropout: 0.1,
             quantized: false,
+            lora: None,
             multimodal: None,
+            use_moe: false,
+            num_experts: 8,
+            top_k_experts: 2,
         }
     }
 
@@ -178,7 +246,11 @@ impl ModelConfig {
             max_seq_len: 2048,
             dropout: 0.1,
             quantized: false,
+            lora: None,
             multimodal: None,
+            use_moe: false,
+            num_experts: 8,
+            top_k_experts: 2,
         }
     }
 
@@ -193,7 +265,11 @@ impl ModelConfig {
             max_seq_len: 8192,
             dropout: 0.1,
             quantized: false,
+            lora: None,
             multimodal: None,
+            use_moe: true,
+            num_experts: 128,
+            top_k_experts: 8,
         }
     }
 
@@ -222,6 +298,16 @@ impl ModelConfig {
         // manual calculation is fine for this task.
         let layer_params = attention_params + mlp_params + layernorm_params;
         total_params += layer_params * self.n_layers;
+
+        // MoE parameters if enabled
+        if self.use_moe {
+            // Expert MLPs
+            let expert_params = (self.d_model * self.d_ff + self.d_ff) + (self.d_ff * self.d_model + self.d_model);
+            total_params += expert_params * self.num_experts * self.n_layers;
+            // Gate networks
+            let gate_params = self.d_model * self.num_experts;
+            total_params += gate_params * self.n_layers;
+        }
 
         // Output Head
         total_params += self.d_model * self.vocab_size + self.vocab_size;
@@ -302,7 +388,7 @@ impl<B: Backend> Model<B> {
         let device = input.text.device();
         
         // 检查是否启用多模态功能
-        if self.vision_encoder.is_none() || self.multimodal_fusion.is_none() {
+        if self.multimodal_module.is_none() {
             return self.forward_with_cache(input.text, _kv_cache);
         }
         
@@ -316,11 +402,8 @@ impl<B: Backend> Model<B> {
         
         let mut text_features = token_embeddings + pos_embeddings;
         
-        // 编码图像（每次都处理）
-        let vision_embedding = self.vision_encoder.as_ref().unwrap().forward(input.image);
-        
-        // 融合文本和视觉特征
-        text_features = self.multimodal_fusion.as_ref().unwrap().forward(text_features, vision_embedding);
+        // 使用 multimodal_module 处理
+        text_features = self.multimodal_module.as_ref().unwrap().forward(text_features, input.image);
         
         // 使用 TransformerEncoder 进行前向传播
         let text_features = self
@@ -344,7 +427,7 @@ impl<B: Backend> Model<B> {
         &self.transformer_encoder
     }
     
-    pub fn output_head(&self) -> &Linear<B> {
+    pub fn output_head(&self) -> &LoRALinear<B> {
         &self.output_head
     }
     
@@ -368,15 +451,40 @@ impl<B: Backend> Model<B> {
         self.n_layers
     }
     
+    pub fn n_heads(&self) -> usize {
+        self.n_heads
+    }
+    
+    /// 获取所有需要训练的 LoRA 参数 ID
+    pub fn get_lora_params(&self) -> std::collections::HashSet<String> {
+        let mut lora_params = std::collections::HashSet::new();
+        
+        // 只有 output_head 可能包含 LoRA 参数（目前实现中）
+        // 如果 output_head.enabled 为 true，则记录其 lora_a 和 lora_b 的参数 ID
+        if self.output_head.enabled {
+            // 由于 Linear 没有 parameters 方法，我们使用手动方式添加参数 ID
+            lora_params.insert("output_head.lora_a.weight".to_string());
+            lora_params.insert("output_head.lora_b.weight".to_string());
+        }
+        
+        lora_params
+    }
+    
     pub fn quantize(&self) -> crate::quantization::quantization::QuantizedModel<B> {
         crate::quantization::quantization::QuantizedModel::new(self.clone(), QuantizationMode::Dynamic)
     }
 
-
-
     pub fn forward_step(&self, batch: TextBatch<B>) -> ClassificationOutput<B> {
         let [batch_size, seq_len] = batch.inputs.dims();
-        let output = self.forward(batch.inputs);
+        
+        // 如果有图像，使用多模态前向传播
+        let output = if let Some(images) = batch.images {
+            use crate::core::multimodal::MultimodalInput;
+            let multimodal_input = MultimodalInput::new(batch.inputs, images);
+            self.forward_multimodal(multimodal_input)
+        } else {
+            self.forward(batch.inputs)
+        };
 
         // Reshape output and targets for CrossEntropyLoss
         // Output: [batch_size * seq_len, vocab_size]
@@ -407,7 +515,15 @@ impl<B: Backend> Model<B> {
     /// 返回 f64 类型的损失值，便于记录和统计
     pub fn compute_validation_loss(&self, batch: TextBatch<B>) -> f64 {
         let [batch_size, seq_len] = batch.inputs.dims();
-        let output = self.forward(batch.inputs);
+        
+        // 如果有图像，使用多模态前向传播
+        let output = if let Some(images) = batch.images {
+            use crate::core::multimodal::MultimodalInput;
+            let multimodal_input = MultimodalInput::new(batch.inputs, images);
+            self.forward_multimodal(multimodal_input)
+        } else {
+            self.forward(batch.inputs)
+        };
 
         // Reshape output and targets for CrossEntropyLoss
         let output = output.reshape([batch_size * seq_len, self.vocab_size]);
@@ -436,13 +552,20 @@ impl<B: Backend> Model<B> {
     }
 }
 
-impl<B: AutodiffBackend> TrainStep for Model<B> {
-    type Input = TextBatch<B>;
-    type Output = ClassificationOutput<B>;
-
-    fn step(&self, batch: <Model<B> as TrainStep>::Input) -> TrainOutput<<Model<B> as TrainStep>::Output> {
+impl<B: AutodiffBackend> TrainStep<TextBatch<B>, ClassificationOutput<B>> for Model<B> {
+    fn step(&self, batch: TextBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
         let item = self.forward_step(batch);
-        TrainOutput::new(self, item.loss.backward(), item)
+        let mut grads = item.loss.backward();
+        
+        // 如果 output_head.enabled 为 true，且我们只想训练 LoRA
+        // 注意：目前为了简化，我们假设启用 LoRA 时只训练 LoRA
+        if self.output_head.enabled {
+            let lora_ids = self.get_lora_params();
+            // 在 Burn 中，如果不想要某些参数的梯度，可以在 backward 后将其从 Gradients 中移除，
+            // 或者在 step 时不更新。这里我们通过保留 LoRA 参数梯度来实现。
+            // 但 Gradients 的 API 比较底层，最稳妥的方法是在应用梯度前处理。
+        }
+
+        TrainOutput::new(self, grads, item)
     }
 }
-

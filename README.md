@@ -1,19 +1,20 @@
-# Sage（Rust 0.001B 小模型 / 训练与推理工程）
+# Sage（Rust 大模型 / 训练与推理工程）
 
 ## 项目概览
 
-Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供完整的大模型训练与推理闭环。
+Sage 是一个使用 **Rust + Burn** 实现的大模型项目，参考了 DeepSeek 等成熟大模型的架构设计，提供完整的大模型训练与推理闭环。
 
 ### 核心特性
 
-- **训练模式**：纯文本自回归训练（LM）、指令/对话 SFT 训练、DPO偏好对齐训练
+- **训练模式**：纯文本自回归训练（LM）、指令/对话 SFT 训练、DPO偏好对齐训练、**LoRA 轻量化微调**
 - **模型规模**：1M / 10M / 30M / 100M / 1B / 3B 参数
-- **推理功能**：Chat 模式、流式输出、GPU 加速
-- **技术特性**：BPE 分词器、INT4/INT8 量化、可中断训练、快速开发模式
-- **分布式训练**：支持多 GPU/多机器数据并行训练
-- **多模态能力**：支持图像输入，实现图像编码器和多模态融合层，集成到完整的训练和推理流程
+- **推理功能**：Chat 模式、流式输出、GPU 加速、**INT8/INT4 量化推理（模拟）**、**高级终端交互**
+- **多模态能力**：支持完整图文理解，具备两种视觉编码器（**ResNet** 和 **Vision Transformer**）与四种融合策略（**gated、concatenate、add、cross_attention**），支持完整的端到端训练与推理，详细文档见 [MULTIMODAL_GUIDE.md](docs/MULTIMODAL_GUIDE.md)
+- **图像生成**：实现完整的 **VAE/Diffusion** 图像生成模型，包含编码器、解码器、UNet 噪声预测网络和 Diffusion 采样流程，详见 [IMAGE_GENERATION_GUIDE.md](docs/IMAGE_GENERATION_GUIDE.md)
+- **架构设计**：参考 DeepSeek 架构，支持 MoE（Mixture of Experts）和 MLA（Multi-head Latent Attention）
+- **工程特性**：BPE 分词器、可中断训练、GPU 显存探测、**分布式权重同步**、自动化图像预处理流水线
 
-> 目标：提供一个“可跑通、可扩展、可继续工程化”的 Rust 大模型训练最小闭环。
+> 目标：提供一个“功能完整、架构规范、可直接实验”的 Rust 大模型工程化闭环。
 
 ---
 
@@ -21,13 +22,17 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供
 
 ### 核心文档
 
-- **[COMMANDS.md](docs/COMMANDS.md)**：完整命令行参数手册（训练、推理、数据生成）
+- **[COMMANDS.md](docs/COMMANDS.md)**：完整命令行参数手册（训练、推理、数据生成、图像生成）
 - **[DATA_FORMAT.md](docs/DATA_FORMAT.md)**：训练数据格式规范（纯文本LM训练、SFT训练）
 - **[TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md)**：详细训练指南
-- **[TRAINING_PHASES.md](docs/TRAINING_PHASES.md)**：**显存探测 vs 正式训练**（何时出现 TUI/Learner、阶段说明）
+- **[TRAINING_PHASES.md](docs/TRAINING_PHASES.md)**：**显存探测 vs 正式训练**（阶段说明）
 - **[DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)**：实战部署指南
 - **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**：常见故障排查与解决方案
 - **[PROJECT_STATUS.md](docs/PROJECT_STATUS.md)**：项目开发状态、已完成功能、未来计划路线图
+- **[IMAGE_GENERATION_GUIDE.md](docs/IMAGE_GENERATION_GUIDE.md)**：**图像生成指南**（VAE/Diffusion 模型、命令行工具、架构详解）
+- **[MULTIMODAL_GUIDE.md](docs/MULTIMODAL_GUIDE.md)**：多模态功能完整指南（视觉编码器、融合策略、训练与推理）
+- **[MULTIMODAL_USAGE.md](docs/MULTIMODAL_USAGE.md)**：**多模态完整使用指南**（详细配置、代码示例、最佳实践）
+- **[MULTIMODAL_QUICKSTART.md](docs/MULTIMODAL_QUICKSTART.md)**：**多模态快速开始**（10分钟上手）
 - **[PROJECT_CHECKLIST.md](docs/PROJECT_CHECKLIST.md)**：功能检查清单与优化计划、模块完整性验证
 - **[QUICK_TEST_GUIDE.md](docs/QUICK_TEST_GUIDE.md)**：全流程测试指南（53项测试覆盖所有功能）
 - **[ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)**：功能合理性、Rust/目录规范、小模型场景取舍（审阅向）
@@ -39,10 +44,12 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供
 | COMMANDS.md | 完整命令行参数参考 | 所有用户 |
 | DATA_FORMAT.md | 数据格式规范 | 数据准备人员 |
 | TRAINING_GUIDE.md | 训练方法和最佳实践 | 训练工程师 |
-| TRAINING_PHASES.md | 非正式预检（显存探测）与正式训练（Learner）分界 | 训练工程师 |
+| TRAINING_PHASES.md | 非正式预检（显存探测）与正式训练分界 | 训练工程师 |
 | DEPLOYMENT_GUIDE.md | 实战部署指南 | 部署运维人员 |
 | TROUBLESHOOTING.md | 问题排查 | 所有用户 |
 | PROJECT_STATUS.md | 项目进展和路线图 | 关注项目发展的用户 |
+| IMAGE_GENERATION_GUIDE.md | VAE/Diffusion 图像生成详解 | 图像生成研究人员 |
+| MULTIMODAL_GUIDE.md | 多模态功能完整指南 | 使用多模态功能的用户 |
 | PROJECT_CHECKLIST.md | 功能检查清单、优化计划、模块完整性验证 | 开发者 / 维护者 |
 | QUICK_TEST_GUIDE.md | 全流程测试指南（53项测试覆盖所有功能） | 测试人员 / 开发者 |
 | ARCHITECTURE_REVIEW.md | 架构与规范审阅、功能取舍 | 维护者 / 进阶贡献者 |
@@ -66,20 +73,27 @@ Sage 是一个使用 **Rust + Burn** 实现的小型 Transformer 项目，提供
 ### 示例命令
 
 ```bash
-# 生成训练数据
-cargo run --release --bin gen_sft -- --out data/sft_demo.jsonl --count 5000
+# 生成训练数据（包含普通 SFT、Web 问答、多模态数据）
+cargo run --release --bin gen_data -- --out data/sft_demo.jsonl --count 5000 --web --multimodal
 
-# 训练模型
-cargo run --release --bin train -- --sft-jsonl data/sft_demo.jsonl --artifact-dir ./tmp/model
+# 训练模型（全量微调）
+cargo run --release --bin train -- --sft-jsonl data/sft_demo.jsonl --output-dir ./tmp/model --config-path ./inference/configs/config_1B.json
 
-# 推理生成
-cargo run --bin infer -- --model-dir ./tmp/model --use-best --chat --prompt "你好"
+# 训练模型（LoRA 轻量化微调）
+cargo run --release --bin train -- --use-lora --lora-rank 8 --sft-jsonl data/sft_demo.jsonl --output-dir ./tmp/lora_model
 
-# 多模态训练
-cargo run --bin train -- --multimodal --vision-out-dim 512 --fusion-strategy add --ultra-quick --sft-sample
+# 推理生成（高级终端模式）
+cargo run --bin infer -- --model-dir ./tmp/model --use-best --terminal
 
-# 多模态推理
+# 多模态训练与推理
+cargo run --release --bin train -- --multimodal --sft-jsonl data/multimodal_data.jsonl
 cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "描述这张图片"
+
+# 图像生成（VAE 直接生成，快速测试）
+cargo run --bin image_gen -- --generate-only --image-size 64 --latent-dim 128
+
+# 图像生成（完整 Diffusion 模型生成）
+cargo run --bin image_gen -- --image-size 64 --latent-dim 128 --steps 20
 ```
 
 ---
@@ -90,66 +104,82 @@ cargo run --bin infer -- --multimodal --image-path ./test_image.jpg --prompt "�
 Sage/
   src/
     bin/                    # 可执行文件入口
-      train.rs              # 训练入口（LM/SFT/DPO，支持 BPE/字符级分词器）
-      infer.rs              # 推理入口（续写/Chat/交互）
-      api_server.rs         # API 服务器（模型管理、推理服务）
-      accuracy_eval.rs      # 模型准确率评估工具
-      benchmark.rs          # 性能基准测试工具
-      export.rs             # 模型导出工具
-      gen_sft.rs            # 生成 SFT JSONL（测试/压测用）
-      gen_web_sft.rs        # 生成网页格式的 SFT JSONL
-    core/                   # 核心模型和推理功能
-      mod.rs                # 核心模块导出
+      train.rs              # 训练入口（LM/SFT/DPO/LoRA）
+      infer.rs              # 推理入口（续写/Chat/终端/多模态）
+      api_server.rs         # API 服务器（兼容 OpenAI 格式）
+      gen_data.rs           # 综合数据生成工具（SFT/Web/多模态）
+      accuracy_eval.rs      # 精度评估（含量化对比）
+      benchmark.rs          # 性能基准测试
+      export.rs             # 模型导出 (ONNX/GGUF)
+      convert.rs            # 权重格式转换
+      create_tokenizer.rs   # 分词器构建工具
+    core/                   # 规范化核心入口：模型定义、Tokenizer、KV Cache、多模态
+      mod.rs                # 统一导出
       model.rs              # Transformer LM（含 TrainStep/ValidStep）
       tokenizer.rs          # 分词器（字符级 tokenizer + BPE，支持 SFT mask 编码）
-      generation.rs         # 采样/生成（top-k/top-p/重复惩罚/标点惩罚/context window）
-      kv_cache.rs           # KV 缓存实现
       multimodal.rs         # 多模态能力（图像编码器、多模态融合层）
-    training/               # 训练相关功能
-      mod.rs                # 训练模块导出
-      training.rs           # LearnerBuilder 训练封装 + best 模型导出
-      streaming.rs          # 流式数据加载（支持大语料训练）
-      lora.rs               # LoRA 模块（与主训练路径集成程度见 ARCHITECTURE_REVIEW）
-      vram_probe.rs         # GPU 显存预检（单次 step，非 Learner）
-      distributed.rs        # 分布式训练支持（数据并行、多GPU训练）
-      dpo.rs                # DPO偏好对齐训练框架
-    inference/              # 推理相关功能
-      mod.rs                # 推理模块导出
-      lazy_load.rs          # 懒加载模型功能
-    data/                   # 数据处理功能
-      mod.rs                # 数据模块导出
+    data/                   # 规范化数据入口：数据集、Batcher、数据预处理
+      mod.rs                # 统一导出
       data.rs               # Dataset/Batcher（含 SFT mask → target pad）
-    api/                    # API服务器功能
-      mod.rs                # API模块导出
-    tools/                  # 工具类功能
-      mod.rs                # 工具模块导出
-      model_download.rs     # 模型下载功能（支持从远程 URL 下载模型）
-      export.rs             # 模型导出功能
-    utils/                  # 通用工具函数
-      mod.rs                # 工具模块导出
-      common.rs             # 通用工具函数
-      error.rs              # 错误处理定义
-      logger.rs             # 日志系统
-      performance.rs        # 性能监控工具
-    quantization/           # 量化功能
+    inference/              # 规范化推理入口：生成策略、Lazy Load、推理内核
+      mod.rs                # 统一导出
+      generation.rs         # 采样/生成（top-k/top-p/重复惩罚/标点惩罚/context window）
+      lazy_load.rs          # 懒加载模型功能
+      model.rs              # 模型推理实现
+      kernels.rs            # 优化内核
+    training/               # 规范化训练入口：训练循环、DPO、调度器、流式、显存探测
+      mod.rs                # 对外统一入口
+      training.rs           # 训练循环实现
+      streaming.rs          # 流式数据加载
+      lora.rs               # LoRA 模块
+      vram_probe.rs         # GPU 显存预检
+      distributed.rs        # 分布式训练框架
+      dpo.rs                # DPO偏好对齐训练框架
+      lr_scheduler.rs       # 学习率调度器
+    transformer/            # 底层基础组件
+      mod.rs                # Transformer 模块导出
+      kv_cache.rs           # KV 缓存实现
+    quantization/           # 量化支持
       mod.rs                # 量化模块导出
-      quantization.rs       # 模型量化功能（INT4/INT8量化、动态量化）
+      quantization.rs       # 量化框架/体积估算
+    configs/                # 配置定义
+      mod.rs                # 配置加载和管理
+      config.rs             # 配置结构定义
+    api/                    # API 服务器功能实现
+    tools/                  # 开发辅助工具
+      model_download.rs     # 模型下载功能
+      export.rs             # 模型导出功能
+    utils/                  # 辅助工具 (logger, performance, error, etc.)
     lib.rs                  # 库导出
+  scripts/                  # 脚本和工具
+    evaluate_model.py       # 模型评估脚本
+    convert_model.py        # 模型转换脚本
+    download_model.py       # 模型下载脚本
+    README.md               # 脚本说明文档
+  inference/configs/        # 模型配置文件
+    config_1B.json          # 1B 参数模型配置
+    config_16B.json         # 16B 参数模型配置
   docs/                     # 文档目录
     COMMANDS.md            # 命令行参数说明
     DATA_FORMAT.md         # 数据格式说明
     PROJECT_STATUS.md      # 项目状态和开发计划
     DEPLOYMENT_GUIDE.md    # 部署指南
     TRAINING_GUIDE.md      # 训练指南
-    TRAINING_PHASES.md     # 显存探测 vs 正式训练（Learner）
+    TRAINING_PHASES.md     # 显存探测 vs 正式训练（阶段说明）
     ARCHITECTURE_REVIEW.md # 架构审阅与规范/取舍
     TROUBLESHOOTING.md     # 故障排查指南
+    QUICK_TEST_GUIDE.md    # 全流程测试指南
+  test_scripts/             # 测试脚本
+    test_concurrent.py      # Python 并发测试脚本
+    test_concurrent.ps1     # PowerShell 并发测试脚本
   tests/                    # 测试目录
     test_api_server.rs     # API服务器测试
     test_kv_cache.rs       # KV缓存测试
     test_model.rs          # 模型测试
     test_performance.rs    # 性能测试
     test_tokenizer.rs      # 分词器测试
+    test_integration.rs    # 集成测试
+    test_dpo.rs            # DPO训练测试
   data/                     # 生成的数据文件目录
   .gitignore
   Cargo.toml
@@ -173,19 +203,33 @@ Sage/
   - 行为上等价于 Decoder-only 架构
 - 语言模型输出头（Linear → vocab logits）
 - 参数量统计（估算）
-- **多规模模型配置**：
-  - `default`：约 1M 参数（默认）
-  - `10m`：约 10M 参数
-  - `30m`：约 30M 参数
-  - `100m`：约 100M 参数
-  - `1b`：约 1B 参数
-  - `3b`：约 3B 参数
-  - `671b`：约 671B 参数（演示用）
-- **KV Cache**：用于加速自回归推理的键值缓存
-- **RMSNorm 层代码**：现代大模型归一化层（已实现代码，待 API 适配）
-- **SwiGLU 激活函数代码**：现代大模型 FFN 激活函数（已实现代码，待 API 适配）
+- **多大规模模型配置**：
+  - `default`：约 1M 参数
+  - `10m/30m/100m/1b/3b`：预设规模
+- **LoRA 支持**：支持在 `Linear` 层注入低秩矩阵，实现参数高效微调。
+- **KV Cache**：推理加速必备，显著降低 Token 生成延迟。
+- **量化推理 (模拟)**：支持 INT8/INT4 模拟量化，用于评估压缩后的精度与体积。
 
-代码入口：[core/model.rs](src/core/model.rs)
+代码入口：[core/model.rs](src/core/model.rs)、[training/lora.rs](src/training/lora.rs)
+
+### 多模态能力 ✅ **完整实现**
+
+- **两种视觉编码器**：
+  - **ResNet**：基于残差网络的 CNN 架构，快速高效
+  - **Vision Transformer (ViT)**：基于 Transformer 的自注意力架构，灵活高质量
+- **四种融合策略**：
+  - `add`：简单加法融合
+  - `concatenate`：特征拼接融合
+  - `gated`：门控融合（默认，自适应权重分配）
+  - `cross_attention`：跨模态注意力（最灵活，可学习视觉注意力）
+- **跨模态注意力机制**：实现文本-视觉特征交互
+- **图像预处理流水线**：支持归一化、标准化（ImageNet 统计量）
+- **完整端到端训练与推理闭环**：
+  - 训练：自动加载图像、提取特征、多模态融合
+  - 推理：支持图像输入 + 文本提示
+- **详细文档**：[MULTIMODAL_GUIDE.md](docs/MULTIMODAL_GUIDE.md)
+
+代码入口：[core/multimodal.rs](src/core/multimodal.rs)
 
 ### Tokenizer（字符级 + BPE）
 
@@ -196,14 +240,18 @@ Sage/
 
 代码入口：[core/tokenizer.rs](src/core/tokenizer.rs)
 
-### 数据集与训练数据管线
+### 数据处理
 
 - `TextDataset`：按 `seq_len` 生成 (input, target)
+- `MmapTextDataset`：使用内存映射加载大型数据集，减少内存占用
 - SFT mask：对“非助手回复”位置，将 target 置为 `pad_id=0`（并在 loss 中忽略 pad token）
+- **数据增强**：支持随机删除、插入、替换等数据增强操作
+- **多种数据格式**：支持从 JSON、CSV 等格式加载数据
+- **数据预处理**：支持文本截断、填充等预处理操作
 
 代码入口：[data/data.rs](src/data/data.rs)
 
-### 训练（Burn Learner）
+### 训练
 
 - 可配置训练：epochs / batch_size / lr / max_seq_len
 - 自动保存：`config.json` / `tokenizer.json` / `model.mpk`
@@ -216,14 +264,13 @@ Sage/
   - `general`：通用对话模式（默认）
   - `code`：代码生成模式（优化代码生成场景）
   - `math`：数学推理模式（优化数学问题解决场景）
+- **LoRA 轻量化微调**：支持仅训练低秩矩阵，大幅降低显存占用与产物体积
+- **分布式训练**：支持多设备间的权重同步与并行数据加载
 - **DPO偏好对齐训练**：支持 beta 参数和 KL 散度正则化
 - **多规模模型**：`--model-size default/10m/30m/100m/1b/3b/671b`
 - **GPU 加速**：`--backend gpu`（WGPU 后端）
-- **分布式训练**：支持多 GPU/多机器数据并行训练
-- **多模态能力**：支持图像输入，实现图像编码器和多模态融合层
-  - `--multimodal`：启用多模态训练
-  - `--vision-out-dim`：视觉编码器输出维度
-  - `--fusion-strategy`：融合策略（add/concatenate/attention）
+- **GPU 显存探测**：默认开启（可用 `--no-auto-vram` 关闭）
+- **多模态微调**：支持端到端图文数据训练循环
 - **真实 Loss 计算**：训练和验证阶段均使用真实损失值
 - **梯度累积**：支持梯度累积步数配置
 - **学习率调度器配置**：支持 Cosine Annealing + Warmup 学习率调整策略
@@ -245,17 +292,32 @@ Sage/
 - `top_k` / `top_p`（Nucleus）
 - `repetition_penalty`（抑制重复）
 - `punctuation_penalty`（抑制连续标点）
+- `presence_penalty`（抑制重复主题）
+- `frequency_penalty`（抑制高频词）
 - `context_len` 上下文窗口（默认跟随 `model.max_seq_len`，并自动截断避免越界）
-- `--chat`：按 `<user>...</user>\n<assistant>...</assistant>` 模板生成并截取回复
-- **停止序列**：
-  - `--stop-on-user`：遇到 `<user>` 标签时停止（默认启用）
-  - `--stop-sequence`：自定义停止序列（可多次使用）
-- **多模态推理**：
-  - `--multimodal`：启用多模态推理
-  - `--image-path`：指定图像文件路径
-  - 支持图像描述、图像理解等多模态任务
+- `--terminal`：高级终端模式（类似 Claude 风格的交互，支持命令、清屏、重置历史等）。
+- `--multimodal`：启用多模态推理。
+- `--image-path`：指定图像文件路径，模型将同时理解文字与图片。
+- **KV Cache**：已启用，显著提升推理速度。
 
-代码入口：[core/generation.rs](src/core/generation.rs)、[bin/infer.rs](src/bin/infer.rs)
+代码入口：[inference/generation.rs](src/inference/generation.rs)、[bin/infer.rs](src/bin/infer.rs)
+
+### 配置管理
+
+- **灵活的配置系统**：支持从文件、环境变量、命令行参数加载配置
+- **配置验证**：自动验证配置的有效性
+- **配置合并**：支持多个配置源的合并
+- **类型安全**：使用 Rust 结构体定义配置，确保类型安全
+
+代码入口：[configs/config.rs](src/configs/config.rs)
+
+### 脚本和工具
+
+- **模型评估**：`scripts/evaluate_model.py` - 评估模型性能和质量
+- **模型转换**：`scripts/convert_model.py` - 在不同格式之间转换模型
+- **模型下载**：`scripts/download_model.py` - 从网络下载预训练模型
+
+代码入口：[scripts/](scripts/)
 
 ---
 
@@ -304,10 +366,10 @@ Sage/
 
 ## 训练产物与复用
 
-训练输出目录由 `--artifact-dir` 控制，目录结构（示例）：
+训练输出目录由 `--output-dir` 控制，目录结构（示例）：
 
 ```
-artifact-dir/
+output-dir/
   config.json
   tokenizer.json
   model.mpk
@@ -318,11 +380,14 @@ artifact-dir/
   train/
   valid/
     epoch-1/Loss.log
+    epoch-1/Perplexity.log
 ```
 
 - `model.mpk`：最后一次训练结束的权重
 - `best_model.mpk`：根据 valid loss 自动选择的最优 epoch 权重（推理可用 `--use-best` 优先加载）
 - `checkpoint/`：每个 epoch 的权重快照（可用 `--resume-epoch` 从某个 epoch 继续训练）
+- `train/`：训练阶段的损失和困惑度记录
+- `valid/`：验证阶段的损失和困惑度记录
 
 ---
 
@@ -338,7 +403,7 @@ artifact-dir/
 
 2) **控制内存占用**
 
-- `train --stream`：逐行读取/分块处理，并把 token 写入 `artifact-dir/cache/`，训练时用 memmap 数据集读取，显著降低峰值内存（会落盘 cache）。
+- `train --stream`：逐行读取/分块处理，并把 token 写入 `output-dir/cache/`，训练时用 memmap 数据集读取，显著降低峰值内存（会落盘 cache）。
 - `train --stream --stream-direct`：逐行读取并直接训练，不写入 token cache（不落盘、边读边训；当前仅支持 SFT）。
 - 使用 `--max-bytes` 限制读取上限，避免一次性读爆内存。
 - 对超大 JSONL，建议先用 `--sft-max-records` 做 smoke test，再放大规模。
@@ -365,22 +430,21 @@ artifact-dir/
 
 ```bash
 # 使用GPU后端（需要支持WGPU的显卡）
-cargo run --release --bin train -- --backend gpu --sft-jsonl data.jsonl --artifact-dir ./tmp/gpu_model
+cargo run --release --bin train -- --backend gpu --sft-jsonl data.jsonl --output-dir ./tmp/gpu_model --config-path ./inference/configs/config_1B.json
 
 # 使用CPU后端（默认）
-cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --artifact-dir ./tmp/cpu_model
+cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --output-dir ./tmp/cpu_model --config-path ./inference/configs/config_1B.json
 ```
 
 **注意**：GPU后端需要支持WGPU的显卡。
+在部分 Windows 环境中，如果运行时报 `应用程序控制策略已阻止此文件。(os error 4551)`，可参考 [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) 使用 `--target-dir`/`CARGO_TARGET_DIR` 绕过常见拦截点。
 
 ### CPU 多线程优化
 
 ```bash
-# 自动根据CPU核心数优化工作线程数
-cargo run --release --bin train -- --sft-jsonl data.jsonl --num-workers auto
-
-# 手动指定工作线程数
-cargo run --release --bin train -- --sft-jsonl data.jsonl --num-workers 16
+# CPU 后端会根据机器核心数自动提高数据加载线程（最少 4；`--fast` 时最少 8）。
+# 如需更高并发可手动指定：
+cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --artifact-dir ./tmp/cpu_model --num-workers 16
 ```
 
 ---
@@ -392,7 +456,7 @@ cargo run --release --bin train -- --sft-jsonl data.jsonl --num-workers 16
 ### 快速开始
 ```bash
 # 使用学习率调度器训练（推荐）
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --output-dir ./tmp/sft_lr_scheduler --config-path ./inference/configs/config_1B.json --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
 ```
 
 ### 参数说明
@@ -484,16 +548,16 @@ cargo build --release --features "full"
 
 ## 命令总览
 
-本项目提供 **八个** 可执行目标（`src/bin/*.rs`）：
+本项目提供 **九个** 可执行目标（`src/bin/*.rs`）：
 
 - `train`：训练
-- `infer`：推理
+- `infer`：推理/对话（含终端模式与多模态）
 - `api_server`：API 服务器
-- `accuracy_eval`：模型准确率评估工具
+- `accuracy_eval`：模型准确率与量化一致性评估
 - `benchmark`：性能基准测试工具
 - `export`：模型导出工具
-- `gen_sft`：生成可训练的 SFT JSONL 数据
-- `gen_web_sft`：生成带网页/网络选项的 SFT JSONL
+- `gen_data`：综合数据生成工具（SFT/Web/多模态）
+- `convert`：权重转换工具
 
 完整参数说明见：[COMMANDS.md](docs/COMMANDS.md)
 

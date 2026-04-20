@@ -18,10 +18,10 @@
 
 Sage 里存在两类容易混淆的概念：
 
-- **GPU 显存自动探测**：在默认开启时，会针对多组 batch/序列长度执行 **单次** 前向+反向以估算显存，**不**经过 Burn `Learner`，**没有** epoch 训练日志与训练 TUI。  
-- **正式训练**：进入 `Learner::fit` 之后，按 epoch 使用 DataLoader 迭代数据、记录指标、保存 checkpoint。
+- **GPU 显存自动探测**：在默认开启时，会针对多组 batch/序列长度执行 **单次** 前向+反向以估算显存，属于预检步骤，通常**不会**出现 epoch 训练日志。  
+- **正式训练**：进入完整训练循环后，按 epoch 使用 DataLoader 迭代数据、记录指标、保存 checkpoint。
 
-`--quick-dev` / `--ultra-quick` 仍是 **正式 Learner 训练**，只是轮次与数据量压到极小，用于冒烟测试。
+`--quick-dev` / `--ultra-quick` 仍是 **正式训练**，只是轮次与数据量压到极小，用于冒烟测试。
 
 **完整时间线、日志如何区分、相关参数**（如 `--no-auto-vram`）请单独阅读：**[TRAINING_PHASES.md](TRAINING_PHASES.md)**。
 
@@ -59,7 +59,6 @@ cargo run --release --bin train -- \
     --batch-size 32 \
     --max-seq-len 256 \
     --lr 5e-5 \
-    --num-workers 8 \
     --backend gpu \
     --model-size 30m \
     --force
@@ -98,7 +97,7 @@ cargo run --release --bin train -- \
 # DPO训练
 cargo run --release --bin train -- \
     --dpo \
-    --dpo-jsonl data/dpo_data.jsonl \
+    --dpo-data data/dpo_data.jsonl \
     --artifact-dir ./tmp/dpo_model \
     --dpo-beta 0.1 \
     --num-epochs 30 \
@@ -109,83 +108,294 @@ cargo run --release --bin train -- \
 
 **参数说明：**
 - `--dpo`：启用DPO训练模式
-- `--dpo-jsonl`：DPO训练数据文件路径
+- `--dpo-data`：DPO训练数据文件路径
 - `--dpo-beta`：DPO损失的beta参数（默认0.1）
 - DPO数据格式：包含`prompt`、`chosen`、`rejected`三个字段
 
 ### 5. 分布式训练
 
-使用多GPU进行分布式训练：
+当前版本支持基础的分布式训练：
 
 ```bash
-# 分布式训练
 cargo run --release --bin train -- \
-    --sft-jsonl data/your_corpus.jsonl \
-    --artifact-dir ./tmp/distributed_model \
     --distributed \
-    --devices 0,1 \
-    --num-epochs 50 \
-    --batch-size 16 \
-    --backend gpu \
-    --force
+    --devices cpu,gpu:0 \
+    --sft-jsonl data/your_corpus.jsonl \
+    --backend gpu
 ```
+- **权重同步**：系统会自动在多个设备间同步权重。
+- **数据并行**：每个设备加载独立的数据批次。
 
-**参数说明：**
-- `--distributed`：启用分布式训练模式
-- `--devices`：指定使用的GPU设备ID（逗号分隔）
-- 每个GPU会自动分配batch_size的训练任务
+### 6. LoRA 轻量化微调
 
-### 6. 多模态训练
-
-使用图像和文本数据进行多模态训练：
+支持仅微调低秩矩阵，大幅节省资源：
 
 ```bash
-# 基本多模态训练
-cargo run --bin train -- \
-    --multimodal \
-    --vision-out-dim 512 \
-    --fusion-strategy add \
-    --ultra-quick \
-    --sft-sample
-
-# 自定义多模态配置
-cargo run --bin train -- \
-    --multimodal \
-    --vision-out-dim 768 \
-    --fusion-strategy concatenate \
-    --num-epochs 5 \
-    --batch-size 16 \
-    --backend cpu \
-    --artifact-dir ./tmp/test_multimodal_custom \
-    --no-progress
+cargo run --release --bin train -- \
+    --use-lora \
+    --lora-rank 8 \
+    --lora-alpha 16 \
+    --sft-jsonl data/your_corpus.jsonl \
+    --artifact-dir ./tmp/lora_model \
+    --backend gpu
 ```
 
-**参数说明：**
+### 7. 多模态微调 ✅ **完整功能已实现**
+
+Sage 现在支持完整的多模态训练，包括两种视觉编码器和多种融合策略。
+
+```bash
+# 使用 ResNet 编码器 + 门控融合
+cargo run --release --bin train -- \
+    --multimodal \
+    --sft-jsonl data/mm_data.jsonl \
+    --output-dir ./tmp/mm_resnet \
+    --vision-out-dim 512 \
+    --fusion-strategy gated \
+    --backend gpu
+
+# 使用 Vision Transformer 编码器 + 跨模态注意力融合
+cargo run --release --bin train -- \
+    --multimodal \
+    --sft-jsonl data/mm_data.jsonl \
+    --output-dir ./tmp/mm_vit \
+    --vision-out-dim 512 \
+    --fusion-strategy cross_attention \
+    --backend gpu
+```
+
+**多模态配置选项：**
 - `--multimodal`：启用多模态训练
 - `--vision-out-dim`：视觉编码器输出维度（默认 512）
-- `--fusion-strategy`：融合策略（add/concatenate/attention，默认 add）
-- 多模态训练需要准备包含图像路径的训练数据
+- `--fusion-strategy`：融合策略（gated/concatenate/add/cross_attention）
+
+**视觉编码器选择：**
+- **ResNet**（默认）：快速、高效、适合初步使用
+- **Vision Transformer**：灵活、高质量、适合大数据集（在配置文件中设置）
+
+**多模态数据格式：**
+```json
+{
+    "prompt": "描述这张图片",
+    "response": "这是一张美丽的风景照",
+    "image_path": "data/images/landscape.jpg"
+}
+```
+
+**详细文档：** 完整的多模态使用指南请参考 [MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)。
+
+### 8. 文生图 (Text-to-Image) 训练 ✅ **新功能**
+
+Sage 支持训练文生图模型，使模型能够根据文本提示词生成相应的图像。
+
+#### 8.1 数据准备
+
+文生图训练需要文本-图像对数据，格式如下：
+
+**JSONL 格式：**
+```json
+{"prompt": "a cat sitting on a chair", "image_path": "data/cat1.jpg"}
+{"prompt": "a dog playing in the park", "image_path": "data/dog1.jpg"}
+{"prompt": "a beautiful sunset over the ocean", "image_path": "data/sunset1.jpg"}
+```
+
+**数据要求：**
+- 每个样本包含 `prompt`（文本描述）和 `image_path`（图像路径）
+- 图像分辨率建议 64x64 或 128x128
+- 建议至少 10,000 对数据以获得良好效果
+- 数据多样性：包含多种场景、物体、风格
+
+**自动生成语料**：
+
+如果已有图片目录，可以使用 `gen_data` 工具自动生成语料文件：
+
+```bash
+# 假设图片存放在 data/text_to_images/ 目录
+# 执行后会扫描该目录下所有图片，生成 data/text_to_image_pairs.jsonl
+cargo run --release --bin gen_data -- --image-dir data/text_to_images
+```
+
+```bash
+# 指定输出文件路径
+cargo run --release --bin gen_data -- --image-dir data/text_to_images --text-to-image-data data/my_training_data.jsonl
+```
+
+**参数说明：**
+- `--image-dir`：图片所在目录（支持递归扫描子目录）
+- `--text-to-image-data`：输出文件路径（默认 `data/text_to_image_pairs.jsonl`）
+
+**生成结果示例**：
+```json
+{"prompt": "", "image_path": "data/text_to_images/cat1.jpg"}
+{"prompt": "", "image_path": "data/text_to_images/dog1.jpg"}
+{"prompt": "", "image_path": "data/text_to_images/sunset1.jpg"}
+```
+
+> **提示**：生成的语料中 `prompt` 字段为空，需要手动补充文本描述，或使用 AI 模型自动生成描述。
+
+#### 8.2 配置文件
+
+创建文生图训练配置文件，建议存放在 `configs/` 目录：
+
+```bash
+# 创建配置目录
+mkdir -p configs
+
+# 创建配置文件 configs/vae_diffusion.json
+```
+
+**配置文件内容**：
+
+```json
+{
+  "image_size": 64,        // 生成图像的尺寸（宽×高）
+  "latent_dim": 128,       // 潜在空间维度
+  "hidden_channels": 128,   // 隐藏层通道数
+  "num_timesteps": 1000,    // 扩散模型的总时间步数
+  "beta_start": 0.0001,     // 噪声调度的起始值
+  "beta_end": 0.02,         // 噪声调度的结束值
+  "batch_size": 16,         // 训练批次大小
+  "learning_rate": 0.0001,  // 学习率
+  "num_epochs": 100,        // 训练轮数
+  "text_embedding_dim": 128, // 文本嵌入维度
+  "vocab_size": 50000       // 词汇表大小
+}
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 推荐值 | 调整建议 |
+|------|------|--------|----------|
+| `image_size` | 生成图像的尺寸（宽×高） | 64 | 64-128，尺寸越大需要更多显存 |
+| `latent_dim` | 潜在空间维度，控制生成图像的细节 | 128 | 64-256，维度越大细节越丰富 |
+| `hidden_channels` | UNet 隐藏层通道数 | 128 | 64-256，通道数越多能力越强 |
+| `num_timesteps` | 扩散模型的总时间步数 | 1000 | 500-2000，步数越多生成质量越高 |
+| `beta_start` | 噪声调度的起始值 | 0.0001 | 固定值，一般不需要调整 |
+| `beta_end` | 噪声调度的结束值 | 0.02 | 固定值，一般不需要调整 |
+| `batch_size` | 训练批次大小 | 16 | 根据 GPU 显存调整，8-32 |
+| `learning_rate` | 学习率 | 0.0001 | 1e-5 到 1e-3，建议使用余弦退火 |
+| `num_epochs` | 训练轮数 | 100 | 50-200，根据数据量和模型大小调整 |
+| `text_embedding_dim` | 文本嵌入维度 | 128 | 与 latent_dim 保持一致 |
+| `vocab_size` | 词汇表大小 | 50000 | 10000-100000，根据文本复杂度调整 |
+
+#### 8.3 启动训练
+
+```bash
+# 文生图模型训练
+cargo run --release --bin train -- \
+    --text-to-image \
+    --image-text-data data/text_image_pairs.jsonl \
+    --config-path configs/vae_diffusion.json \
+    --output-dir ./models/text_to_image \
+    --batch-size 16 \
+    --learning-rate 0.0001 \
+    --num-epochs 100 \
+    --backend gpu
+```
+
+**训练参数说明：**
+- `--text-to-image`：启用文生图训练模式
+- `--image-text-data`：文本-图像对数据文件路径
+- `--config-path`：模型配置文件路径
+- `--output-dir`：模型保存目录
+- `--batch-size`：批次大小（建议 16-32）
+- `--learning-rate`：学习率（建议 1e-4）
+- `--num-epochs`：训练轮数（建议 50-200）
+
+#### 8.4 训练过程
+
+训练会包含以下阶段：
+
+1. **VAE 预训练**：训练编码器和解码器
+   - 学习图像的潜在表示
+   - 重建损失：MSE + KL 散度
+
+2. **扩散模型训练**：训练 UNet 噪声预测网络
+   - 前向加噪过程
+   - 反向去噪学习
+
+3. **文本条件训练**：将文本特征与图像生成关联
+   - 文本编码学习
+   - 条件扩散模型训练
+
+#### 8.5 训练技巧
+
+**数据准备：**
+- **数据清洗**：确保文本描述与图像内容匹配
+- **数据增强**：对图像进行随机裁剪、翻转、亮度调整
+- **文本处理**：标准化文本格式，去除噪声
+
+**训练配置：**
+- **批次大小**：根据 GPU 显存调整，建议 16-32
+- **学习率**：使用余弦退火调度，初始 1e-4
+- **正则化**：添加 Dropout (0.1-0.3) 防止过拟合
+- **梯度裁剪**：设置梯度范数阈值 1.0
+
+**加速训练：**
+- **混合精度**：启用 FP16 训练
+- **分布式训练**：多 GPU 并行训练
+- **梯度累积**：当显存不足时使用
+
+#### 8.6 使用训练好的模型
+
+训练完成后，使用训练好的模型进行文生图生成：
+
+```bash
+# 使用训练好的模型生成图像
+cargo run --bin image_gen -- \
+    --model-path ./models/text_to_image \
+    --prompt "a cat wearing sunglasses" \
+    --steps 50 \
+    --output ./generated_cat.png
+
+# GPU 加速生成
+cargo run --bin image_gen -- \
+    --backend gpu \
+    --model-path ./models/text_to_image \
+    --prompt "a beautiful landscape with mountains" \
+    --steps 100 \
+    --output ./generated_landscape.png
+```
+
+#### 8.7 评估生成质量
+
+训练过程中，定期生成样本评估质量：
+
+```bash
+# 评估生成质量
+cargo run --bin image_gen -- \
+    --model-path ./models/text_to_image/checkpoint_50 \
+    --prompt "a red rose in a vase" \
+    --output ./eval/rose_50.png
+
+cargo run --bin image_gen -- \
+    --model-path ./models/text_to_image/checkpoint_100 \
+    --prompt "a red rose in a vase" \
+    --output ./eval/rose_100.png
+```
+
+**评估指标：**
+- **视觉质量**：图像清晰度、色彩自然度
+- **文本相关性**：生成内容与提示词的匹配程度
+- **多样性**：不同提示词生成不同风格的图像
+- **稳定性**：相同提示词多次生成的一致性
+
+**详细文档：** 完整的图像生成指南请参考 [IMAGE_GENERATION_GUIDE.md](IMAGE_GENERATION_GUIDE.md)。
 
 ## 语料获取
 
 ### 1. 使用内置生成工具
 
-#### 生成对话语料
 ```bash
-# 生成1000条多样化对话语料
-cargo run --release --bin gen_sft -- --out data/dialogs.jsonl --count 1000 --seed 123
-```
-
-#### 生成技术问答语料
-```bash
-# 生成500条技术问答语料（包含网络数据）
-cargo run --release --bin gen_web_sft -- --out data/tech_qa.jsonl --count 500 --web --seed 42
+# 生成综合语料（包含普通对话、Web 问答、多模态数据）
+cargo run --release --bin gen_data -- --out data/corpus.jsonl --count 1000 --web --multimodal --seed 123
 ```
 
 **参数说明：**
 - `--out`：输出文件路径
 - `--count`：生成数据数量
-- `--web`：启用网络数据获取
+- `--web`：包含网络/Web 风格问答
+- `--multimodal`：包含多模态图像路径
 - `--seed`：随机种子
 
 ### 2. 公开数据集
@@ -260,7 +470,6 @@ cargo run --release --bin train -- \
     --batch-size 32 \
     --max-seq-len 256 \
     --lr 5e-5 \
-    --num-workers 8 \
     --backend gpu \
     --model-size 30m \
     --force \
@@ -344,15 +553,17 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 - **批量大小选择**：在GPU内存允许的情况下，尽量使用较大的批量
 
 **自动优化：**
-- 使用GPU后端时，系统会自动优化批量大小
-- 例如：`--batch-size 8` 在GPU模式下可能自动调整为32
+- 默认开启 GPU 显存探测（除非 `--no-auto-vram`）：会尝试一组 (batch, seq_len) 的“一步前向+反向”，自动寻找不 OOM 的配置。
+- 探测成功后可能会**降低**物理 `--batch-size` 或 `--max-seq-len`，并自动设置 `--gradient-accumulation` 以尽量保持等效 batch。
 
 ```bash
 # 调整批量大小
 --batch-size 16
 
-# GPU模式下的批量优化示例
---batch-size 8 --backend gpu  # 可能自动调整为32
+# GPU 模式下推荐做法：
+# - 默认开启显存探测：可能把物理 batch/seq_len 调小，并自动设置梯度累积以保持等效 batch
+# - 如需完全手动：加 --no-auto-vram，并自行设置 --gradient-accumulation
+--backend gpu --no-auto-vram --batch-size 2 --gradient-accumulation 4  # 等效 batch ≈ 8
 ```
 
 ### 3. 序列长度调整
@@ -634,8 +845,8 @@ Out of memory
 
 **优化建议：**
 - **使用GPU后端**：`--backend gpu`
-- **增加工作线程数**：`--num-workers 8`（根据CPU核心数调整）
-- **使用BPE分词器**：`--use-bpe`（比字符分词更快）
+- **CPU 后端增加工作线程数**：`--num-workers 16`（GPU 后端会强制使用单线程数据加载，忽略该参数）
+- **使用BPE分词器**：`--use-bpe`（通常减少 token 数并改善重复问题；首次构建 BPE tokenizer 可能更慢）
 - **调整批处理大小**：找到GPU内存允许的最大批量
 - **检查GPU驱动**：确保使用最新的GPU驱动
 
@@ -737,7 +948,7 @@ Failed to load model
 - **多种训练模式**：通用对话、代码生成、数学推理
 - **快速开发模式**：超快速验证和快速开发模式
 - **流式数据加载**：支持大语料流式训练
-- **多模态训练**：支持图像和文本融合训练，多种融合策略
+- **完整多模态功能**：支持 ResNet 和 Vision Transformer (ViT) 两种视觉编码器，四种融合策略（gated、concatenate、add、cross_attention），完整的端到端训练与推理闭环
 
 #### 分词器优化
 - **BPE分词器**：支持字节对编码分词
@@ -747,8 +958,8 @@ Failed to load model
 #### 训练优化
 - **GPU加速**：WGPU后端支持
 - **学习率调度**：预热和衰减策略
-- **批量优化**：自动调整批量大小
-- **多线程数据加载**：提高数据加载速度
+- **显存探测**：GPU 默认会探测可用的 (batch, seq_len) 并自动设置梯度累积（可用 `--no-auto-vram` 关闭）
+- **数据加载线程**：CPU 可多线程；GPU(WGPU) 会强制使用单线程数据加载（num_workers=0）
 
 ### 📚 资源推荐
 - **Burn框架文档**：https://burn-rs.github.io/
@@ -757,6 +968,6 @@ Failed to load model
 
 ---
 
-**更新日期：** 2026-03-25  
-**版本：** v1.1  
+**更新日期：** 2026-04-19  
+**版本：** v1.2  
 **作者：** Sage团队

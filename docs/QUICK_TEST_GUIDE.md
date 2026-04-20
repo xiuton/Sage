@@ -71,6 +71,7 @@
   - [31. Web SFT 数据生成](#31-web-sft-数据生成)
 - [第七阶段：单元测试](#第七阶段单元测试)
   - [32. 运行所有单元测试](#32-运行所有单元测试)
+  - [32.1 VAE 编码器测试详解](#321-vae-编码器测试详解)
 - [第八阶段：推理高级功能测试](#第八阶段推理高级功能测试)
   - [33. 流式输出测试](#33-流式输出测试)
   - [34. 流式输出速度控制测试](#34-流式输出速度控制测试)
@@ -84,13 +85,9 @@
   - [41. API 异步聊天补全测试](#41-api-异步聊天补全测试)
 - [第十阶段：模型导出和部署测试](#第十阶段模型导出和部署测试)
   - [42. 导出为 ONNX 格式](#42-导出为-onnx-格式)
-  - [43. 导出为 Torch 格式](#43-导出为-torch-格式)
-  - [44. 导出为 Safetensors 格式](#44-导出为-safetensors-格式)
-  - [45. 导出量化模型](#45-导出量化模型)
+  - [43. 导出格式说明](#43-导出格式说明)
 - [第十一阶段：准确率和性能评估测试](#第十一阶段准确率和性能评估测试)
-  - [46. 准确率评估测试](#46-准确率评估测试)
-  - [47. 困惑度评估测试](#47-困惑度评估测试)
-  - [48. 综合评估测试](#48-综合评估测试)
+  - [46. 准确率/困惑度评估（当前为实验性工具）](#46-准确率困惑度评估当前为实验性工具)
   - [49. CPU 性能基准测试](#49-cpu-性能基准测试)
   - [50. GPU 性能基准测试](#50-gpu-性能基准测试)
 - [第十二阶段：Web 数据生成测试](#第十二阶段web-数据生成测试)
@@ -218,8 +215,23 @@ if (Test-Path .\tmp\test_model_fast) {
 
 ### 5. GPU 后端训练测试
 ```powershell
-cargo run --release --bin train -- --sft-jsonl ./data/sft_small.jsonl --artifact-dir ./tmp/sft_100m --model-size 100m --use-bpe --bpe-vocab-size 10000 --num-epochs 30 --batch-size 8 --max-seq-len 128 --force --reset-tokenizer --backend gpu
----
+$TargetDir = Join-Path $env:LOCALAPPDATA "cargo-target\sage"
+
+cargo run --release --bin train --target-dir $TargetDir -- `
+    --sft-jsonl .\data\sft_small.jsonl `
+    --artifact-dir .\tmp\sft_100m `
+    --model-size 100m `
+    --use-bpe `
+    --bpe-vocab-size 10000 `
+    --num-epochs 30 `
+    --batch-size 8 `
+    --max-seq-len 128 `
+    --force `
+    --reset-tokenizer `
+    --backend gpu
+```
+
+如果遇到 `应用程序控制策略已阻止此文件。(os error 4551)`，通常是系统策略拦截了 `target\\...\\train.exe` 的执行；上面的 `--target-dir` 运行方式可以绕过常见拦截点。
 
 ## 第三阶段：推理测试
 
@@ -542,10 +554,7 @@ error: process didn't exit successfully: `target\debug\infer.exe --model-dir .\t
 ```powershell
 # 多模态功能测试（图像输入）
 # 注意：多模态功能需要特定的数据格式和配置
-# 多模态功能已完全集成到训练和推理流程中
-
-# 运行多模态相关单元测试
-cargo test test_multimodal
+# 多模态能力当前主要用于推理（infer）。训练侧尚未打通“带图像的数据集/训练循环”。
 
 Write-Host "✅ 多模态功能测试完成！"
 ```
@@ -555,7 +564,7 @@ Write-Host "✅ 多模态功能测试完成！"
 # 多模态功能当前状态说明：
 # 1. ✅ 已实现 VisionEncoder 图像编码器
 # 2. ✅ 已实现多模态融合层
-# 3. ✅ 已集成到完整的训练和推理流程
+# 3. ⚠️ 已集成到推理流程；训练侧未打通
 # 4. ✅ 支持图像加载和预处理
 # 5. ✅ 支持多模态生成
 
@@ -564,40 +573,11 @@ Write-Host "多模态功能文件："
 Get-ChildItem .\src\core\multimodal.rs
 Get-ChildItem .\src\core\generation.rs
 
-# 运行多模态单元测试
-Write-Host "运行多模态单元测试："
-cargo test test_multimodal -v
-
 Write-Host "✅ 多模态功能详细测试完成！"
 ```
 
-### 18.2 多模态训练指南
-```powershell
-# 多模态训练命令
-# 基本多模态训练
-cargo run --bin train -- `
-    --multimodal `
-    --vision-out-dim 512 `
-    --fusion-strategy add `
-    --ultra-quick `
-    --sft-sample `
-    --backend cpu `
-    --artifact-dir .\tmp\test_multimodal_train `
-    --no-progress
-
-# 自定义多模态配置
-cargo run --bin train -- `
-    --multimodal `
-    --vision-out-dim 768 `
-    --fusion-strategy concatenate `
-    --num-epochs 5 `
-    --batch-size 16 `
-    --backend cpu `
-    --artifact-dir .\tmp\test_multimodal_custom `
-    --no-progress
-
-Write-Host "✅ 多模态训练测试完成！"
-```
+### 18.2 多模态训练（当前未支持）
+当前版本未提供“带图像的数据集/训练循环”，因此不建议使用 `train --multimodal` 作为训练入口（仅会改变模型结构配置，不会真正读取/训练图像数据）。
 
 ### 18.3 多模态推理指南
 ```powershell
@@ -658,14 +638,14 @@ Write-Host "✅ 多模态功能未来测试方向说明完成！"
 ### 19. 分布式训练测试（多 GPU）
 ```powershell
 # 分布式训练测试（需要多个 GPU）
-# 注意：需要启用 --distributed 和指定 GPU 设备
+# 注意：当前版本分布式训练为框架/占位实现，未完成真实多 GPU 训练与同步；此段仅作为未来验证方向保留
 
 # 如果有多个 GPU，可以运行：
 # cargo run --bin train -- `
 #     --ultra-quick `
 #     --sft-sample `
 #     --distributed `
-#     --devices 0,1 `
+#     --devices gpu:0,gpu:1 `
 #     --backend gpu `
 #     --artifact-dir .\tmp\test_distributed `
 #     --no-progress
@@ -765,16 +745,8 @@ Write-Host "✅ 流式训练测试完成！"
 
 ### 26. 量化推理测试
 ```powershell
-# 使用量化模型进行推理（减少内存占用）
-cargo run --bin infer -- `
-    --model-dir .\tmp\test_model_quick `
-    --use-best `
-    --quantize `
-    --prompt "测试量化推理" `
-    --num-tokens 50 `
-    --backend cpu
-
-Write-Host "✅ 量化推理测试完成！"
+# 当前版本未提供 `infer --quantize` 等量化推理入口；仓库内量化为框架/体积估算，未做真实权重量化推理加速。
+Write-Host "⚠️ 量化推理测试已跳过（当前未支持）"
 ```
 
 ### 27. Context Window 测试
@@ -800,24 +772,18 @@ Write-Host "✅ Context Window 测试完成！"
 # 运行性能基准测试
 cargo run --release --bin benchmark -- `
     --model-dir .\tmp\test_model_quick `
-    --use-best `
     --backend cpu `
-    --num-tokens 100 `
-    --num-runs 5
+    --iterations 5 `
+    --prompt "你好，请介绍一下你自己"
 
 Write-Host "✅ 性能基准测试完成！"
 ```
 
 ### 29. 准确率评估
 ```powershell
-# 评估模型准确率
-cargo run --release --bin accuracy_eval -- `
-    --model-dir .\tmp\test_model_quick `
-    --use-best `
-    --backend cpu `
-    --test-data .\data\sft_small.jsonl
-
-Write-Host "✅ 准确率评估完成！"
+# accuracy_eval 当前为实验性工具，使用固定文件名/路径（config.toml、sage_model.burn）进行评估；
+# 若未准备对应文件可跳过。
+Write-Host "⚠️ 准确率评估已跳过（需要自备 config.toml / sage_model.burn）"
 ```
 
 ### 30. 模型导出
@@ -825,8 +791,8 @@ Write-Host "✅ 准确率评估完成！"
 # 导出模型用于部署
 cargo run --release --bin export -- `
     --model-dir .\tmp\test_model_quick `
-    --output-dir .\tmp\exported_model `
-    --format mpk
+    --output .\tmp\exported_model.onnx `
+    --format onnx
 
 Write-Host "✅ 模型导出完成！"
 ```
@@ -834,7 +800,7 @@ Write-Host "✅ 模型导出完成！"
 ### 31. Web SFT 数据生成
 ```powershell
 # 生成 Web 格式的 SFT 数据（需要启用 web feature）
-cargo run --release --bin gen_web_sft -- `
+cargo run --release --features=web --bin gen_web_sft -- `
     --count 200 `
     --out web_sft_demo.jsonl
 
@@ -854,13 +820,42 @@ cargo test
 cargo test test_tokenizer
 cargo test test_kv_cache
 cargo test test_dpo
-cargo test test_model
 cargo test test_basic
+cargo test test_model
 cargo test test_integration
 cargo test test_performance
+cargo test test_api_server
+cargo test test_vae
 
 Write-Host "✅ 所有单元测试完成！"
 ```
+
+### 32.1 VAE 编码器测试详解
+```powershell
+# 运行 VAE 编码器测试
+cargo test --test test_vae
+
+# 运行特定 VAE 测试
+cargo test --test test_vae test_vae_encoder_output_shape
+cargo test --test test_vae test_vae_encoder_latent_dim_64
+
+# 查看 VAE 测试详情
+cargo test --test test_vae -- --nocapture
+```
+
+**VAE 测试用例说明：**
+
+| 测试名称 | 配置 | 输入尺寸 | 输出尺寸 |
+|---------|------|---------|---------|
+| `test_vae_encoder_output_shape` | hidden_channels=128, latent_dim=128 | [1, 3, 64, 64] | [1, 128, 4, 4] |
+| `test_vae_encoder_latent_dim_64` | hidden_channels=64, latent_dim=64 | [2, 3, 64, 64] | [2, 64, 4, 4] |
+
+**测试文件位置：** `tests/test_vae.rs`
+
+**测试内容：**
+- 验证 VAE 编码器输出形状正确性
+- 验证不同 latent_dim 配置下的输出维度
+- 验证 4D 隐空间表示（用于扩散模型）
 
 ---
 
@@ -1047,7 +1042,7 @@ Write-Host "✅ API 异步聊天补全测试完成！"
 
 ### 42. 导出为 ONNX 格式
 ```powershell
-# 导出模型为 ONNX 格式（需要启用 tools feature）
+# 导出模型为 ONNX 格式（模型目录需包含 config.json / tokenizer.json / model.mpk 或 best_model.mpk）
 cargo run --release --bin export -- `
     --model-dir .\tmp\test_model_quick `
     --output .\tmp\exported_model.onnx `
@@ -1056,94 +1051,24 @@ cargo run --release --bin export -- `
 Write-Host "✅ ONNX 导出测试完成！"
 ```
 
-### 43. 导出为 Torch 格式
-```powershell
-# 导出模型为 Torch 格式
-cargo run --release --bin export -- `
-    --model-dir .\tmp\test_model_quick `
-    --output .\tmp\exported_model.pt `
-    --format torch
-
-Write-Host "✅ Torch 导出测试完成！"
-```
-
-### 44. 导出为 Safetensors 格式
-```powershell
-# 导出模型为 Safetensors 格式
-cargo run --release --bin export -- `
-    --model-dir .\tmp\test_model_quick `
-    --output .\tmp\exported_model.safetensors `
-    --format safetensors
-
-Write-Host "✅ Safetensors 导出测试完成！"
-```
-
-### 45. 导出量化模型
-```powershell
-# 导出量化模型（减小模型大小）
-cargo run --release --bin export -- `
-    --model-dir .\tmp\test_model_quick `
-    --output .\tmp\exported_model_quantized.onnx `
-    --format onnx `
-    --quantize `
-    --use-best
-
-Write-Host "✅ 量化模型导出测试完成！"
-```
+### 43. 导出格式说明
+当前 `export` 仅支持 `onnx` 与 `gguf` 两种格式；不支持 `torch/safetensors` 导出，也不支持 `--quantize` 导出。
 
 ---
 
 ## 第十一阶段：准确率和性能评估测试
 
-### 46. 准确率评估测试
-```powershell
-# 评估模型准确率
-cargo run --release --bin accuracy_eval -- `
-    --model-dir .\tmp\test_model_quick `
-    --test-data .\data\sft_small.jsonl `
-    --metrics accuracy `
-    --use-best `
-    --batch-size 8
-
-Write-Host "✅ 准确率评估测试完成！"
-```
-
-### 47. 困惑度评估测试
-```powershell
-# 评估模型困惑度
-cargo run --release --bin accuracy_eval -- `
-    --model-dir .\tmp\test_model_quick `
-    --test-data .\data\sft_small.jsonl `
-    --metrics perplexity `
-    --use-best `
-    --batch-size 8
-
-Write-Host "✅ 困惑度评估测试完成！"
-```
-
-### 48. 综合评估测试
-```powershell
-# 评估所有指标
-cargo run --release --bin accuracy_eval -- `
-    --model-dir .\tmp\test_model_quick `
-    --test-data .\data\sft_small.jsonl `
-    --metrics all `
-    --use-best `
-    --batch-size 8
-
-Write-Host "✅ 综合评估测试完成！"
-```
+### 46. 准确率/困惑度评估（当前为实验性工具）
+`accuracy_eval` 当前使用固定文件名/路径（`config.toml`、`sage_model.burn`）进行评估，不支持通过命令行指定 `--model-dir/--test-data` 等参数；若未准备对应文件可跳过。
 
 ### 49. CPU 性能基准测试
 ```powershell
 # CPU 性能基准测试
 cargo run --release --bin benchmark -- `
     --model-dir .\tmp\test_model_quick `
-    --prompt "性能测试" `
-    --max-length 100 `
-    --iterations 10 `
     --backend cpu `
-    --use-best
+    --iterations 10 `
+    --prompt "性能测试"
 
 Write-Host "✅ CPU 性能基准测试完成！"
 ```
@@ -1153,11 +1078,9 @@ Write-Host "✅ CPU 性能基准测试完成！"
 # GPU 性能基准测试（需要支持 WGPU 的显卡）
 cargo run --release --bin benchmark -- `
     --model-dir .\tmp\test_model_quick `
-    --prompt "性能测试" `
-    --max-length 100 `
-    --iterations 20 `
     --backend gpu `
-    --use-best
+    --iterations 20 `
+    --prompt "性能测试"
 
 Write-Host "✅ GPU 性能基准测试完成！"
 ```
@@ -1169,7 +1092,7 @@ Write-Host "✅ GPU 性能基准测试完成！"
 ### 51. 生成本地 Web SFT 数据
 ```powershell
 # 生成真实问答语料（本地数据）
-cargo run --release --bin gen_web_sft -- `
+cargo run --release --features=web --bin gen_web_sft -- `
     --out web_sft_local.jsonl `
     --count 100 `
     --seed 42
@@ -1180,8 +1103,8 @@ Write-Host "✅ 本地 Web SFT 数据生成测试完成！"
 ### 52. 生成网络 Web SFT 数据
 ```powershell
 # 生成真实问答语料（本地+网络数据）
-# 注意：需要设置环境变量 STACKEXCHANGE_API_KEY 和 GITHUB_TOKEN
-cargo run --release --bin gen_web_sft -- `
+# 当前版本不需要 API key；网络数据来自内置/公开知识库补充。
+cargo run --release --features=web --bin gen_web_sft -- `
     --out web_sft_web.jsonl `
     --count 50 `
     --web `
@@ -1193,10 +1116,9 @@ Write-Host "✅ 网络 Web SFT 数据生成测试完成！"
 ### 53. 仅使用网络数据生成
 ```powershell
 # 仅使用网络数据生成
-cargo run --release --bin gen_web_sft -- `
+cargo run --release --features=web --bin gen_web_sft -- `
     --out web_sft_web_only.jsonl `
     --count 50 `
-    --web `
     --web-only `
     --seed 42
 
@@ -1294,8 +1216,8 @@ Write-Host "✅ 仅网络数据生成测试完成！"
   - [ ] test_basic 通过
   - [ ] test_integration 通过
   - [ ] test_performance 通过
-  - [ ] test_multimodal 通过
   - [ ] test_api_server 通过
+  - [ ] test_vae 通过
 
 ---
 

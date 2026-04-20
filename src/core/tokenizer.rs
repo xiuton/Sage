@@ -37,6 +37,10 @@ pub struct Tokenizer {
     pub eos_id: usize,
 }
 
+// 为 Tokenizer 添加 Send 和 Sync 特质实现
+unsafe impl Send for Tokenizer {}
+unsafe impl Sync for Tokenizer {}
+
 impl Tokenizer {
     const SPECIAL_TOKENS: [char; 4] = ['\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}'];
     const ASSISTANT_START: &'static str = "<assistant>";

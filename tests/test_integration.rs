@@ -156,9 +156,9 @@ fn test_training_config_integration() {
     assert!(training_config.dpo_config.is_none());
 }
 
-/// 多模态模型集成测试
+/// 多模态模型集成测试 (ResNet 编码器)
 #[test]
-fn test_multimodal_integration() {
+fn test_multimodal_resnet_integration() {
     let device = NdArrayDevice::Cpu;
     
     let model_config = ModelConfig {
@@ -173,17 +173,20 @@ fn test_multimodal_integration() {
         multimodal: Some(sage::core::multimodal::MultimodalConfig {
             vision_encoder: sage::core::multimodal::VisionEncoderConfig {
                 in_channels: 3,
-                hidden_dim: 64,
+                hidden_channels: 64,
                 out_dim: 64,
-                num_layers: 2,
-                use_batch_norm: false,
+                encoder_type: "resnet".to_string(),
+                num_layers: 4,
+                patch_size: 16,
+                image_size: 224,
             },
             fusion: sage::core::multimodal::MultimodalFusionConfig {
                 text_dim: 64,
                 vision_dim: 64,
                 output_dim: 64,
-                strategy: sage::core::multimodal::FusionStrategy::Concatenate,
+                strategy: "concatenate".to_string(),
             },
+            preprocessing: Default::default(),
             enable_multimodal: true,
         }),
     };
@@ -196,6 +199,144 @@ fn test_multimodal_integration() {
     let output = model.forward(text_input);
     
     assert_eq!(output.dims(), [1, 5, 100]);
+}
+
+/// 多模态模型集成测试 (Vision Transformer 编码器)
+#[test]
+fn test_multimodal_vit_integration() {
+    let device = NdArrayDevice::Cpu;
+    
+    let model_config = ModelConfig {
+        vocab_size: 100,
+        max_seq_len: 32,
+        d_model: 64,
+        d_ff: 128,
+        n_layers: 2,
+        n_heads: 4,
+        dropout: 0.1,
+        quantized: false,
+        multimodal: Some(sage::core::multimodal::MultimodalConfig {
+            vision_encoder: sage::core::multimodal::VisionEncoderConfig {
+                in_channels: 3,
+                hidden_channels: 64,
+                out_dim: 64,
+                encoder_type: "vit".to_string(),
+                num_layers: 4,
+                patch_size: 16,
+                image_size: 224,
+            },
+            fusion: sage::core::multimodal::MultimodalFusionConfig {
+                text_dim: 64,
+                vision_dim: 64,
+                output_dim: 64,
+                strategy: "gated".to_string(),
+            },
+            preprocessing: Default::default(),
+            enable_multimodal: true,
+        }),
+    };
+    
+    // 初始化多模态模型
+    let model = model_config.init::<NdArray>(&device);
+    
+    // 测试文本输入前向传播
+    let text_input = Tensor::<NdArray, 2, Int>::zeros([1, 5], &device);
+    let output = model.forward(text_input);
+    
+    assert_eq!(output.dims(), [1, 5, 100]);
+}
+
+/// 图像编码器组件独立测试
+#[test]
+fn test_vision_encoders() {
+    use sage::core::multimodal::{VisionEncoder, VisionEncoderConfig};
+    
+    let device = NdArrayDevice::Cpu;
+    
+    // 测试 ResNet 编码器
+    let resnet_config = VisionEncoderConfig {
+        in_channels: 3,
+        hidden_channels: 64,
+        out_dim: 64,
+        encoder_type: "resnet".to_string(),
+        num_layers: 4,
+        patch_size: 16,
+        image_size: 224,
+    };
+    
+    let resnet_encoder = VisionEncoder::new(resnet_config, &device);
+    
+    // 创建随机图像输入
+    let image_input = Tensor::<NdArray, 4>::rand([1, 3, 224, 224], &device);
+    let resnet_output = resnet_encoder.forward(image_input);
+    assert_eq!(resnet_output.dims(), [1, 64]);
+    
+    // 测试 Vision Transformer 编码器
+    let vit_config = VisionEncoderConfig {
+        in_channels: 3,
+        hidden_channels: 64,
+        out_dim: 64,
+        encoder_type: "vit".to_string(),
+        num_layers: 4,
+        patch_size: 16,
+        image_size: 224,
+    };
+    
+    let vit_encoder = VisionEncoder::new(vit_config, &device);
+    
+    let image_input_vit = Tensor::<NdArray, 4>::rand([1, 3, 224, 224], &device);
+    let vit_output = vit_encoder.forward(image_input_vit);
+    assert_eq!(vit_output.dims(), [1, 64]);
+}
+
+/// 图像预处理组件测试
+#[test]
+fn test_image_preprocessing() {
+    use sage::core::multimodal::{ImagePreprocessor, ImagePreprocessingConfig};
+    
+    let device = NdArrayDevice::Cpu;
+    
+    let preprocessing_config = ImagePreprocessingConfig {
+        target_size: 224,
+        normalize: true,
+        mean: [0.485, 0.456, 0.406],
+        std: [0.229, 0.224, 0.225],
+        random_crop: false,
+        random_flip: false,
+        center_crop: true,
+    };
+    
+    let preprocessor = ImagePreprocessor::new(preprocessing_config, device.clone());
+    
+    // 创建随机原始图像输入 (0-255范围)
+    let raw_image = Tensor::<NdArray, 4>::rand([1, 3, 256, 256], &device) * 255.0;
+    
+    let processed_image = preprocessor.preprocess(raw_image);
+    assert_eq!(processed_image.dims(), [1, 3, 256, 256]);
+}
+
+/// 跨模态注意力机制测试
+#[test]
+fn test_cross_attention() {
+    use sage::core::multimodal::{CrossAttention, CrossAttentionConfig};
+    
+    let device = NdArrayDevice::Cpu;
+    
+    let cross_attn_config = CrossAttentionConfig {
+        text_dim: 64,
+        vision_dim: 64,
+        num_heads: 8,
+        dropout: 0.1,
+    };
+    
+    let cross_attention = CrossAttention::new(&cross_attn_config, &device);
+    
+    // 创建测试输入
+    let text_embedding = Tensor::<NdArray, 3>::rand([1, 10, 64], &device);
+    let vision_embedding = Tensor::<NdArray, 2>::rand([1, 64], &device);
+    
+    let output = cross_attention.forward(text_embedding, vision_embedding);
+    assert_eq!(output.dims(), [1, 10, 64]);
 }
 
 /// 性能基准集成测试

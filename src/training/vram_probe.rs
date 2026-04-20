@@ -71,7 +71,16 @@ fn run_training_step_once<B: AutodiffBackend>(
     let targets = Tensor::<B, 2, Int>::from_data(TensorData::new(targets_flat, [batch_size, seq_len]), device);
     let mask_data = vec![1u8; batch_size * seq_len];
     let mask = Tensor::<B, 2, Int>::from_data(TensorData::new(mask_data, [batch_size, seq_len]), device);
-    let batch = TextBatch { inputs, targets, mask };
+    
+    // 创建全1的attention_mask，表示所有位置都被关注
+    let attention_mask_data = vec![1i32; batch_size * seq_len];
+    let attention_mask = Tensor::<B, 2, Int>::from_data(TensorData::new(attention_mask_data, [batch_size, seq_len]), device);
+    
+    // 创建全0的token_type_ids，表示单一序列
+    let token_type_ids_data = vec![0i32; batch_size * seq_len];
+    let token_type_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(token_type_ids_data, [batch_size, seq_len]), device);
+    
+    let batch = TextBatch { inputs, targets, mask, attention_mask, token_type_ids, images: None };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let out = model.step(batch);
         drop(out);

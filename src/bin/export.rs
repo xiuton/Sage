@@ -2,8 +2,8 @@ use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn::module::Module;
 use clap::Parser;
 use sage::{
-    export::{export_model, ExportFormat},
-    tokenizer::Tokenizer,
+    core::tokenizer::Tokenizer,
+    tools::export::{export_model, ExportFormat},
     TrainingConfig,
 };
 use std::path::Path;

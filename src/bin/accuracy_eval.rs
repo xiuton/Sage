@@ -2,7 +2,8 @@ use burn::prelude::*;
 use burn_ndarray::NdArrayDevice;
 use sage::{
     quantization::quantization::{QuantizationMode, QuantizedModel},
-    tokenizer::Tokenizer,
+    core::tokenizer::Tokenizer,
+    inference::{GenerateOptions, generate, generate_quantized},
     TrainingConfig,
 };
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     // 获取原始模型结果
     for prompt in &test_prompts {
-        let response = sage::generation::generate(&original_model, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
+        let response = generate(&original_model, &tokenizer, prompt, &GenerateOptions::default(), &device);
         println!("原始模型 - \"{}\": {}", prompt, response);
         original_results.insert(*prompt, response);
     }
@@ -70,7 +71,7 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     // 获取动态量化模型结果
     for prompt in &test_prompts {
-        let response = sage::generation::generate_quantized(&quantized_model_dynamic, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
+        let response = generate_quantized(&quantized_model_dynamic, &tokenizer, prompt, &GenerateOptions::default(), &device);
         println!("动态量化 - \"{}\": {}", prompt, response);
         dynamic_results.insert(*prompt, response);
     }
@@ -79,7 +80,7 @@ fn evaluate_cpu_accuracy(config: &TrainingConfig, model_path: &str) {
     
     // 获取INT8量化模型结果
     for prompt in &test_prompts {
-        let response = sage::generation::generate_quantized(&quantized_model_int8, &tokenizer, prompt, &sage::generation::GenerateOptions::default(), &device);
+        let response = generate_quantized(&quantized_model_int8, &tokenizer, prompt, &GenerateOptions::default(), &device);
         println!("INT8量化 - \"{}\": {}", prompt, response);
         int8_results.insert(*prompt, response);
     }
