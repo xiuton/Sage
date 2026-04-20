@@ -338,9 +338,7 @@ impl<B: Backend> TimeEmbedding<B> {
 #[derive(Module, Debug)]
 pub struct UNetBlock<B: Backend> {
     conv1: Conv2d<B>,
-    bn1: BatchNorm<B>,
     conv2: Conv2d<B>,
-    bn2: BatchNorm<B>,
     time_mlp: Linear<B>,
     dropout: Dropout,
 }
@@ -350,22 +348,19 @@ impl<B: Backend> UNetBlock<B> {
         let conv1 = Conv2dConfig::new([in_channels, out_channels], [3, 3])
             .with_padding(burn::nn::PaddingConfig2d::Same)
             .init(device);
-        let bn1 = BatchNormConfig::new(out_channels).init(device);
 
         let conv2 = Conv2dConfig::new([out_channels, out_channels], [3, 3])
             .with_padding(burn::nn::PaddingConfig2d::Same)
             .init(device);
-        let bn2 = BatchNormConfig::new(out_channels).init(device);
 
         let time_mlp = LinearConfig::new(time_dim, out_channels).init(device);
         let dropout = DropoutConfig::new(0.1).init();
 
-        Self { conv1, bn1, conv2, bn2, time_mlp, dropout }
+        Self { conv1, conv2, time_mlp, dropout }
     }
 
     pub fn forward(&self, x: Tensor<B, 4>, t_emb: Tensor<B, 2>) -> Tensor<B, 4> {
         let h = self.conv1.forward(x);
-        let h = self.bn1.forward(h);
 
         let t_out = self.time_mlp.forward(t_emb);
         let c = t_out.dims()[1];
@@ -377,7 +372,6 @@ impl<B: Backend> UNetBlock<B> {
         let h = self.dropout.forward(h);
 
         let h = self.conv2.forward(h);
-        let h = self.bn2.forward(h);
         let h = Gelu::new().forward(h);
 
         h
@@ -389,9 +383,7 @@ pub struct UNet<B: Backend> {
     time_embedding: TimeEmbedding<B>,
     down_blocks: Vec<UNetBlock<B>>,
     mid_conv1: Conv2d<B>,
-    mid_bn1: BatchNorm<B>,
     mid_conv2: Conv2d<B>,
-    mid_bn2: BatchNorm<B>,
     up_blocks: Vec<UNetBlock<B>>,
     final_conv: Conv2d<B>,
 }
@@ -405,34 +397,32 @@ impl<B: Backend> UNet<B> {
         let time_embedding = TimeEmbedding::new(time_dim, device);
 
         let mut down_blocks = Vec::new();
-        let channels = [latent, hidden * 2, hidden * 4, hidden * 8];
+        let channels = [latent, hidden, hidden * 2, hidden * 4]; // 减小通道数
         for i in 0..channels.len() - 1 {
             down_blocks.push(UNetBlock::new(channels[i], channels[i + 1], time_dim, device));
         }
 
-        let mid_conv1 = Conv2dConfig::new([hidden * 8, hidden * 8], [3, 3])
+        let mid_conv1 = Conv2dConfig::new([hidden * 4, hidden * 4], [3, 3])
             .with_padding(burn::nn::PaddingConfig2d::Same)
             .init(device);
-        let mid_bn1 = BatchNormConfig::new(hidden * 8).init(device);
-        let mid_conv2 = Conv2dConfig::new([hidden * 8, hidden * 8], [3, 3])
+        let mid_conv2 = Conv2dConfig::new([hidden * 4, hidden * 4], [3, 3])
             .with_padding(burn::nn::PaddingConfig2d::Same)
             .init(device);
-        let mid_bn2 = BatchNormConfig::new(hidden * 8).init(device);
 
         let mut up_blocks = Vec::new();
-        let up_channels = [hidden * 8, hidden * 4, hidden * 2, hidden];
+        let up_channels = [hidden * 4, hidden * 2, hidden, hidden / 2]; // 减小通道数
         for i in 0..up_channels.len() - 1 {
             up_blocks.push(UNetBlock::new(up_channels[i], up_channels[i + 1], time_dim, device));
         }
 
-        let final_conv = Conv2dConfig::new([hidden, latent], [3, 3])
+        let final_conv = Conv2dConfig::new([hidden / 2, latent], [3, 3])
             .with_padding(burn::nn::PaddingConfig2d::Same)
             .init(device);
 
         Self {
             time_embedding,
             down_blocks,
-            mid_conv1, mid_bn1, mid_conv2, mid_bn2,
+            mid_conv1, mid_conv2,
             up_blocks,
             final_conv,
         }
@@ -448,10 +438,8 @@ impl<B: Backend> UNet<B> {
         }
 
         h = self.mid_conv1.forward(h);
-        h = self.mid_bn1.forward(h);
         h = Gelu::new().forward(h);
         h = self.mid_conv2.forward(h);
-        h = self.mid_bn2.forward(h);
         h = Gelu::new().forward(h);
 
         for block in &self.up_blocks {
