@@ -28,6 +28,76 @@ cd Sage
 cargo build --release
 ```
 
+### 2. 快速测试多模态功能
+
+**运行多模态集成测试：**
+
+```bash
+# 运行 ResNet 多模态集成测试
+cargo test test_multimodal_resnet_integration -- --nocapture
+
+# 运行 ViT 多模态集成测试  
+cargo test test_multimodal_vit_integration -- --nocapture
+
+# 运行视觉编码器测试
+cargo test test_vision_encoders -- --nocapture
+```
+
+### 3. 完整的多模态训练和推理流程
+
+**Step 1: 多模态模型训练**
+
+```bash
+# 基础多模态训练
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_model `
+    --vision-out-dim 512 `
+    --fusion-strategy cross_attention `
+    --batch-size 2 `
+    --learning-rate 0.0001 `
+    --num-epochs 1 `
+    --backend cpu
+```
+
+**Step 2: 多模态模型推理**
+
+```bash
+# 多模态模型推理
+cargo run --bin infer -- `
+    --model-dir models/mm_model `
+    --multimodal `
+    --image-path data/text_to_images/cat.png `
+    --prompt "描述这张图片"
+```
+
+**Step 3: 文生图模型训练**
+
+```bash
+# 文生图模型训练
+cargo run --bin train -- `
+    --text-to-image `
+    --image-text-data data/text_to_image_pairs.jsonl `
+    --config-path configs/config_vae_diffusion.json `
+    --output-dir models/text_to_image `
+    --batch-size 2 `
+    --learning-rate 0.001 `
+    --num-epochs 1 `
+    --backend cpu
+```
+
+**Step 4: 文生图模型推理**
+
+```bash
+# 文生图模型推理
+cargo run --bin image_gen -- `
+    --backend cpu `
+    --model-path models/text_to_image `
+    --prompt "一只可爱的小猫" `
+    --steps 50
+```
+
 ### 2. 最小化多模态使用示例
 
 ```rust

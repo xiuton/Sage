@@ -191,14 +191,62 @@ ImagePreprocessingConfig {
 
 ### 训练
 
-**启用多模态训练：**
+**完整的多模态训练命令：**
+
 ```bash
-cargo run --release --bin train -- `
+# 多模态模型训练（CPU）
+cargo run --bin train -- `
     --multimodal `
-    --sft-jsonl data/multimodal_data.jsonl `
-    --output-dir ./models/mm_model `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_model `
     --vision-out-dim 512 `
-    --fusion-strategy cross_attention
+    --fusion-strategy cross_attention `
+    --batch-size 2 `
+    --learning-rate 0.0001 `
+    --num-epochs 1 `
+    --backend cpu
+```
+
+**使用 GPU 加速训练：**
+
+```bash
+# 多模态模型训练（GPU）
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_model `
+    --vision-out-dim 512 `
+    --fusion-strategy cross_attention `
+    --batch-size 4 `
+    --learning-rate 0.0001 `
+    --num-epochs 50 `
+    --backend gpu
+```
+
+**使用 ResNet 视觉编码器：**
+
+```bash
+# 使用 ResNet 视觉编码器
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_resnet `
+    --vision-out-dim 512 `
+    --fusion-strategy gated `
+    --backend cpu
+```
+
+**使用 Vision Transformer 视觉编码器：**
+
+```bash
+# 使用 Vision Transformer 视觉编码器
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_vit `
+    --vision-out-dim 768 `
+    --fusion-strategy cross_attention `
+    --backend gpu
 ```
 
 **数据格式：**
@@ -229,26 +277,60 @@ cargo run --release --bin train -- `
 
 ### 推理
 
-**启用多模态推理：**
+**完整的多模态推理命令：**
+
 ```bash
+# 多模态模型推理（CPU）
 cargo run --bin infer -- `
-    --model-dir ./models/mm_model `
+    --model-dir models/mm_model `
     --multimodal `
-    --image-path data/images/test.jpg `
+    --image-path data/text_to_images/cat.png `
     --prompt "描述这张图片"
 ```
 
-**完整参数示例：**
+**使用 GPU 加速推理：**
+
 ```bash
+# 多模态模型推理（GPU）
 cargo run --bin infer -- `
-    --model-dir ./models/mm_model `
+    --model-dir models/mm_model `
     --use-best `
     --multimodal `
-    --image-path data/images/test.jpg `
+    --image-path data/text_to_images/cat.png `
     --prompt "描述这张图片" `
     --num-tokens 100 `
     --temperature 0.7 `
     --backend gpu
+```
+
+**详细推理参数：**
+
+```bash
+# 详细配置的多模态推理
+cargo run --bin infer -- `
+    --model-dir models/mm_model `
+    --multimodal `
+    --image-path data/text_to_images/dog.png `
+    --prompt "详细描述这张图片，包括颜色、动作和场景" `
+    --num-tokens 200 `
+    --temperature 0.8 `
+    --top-p 0.9 `
+    --top-k 50 `
+    --backend cpu
+```
+
+**批量推理示例：**
+
+```bash
+# 批量处理多张图片
+for image in data/text_to_images/*.png; do
+    cargo run --bin infer -- `
+        --model-dir models/mm_model `
+        --multimodal `
+        --image-path "$image" `
+        --prompt "描述这张图片" `
+        --num-tokens 150
+done
 ```
 
 ---

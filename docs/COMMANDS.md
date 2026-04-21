@@ -241,6 +241,29 @@ cargo run --bin image_gen -- --backend gpu --prompt "a sunset over the ocean" --
 cargo run --bin image_gen -- --backend gpu --prompt "a red rose in the rain" --image-size 64 --steps 50 --output ./my_rose.png
 ```
 
+**D. 使用训练好的模型**
+
+```bash
+# 使用训练好的模型生成图像
+cargo run --bin image_gen -- `
+    --backend cpu `
+    --model-path models/text_to_image `
+    --prompt "一只可爱的小猫" `
+    --steps 50
+```
+
+**E. GPU 加速模型推理**
+
+```bash
+# GPU 加速模型推理
+cargo run --bin image_gen -- `
+    --backend gpu `
+    --model-path models/text_to_image `
+    --prompt "a beautiful landscape with mountains" `
+    --steps 100 `
+    --output ./generated_landscape.png
+```
+
 ### 3.4 图像生成参数说明
 
 | 参数 | 默认值 | 说明 |
@@ -355,51 +378,109 @@ curl -X POST http://localhost:8080/multimodal `
 
 ### 多模态训练示例
 
-```bash
-# ResNet 编码器 + 门控融合
-cargo run --release --bin train -- `
-    --multimodal `
-    --sft-jsonl data/multimodal_data.jsonl `
-    --output-dir ./models/mm_resnet_gated `
-    --vision-out-dim 512 `
-    --fusion-strategy gated
+**基础多模态训练（CPU）**
 
-# Vision Transformer 编码器 + 跨模态注意力融合
-cargo run --release --bin train -- `
+```bash
+cargo run --bin train -- `
     --multimodal `
-    --sft-jsonl data/multimodal_data.jsonl `
-    --output-dir ./models/mm_vit_cross `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_model `
     --vision-out-dim 512 `
-    --fusion-strategy cross_attention
+    --fusion-strategy cross_attention `
+    --batch-size 2 `
+    --learning-rate 0.0001 `
+    --num-epochs 1 `
+    --backend cpu
+```
+
+**GPU 加速多模态训练**
+
+```bash
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_model `
+    --vision-out-dim 512 `
+    --fusion-strategy cross_attention `
+    --batch-size 4 `
+    --learning-rate 0.0001 `
+    --num-epochs 50 `
+    --backend gpu
+```
+
+**ResNet 编码器训练**
+
+```bash
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_resnet `
+    --vision-out-dim 512 `
+    --fusion-strategy gated `
+    --backend cpu
+```
+
+**Vision Transformer 编码器训练**
+
+```bash
+cargo run --bin train -- `
+    --multimodal `
+    --sft-jsonl data/mm_test.jsonl `
+    --output-dir models/mm_vit `
+    --vision-out-dim 768 `
+    --fusion-strategy cross_attention `
+    --backend gpu
 ```
 
 ### 多模态推理示例
 
-```bash
-# 基础多模态推理
-cargo run --bin infer -- `
-    --model-dir ./models/mm_resnet_gated `
-    --multimodal `
-    --image-path ./data/images/test.jpg `
-    --prompt "描述这张图片"
+**基础多模态推理**
 
-# 使用最佳模型 + GPU + 详细参数
+```bash
 cargo run --bin infer -- `
-    --model-dir ./models/mm_vit_cross `
+    --model-dir models/mm_model `
+    --multimodal `
+    --image-path data/text_to_images/cat.png `
+    --prompt "描述这张图片"
+```
+
+**GPU 加速多模态推理**
+
+```bash
+cargo run --bin infer -- `
+    --model-dir models/mm_model `
     --use-best `
     --multimodal `
-    --image-path ./data/images/sample.jpg `
-    --prompt "详细描述这张图片，包括场景、物体和颜色" `
-    --num-tokens 150 `
+    --image-path data/text_to_images/cat.png `
+    --prompt "描述这张图片" `
+    --num-tokens 100 `
     --temperature 0.7 `
     --backend gpu
+```
 
-# 交互式多模态对话
+**详细参数多模态推理**
+
+```bash
 cargo run --bin infer -- `
-    --model-dir ./models/mm_model `
+    --model-dir models/mm_model `
+    --multimodal `
+    --image-path data/text_to_images/dog.png `
+    --prompt "详细描述这张图片，包括颜色、动作和场景" `
+    --num-tokens 200 `
+    --temperature 0.8 `
+    --top-p 0.9 `
+    --top-k 50 `
+    --backend cpu
+```
+
+**交互式多模态对话**
+
+```bash
+cargo run --bin infer -- `
+    --model-dir models/mm_model `
     --use-best `
     --multimodal `
-    --image-path ./data/images/demo.jpg `
+    --image-path data/text_to_images/cat.png `
     --chat `
     --interactive
 ```
@@ -454,5 +535,5 @@ cargo run --bin infer -- `
 
 ---
 
-**最后更新：** 2026-04-19
-**版本：** v1.2
+**最后更新：** 2026-04-21
+**版本：** v1.3

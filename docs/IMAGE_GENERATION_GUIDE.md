@@ -626,17 +626,49 @@ mkdir -p configs
 
 ### 3. 启动训练
 
+**完整的文生图训练命令：**
+
 ```bash
-# 文生图模型训练
-cargo run --release --bin train -- `
+# 文生图模型训练（CPU）
+cargo run --bin train -- `
     --text-to-image `
-    --image-text-data data/text_image_pairs.jsonl `
-    --config-path configs/vae_diffusion.json `
-    --output-dir ./models/text_to_image `
-    --batch-size 16 `
+    --image-text-data data/text_to_image_pairs.jsonl `
+    --config-path configs/config_vae_diffusion.json `
+    --output-dir models/text_to_image `
+    --batch-size 2 `
+    --learning-rate 0.001 `
+    --num-epochs 1 `
+    --backend cpu
+```
+
+**使用 GPU 加速训练：**
+
+```bash
+# 文生图模型训练（GPU）
+cargo run --bin train -- `
+    --text-to-image `
+    --image-text-data data/text_to_image_pairs.jsonl `
+    --config-path configs/config_vae_diffusion.json `
+    --output-dir models/text_to_image `
+    --batch-size 4 `
     --learning-rate 0.0001 `
-    --num-epochs 100 `
+    --num-epochs 50 `
     --backend gpu
+```
+
+**使用小配置快速测试：**
+
+```bash
+# 快速测试训练
+cargo run --bin train -- `
+    --text-to-image `
+    --image-text-data data/text_to_image_pairs.jsonl `
+    --config-path configs/config_vae_diffusion_small.json `
+    --output-dir models/text_to_image_test `
+    --batch-size 1 `
+    --learning-rate 0.001 `
+    --num-epochs 1 `
+    --backend cpu
 ```
 
 ### 4. 训练过程
@@ -657,23 +689,49 @@ cargo run --release --bin train -- `
 
 ### 5. 使用训练好的模型
 
-训练完成后，使用训练好的模型进行生成：
+**完整的模型加载和图像生成命令：**
 
 ```bash
-# 使用训练好的模型生成图像
+# 使用训练好的模型生成图像（CPU）
 cargo run --bin image_gen -- `
-    --model-path ./models/text_to_image `
-    --prompt "a cat wearing sunglasses" `
-    --steps 50 `
-    --output ./generated_cat.png
+    --backend cpu `
+    --model-path models/text_to_image `
+    --prompt "一只可爱的小猫" `
+    --steps 50
+```
 
+**使用 GPU 加速生成：**
+
+```bash
 # GPU 加速生成
 cargo run --bin image_gen -- `
     --backend gpu `
-    --model-path ./models/text_to_image `
+    --model-path models/text_to_image `
     --prompt "a beautiful landscape with mountains" `
     --steps 100 `
     --output ./generated_landscape.png
+```
+
+**指定配置文件路径：**
+
+```bash
+# 手动指定配置文件
+cargo run --bin image_gen -- `
+    --model-path models/text_to_image `
+    --config-path models/text_to_image/config.json `
+    --prompt "一只可爱的小猫" `
+    --steps 50 `
+    --output ./cat.png
+```
+
+**快速测试生成：**
+
+```bash
+# 快速测试生成（较少步数）
+cargo run --bin image_gen -- `
+    --model-path models/text_to_image `
+    --prompt "a red rose" `
+    --steps 20
 ```
 
 ### 6. 训练技巧
