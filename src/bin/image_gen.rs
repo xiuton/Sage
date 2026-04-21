@@ -32,6 +32,12 @@ struct Args {
 
     #[arg(long)]
     seed: Option<u64>,
+
+    #[arg(long)]
+    model_path: Option<String>,
+
+    #[arg(long)]
+    config_path: Option<String>,
 }
 
 fn generate_random_filename() -> String {
@@ -86,6 +92,34 @@ fn tensor_to_image_simple<B: Backend>(tensor: burn::Tensor<B, 4>) -> RgbImage {
     img
 }
 
+fn load_config_from_file(path: &str) -> Result<DiffusionConfig, Box<dyn std::error::Error>> {
+    use serde::Deserialize;
+    
+    #[derive(Deserialize)]
+    struct ConfigJson {
+        image_size: Option<usize>,
+        in_channels: Option<usize>,
+        latent_dim: Option<usize>,
+        hidden_channels: Option<usize>,
+        num_timesteps: Option<usize>,
+        beta_start: Option<f64>,
+        beta_end: Option<f64>,
+    }
+
+    let content = std::fs::read_to_string(path)?;
+    let json: ConfigJson = serde_json::from_str(&content)?;
+
+    Ok(DiffusionConfig {
+        image_size: json.image_size.unwrap_or(64),
+        in_channels: json.in_channels.unwrap_or(3),
+        hidden_channels: json.hidden_channels.unwrap_or(128),
+        num_timesteps: json.num_timesteps.unwrap_or(1000),
+        latent_dim: json.latent_dim.unwrap_or(128),
+        beta_start: json.beta_start.unwrap_or(0.0001) as f32,
+        beta_end: json.beta_end.unwrap_or(0.02) as f32,
+    })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("========================================");
     println!("  Sage 图像生成工具 v1.0");
@@ -103,14 +137,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         get_unique_filename(&args.output)
     };
 
-    let config = DiffusionConfig {
-        image_size: args.image_size,
-        in_channels: 3,
-        hidden_channels: 128,
-        num_timesteps: 1000,
-        latent_dim: args.latent_dim,
-        beta_start: 0.0001,
-        beta_end: 0.02,
+    let config = if let Some(ref config_path) = args.config_path {
+        println!("📄 从配置文件加载: {}", config_path);
+        load_config_from_file(config_path)?
+    } else if let Some(ref model_dir) = args.model_path {
+        let config_path = std::path::Path::new(model_dir).join("config.json");
+        if config_path.exists() {
+            println!("📄 从模型目录加载配置: {}", config_path.to_str().unwrap());
+            load_config_from_file(config_path.to_str().unwrap())?
+        } else {
+            println!("⚠️  模型目录中未找到 config.json，使用默认配置");
+            DiffusionConfig {
+                image_size: args.image_size,
+                in_channels: 3,
+                hidden_channels: 128,
+                num_timesteps: 1000,
+                latent_dim: args.latent_dim,
+                beta_start: 0.0001,
+                beta_end: 0.02,
+            }
+        }
+    } else {
+        DiffusionConfig {
+            image_size: args.image_size,
+            in_channels: 3,
+            hidden_channels: 128,
+            num_timesteps: 1000,
+            latent_dim: args.latent_dim,
+            beta_start: 0.0001,
+            beta_end: 0.02,
+        }
     };
 
     if args.backend == "gpu" {
@@ -128,7 +184,18 @@ fn run_with_cpu_backend(config: &DiffusionConfig, args: &Args, output_path: &str
     use burn_ndarray::NdArray;
 
     let device = NdArrayDevice::Cpu;
-    let generator = ImageGenerator::<NdArray>::new(config.clone(), device);
+    let generator = if let Some(ref model_dir) = args.model_path {
+        let model_path = std::path::Path::new(model_dir).join("diffusion_model.mpk");
+        if model_path.exists() {
+            println!("📂 加载训练好的模型: {}", model_path.to_str().unwrap());
+            ImageGenerator::<NdArray>::from_file(config.clone(), device, model_path)?
+        } else {
+            println!("⚠️  模型文件不存在: {}，使用随机初始化模型", model_path.to_str().unwrap());
+            ImageGenerator::<NdArray>::new(config.clone(), device)
+        }
+    } else {
+        ImageGenerator::<NdArray>::new(config.clone(), device)
+    };
 
     if args.generate_only {
         println!("✨ 生成模式: VAE 随机图像生成");
@@ -178,7 +245,18 @@ fn run_with_gpu_backend(config: &DiffusionConfig, args: &Args, output_path: &str
     use burn_wgpu::WgpuDevice;
 
     let device = WgpuDevice::default();
-    let generator = ImageGenerator::<Wgpu>::new(config.clone(), device);
+    let generator = if let Some(ref model_dir) = args.model_path {
+        let model_path = std::path::Path::new(model_dir).join("diffusion_model.mpk");
+        if model_path.exists() {
+            println!("📂 加载训练好的模型: {}", model_path.to_str().unwrap());
+            ImageGenerator::<Wgpu>::from_file(config.clone(), device, model_path)?
+        } else {
+            println!("⚠️  模型文件不存在: {}，使用随机初始化模型", model_path.to_str().unwrap());
+            ImageGenerator::<Wgpu>::new(config.clone(), device)
+        }
+    } else {
+        ImageGenerator::<Wgpu>::new(config.clone(), device)
+    };
 
     if args.generate_only {
         println!("✨ 生成模式: VAE 随机图像生成");

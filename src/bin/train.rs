@@ -1075,6 +1075,34 @@ fn main() {
                     println!("训练完成，保存模型到: {}", output_dir);
                     fs::create_dir_all(output_dir).expect("Failed to create output directory");
 
+                    // 保存配置文件
+                    use serde::Serialize;
+                    #[derive(Serialize)]
+                    struct ConfigJson {
+                        image_size: usize,
+                        in_channels: usize,
+                        latent_dim: usize,
+                        hidden_channels: usize,
+                        num_timesteps: usize,
+                        beta_start: f64,
+                        beta_end: f64,
+                    }
+
+                    let config_json = ConfigJson {
+                        image_size: diffusion_config.image_size,
+                        in_channels: diffusion_config.in_channels,
+                        latent_dim: diffusion_config.latent_dim,
+                        hidden_channels: diffusion_config.hidden_channels,
+                        num_timesteps: diffusion_config.num_timesteps,
+                        beta_start: diffusion_config.beta_start as f64,
+                        beta_end: diffusion_config.beta_end as f64,
+                    };
+
+                    let config_path = format!("{}/config.json", output_dir);
+                    let config_str = serde_json::to_string_pretty(&config_json).expect("Failed to serialize config");
+                    fs::write(&config_path, config_str).expect("Failed to save config");
+                    println!("配置文件已保存到: {}", config_path);
+
                     let model_path = format!("{}/diffusion_model.mpk", output_dir);
                     model.save_file(&model_path, &CompactRecorder::new())
                         .expect("Failed to save model");
@@ -1231,6 +1259,34 @@ fn main() {
             // 保存模型
             println!("训练完成，保存模型到: {}", output_dir);
             fs::create_dir_all(output_dir).expect("Failed to create output directory");
+
+            // 保存配置文件
+            use serde::Serialize;
+            #[derive(Serialize)]
+            struct ConfigJson {
+                image_size: usize,
+                in_channels: usize,
+                latent_dim: usize,
+                hidden_channels: usize,
+                num_timesteps: usize,
+                beta_start: f64,
+                beta_end: f64,
+            }
+
+            let config_json = ConfigJson {
+                image_size: diffusion_config.image_size,
+                in_channels: diffusion_config.in_channels,
+                latent_dim: diffusion_config.latent_dim,
+                hidden_channels: diffusion_config.hidden_channels,
+                num_timesteps: diffusion_config.num_timesteps,
+                beta_start: diffusion_config.beta_start as f64,
+                beta_end: diffusion_config.beta_end as f64,
+            };
+
+            let config_path = format!("{}/config.json", output_dir);
+            let config_str = serde_json::to_string_pretty(&config_json).expect("Failed to serialize config");
+            fs::write(&config_path, config_str).expect("Failed to save config");
+            println!("配置文件已保存到: {}", config_path);
 
             let model_path = format!("{}/diffusion_model.mpk", output_dir);
             model.save_file(&model_path, &CompactRecorder::new())

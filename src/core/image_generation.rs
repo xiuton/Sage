@@ -464,6 +464,21 @@ pub struct DiffusionModel<B: Backend> {
 }
 
 impl<B: Backend> DiffusionModel<B> {
+    pub fn from_file<P: AsRef<std::path::Path>>(config: &DiffusionConfig, device: &B::Device, path: P) -> Result<Self, String> {
+        use burn::record::{CompactRecorder, Recorder};
+        
+        let mut model = Self::new(config, device);
+        
+        let path_buf = path.as_ref().to_path_buf();
+        let record = CompactRecorder::new()
+            .load(path_buf, device)
+            .map_err(|e| format!("Failed to load model: {}", e))?;
+        
+        model = model.load_record(record);
+        
+        Ok(model)
+    }
+
     pub fn new(config: &DiffusionConfig, device: &B::Device) -> Self {
         let vae_config = VAEConfig {
             image_channels: config.in_channels,
@@ -571,6 +586,11 @@ impl<B: Backend> ImageGenerator<B> {
     pub fn new(config: DiffusionConfig, device: B::Device) -> Self {
         let diffusion = DiffusionModel::new(&config, &device);
         Self { diffusion, device }
+    }
+
+    pub fn from_file<P: AsRef<std::path::Path>>(config: DiffusionConfig, device: B::Device, model_path: P) -> Result<Self, String> {
+        let diffusion = DiffusionModel::from_file(&config, &device, model_path)?;
+        Ok(Self { diffusion, device })
     }
 
     pub fn generate_simple(&self, batch_size: usize, _image_size: usize) -> Tensor<B, 4> {
