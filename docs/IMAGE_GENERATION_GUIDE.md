@@ -626,10 +626,23 @@ mkdir -p configs
 
 ### 3. 启动训练
 
-**完整的文生图训练命令：**
+#### 文生图模型训练（CPU）
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--text-to-image`：启用文生图训练模式，用于训练文本到图像的扩散模型
+- `--image-text-data data/text_to_image_pairs.jsonl`：指定图文训练数据文件路径，格式为JSONL，每行包含图像路径和文本描述
+- `--config-path configs/config_vae_diffusion.json`：指定模型配置文件路径，包含VAE和Diffusion模型的超参数配置
+- `--output-dir models/text_to_image`：指定模型输出目录，训练完成后会生成config.json和diffusion_model.mpk文件
+- `--batch-size 2`：训练批次大小，表示每次迭代使用的样本数量，批次越小越节省显存但训练速度较慢
+- `--learning-rate 0.001`：学习率，控制模型权重更新的幅度，0.001是较大学习率，适合快速收敛测试
+- `--num-epochs 1`：训练轮数，1轮仅用于快速验证训练流程是否正常
+- `--backend cpu`：使用CPU进行训练，适合调试和没有GPU硬件的环境
+
+**完整命令：**
 
 ```bash
-# 文生图模型训练（CPU）
 cargo run --bin train -- `
     --text-to-image `
     --image-text-data data/text_to_image_pairs.jsonl `
@@ -641,10 +654,64 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**使用 GPU 加速训练：**
+#### 完整文生图训练（解决马赛克问题）
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--text-to-image`：启用文生图训练模式
+- `--image-text-data data/text_to_image_pairs.jsonl`：指定图文训练数据文件路径，建议使用至少1000+高质量图文对
+- `--config-path configs/config_vae_diffusion.json`：指定标准模型配置文件
+- `--output-dir models/text_to_image_full`：指定完整训练的模型输出目录
+- `--batch-size 4`：训练批次大小为4，平衡速度和显存使用
+- `--learning-rate 0.0001`：学习率设置为0.0001，适合长时间训练
+- `--num-epochs 100`：训练100轮，确保模型充分学习数据中的模式
+- `--backend gpu`：使用GPU进行训练，大幅加速训练过程
+
+**完整命令：**
 
 ```bash
-# 文生图模型训练（GPU）
+cargo run --bin train -- `
+    --text-to-image `
+    --image-text-data data/text_to_image_pairs.jsonl `
+    --config-path configs/config_vae_diffusion.json `
+    --output-dir models/text_to_image_full `
+    --batch-size 4 `
+    --learning-rate 0.0001 `
+    --num-epochs 100 `
+    --backend gpu
+```
+
+**解决马赛克图问题的关键：**
+
+1. **充分的训练轮数**：至少50-100轮，确保模型学习到足够的图像特征
+2. **合适的学习率**：使用较小的学习率（0.0001）进行长时间训练
+3. **足够的训练数据**：确保 `data/text_to_image_pairs.jsonl` 中有足够的高质量图文对
+4. **使用GPU加速**：GPU训练速度比CPU快10-20倍，能在合理时间内完成训练
+5. **监控训练过程**：观察损失值是否持续下降，验证集性能是否提升
+
+**训练时间参考：**
+- GPU (RTX 3090)：100轮约12-24小时
+- GPU (RTX 4090)：100轮约6-12小时
+- CPU：不建议，训练时间过长
+
+#### 使用 GPU 加速训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--text-to-image`：启用文生图训练模式
+- `--image-text-data data/text_to_image_pairs.jsonl`：指定图文训练数据文件路径
+- `--config-path configs/config_vae_diffusion.json`：指定模型配置文件路径
+- `--output-dir models/text_to_image`：指定模型输出目录
+- `--batch-size 4`：训练批次大小为4，GPU显存足够时可以设置更大的批次以加快训练速度
+- `--learning-rate 0.0001`：学习率设置为0.0001，标准的深度学习学习率，适合长时间训练
+- `--num-epochs 50`：训练50轮，足够让模型学习到数据中的模式和特征
+- `--backend gpu`：使用GPU进行训练，大幅加速训练过程，50轮训练可能需要数小时到数天
+
+**完整命令：**
+
+```bash
 cargo run --bin train -- `
     --text-to-image `
     --image-text-data data/text_to_image_pairs.jsonl `
@@ -656,10 +723,23 @@ cargo run --bin train -- `
     --backend gpu
 ```
 
-**使用小配置快速测试：**
+#### 使用小配置快速测试
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--text-to-image`：启用文生图训练模式
+- `--image-text-data data/text_to_image_pairs.jsonl`：指定图文训练数据文件路径
+- `--config-path configs/config_vae_diffusion_small.json`：指定小型模型配置文件，包含较小的hidden_channels和latent_dim以加快训练速度
+- `--output-dir models/text_to_image_test`：指定测试模型输出目录
+- `--batch-size 1`：批次大小设置为1，最小显存占用，适合快速迭代测试
+- `--learning-rate 0.001`：较大学习率，适合快速验证训练效果
+- `--num-epochs 1`：仅训练1轮，用于验证训练流程是否正常工作
+- `--backend cpu`：使用CPU训练，虽然速度慢但可以快速检查代码逻辑
+
+**完整命令：**
 
 ```bash
-# 快速测试训练
 cargo run --bin train -- `
     --text-to-image `
     --image-text-data data/text_to_image_pairs.jsonl `
@@ -689,10 +769,19 @@ cargo run --bin train -- `
 
 ### 5. 使用训练好的模型
 
-**完整的模型加载和图像生成命令：**
+#### 使用快速测试模型生成图像（CPU）
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--backend cpu`：使用CPU进行图像生成，适合在没有GPU硬件的环境下使用
+- `--model-path models/text_to_image`：指定快速测试训练的模型目录路径
+- `--prompt "一只可爱的小猫"`：文本提示词，描述想要生成的图像内容，支持中文和英文
+- `--steps 50`：Diffusion采样步数，步数越多生成质量越高但速度越慢，50步是质量和速度的平衡点
+
+**完整命令：**
 
 ```bash
-# 使用训练好的模型生成图像（CPU）
 cargo run --bin image_gen -- `
     --backend cpu `
     --model-path models/text_to_image `
@@ -700,10 +789,42 @@ cargo run --bin image_gen -- `
     --steps 50
 ```
 
-**使用 GPU 加速生成：**
+#### 使用完整训练模型生成高质量图像（GPU）
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--backend gpu`：使用GPU进行图像生成，大幅提升生成速度和质量
+- `--model-path models/text_to_image_full`：指定完整训练的模型目录路径，包含充分训练的模型权重
+- `--prompt "一只可爱的小猫，毛茸茸的，蓝色眼睛，在草地上玩耍"`：详细的文本提示词，引导模型生成更具体的图像
+- `--steps 100`：使用100步采样，获得更高质量的生成结果
+- `--output ./cat_generated.png`：指定输出图像路径
+
+**完整命令：**
 
 ```bash
-# GPU 加速生成
+cargo run --bin image_gen -- `
+    --backend gpu `
+    --model-path models/text_to_image_full `
+    --prompt "一只可爱的小猫，毛茸茸的，蓝色眼睛，在草地上玩耍" `
+    --steps 100 `
+    --output ./cat_generated.png
+```
+
+#### 使用 GPU 加速生成
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--backend gpu`：使用GPU进行图像生成，大幅提升生成速度
+- `--model-path models/text_to_image`：指定模型目录路径
+- `--prompt "a beautiful landscape with mountains"`：英文文本提示词，描述想要生成的图像场景
+- `--steps 100`：使用100步采样，获得更高质量的生成结果
+- `--output ./generated_landscape.png`：指定输出图像路径，不指定则默认保存到assets目录
+
+**完整命令：**
+
+```bash
 cargo run --bin image_gen -- `
     --backend gpu `
     --model-path models/text_to_image `
@@ -712,10 +833,20 @@ cargo run --bin image_gen -- `
     --output ./generated_landscape.png
 ```
 
-**指定配置文件路径：**
+#### 指定配置文件路径
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--model-path models/text_to_image`：指定模型目录路径
+- `--config-path models/text_to_image/config.json`：手动指定配置文件路径，通常不需要指定，会自动从模型目录加载
+- `--prompt "一只可爱的小猫"`：文本提示词
+- `--steps 50`：采样步数
+- `--output ./cat.png`：指定输出图像路径为cat.png
+
+**完整命令：**
 
 ```bash
-# 手动指定配置文件
 cargo run --bin image_gen -- `
     --model-path models/text_to_image `
     --config-path models/text_to_image/config.json `
@@ -724,10 +855,18 @@ cargo run --bin image_gen -- `
     --output ./cat.png
 ```
 
-**快速测试生成：**
+#### 快速测试生成
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--model-path models/text_to_image`：指定模型目录路径
+- `--prompt "a red rose"`：文本提示词
+- `--steps 20`：使用20步采样进行快速测试，虽然质量略低但速度很快
+
+**完整命令：**
 
 ```bash
-# 快速测试生成（较少步数）
 cargo run --bin image_gen -- `
     --model-path models/text_to_image `
     --prompt "a red rose" `

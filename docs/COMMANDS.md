@@ -378,7 +378,22 @@ curl -X POST http://localhost:8080/multimodal `
 
 ### 多模态训练示例
 
-**基础多模态训练（CPU）**
+#### 基础多模态训练（CPU）
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式，支持图像和文本的联合训练
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径，数据格式为JSONL，每行包含图像路径和文本描述
+- `--output-dir models/mm_model`：指定模型输出目录，训练完成的模型权重和配置将保存在此目录
+- `--vision-out-dim 512`：指定视觉编码器的输出特征维度，维度越高表达能力越强，但计算量越大
+- `--fusion-strategy cross_attention`：指定多模态融合策略，cross_attention表示使用跨模态注意力机制进行特征融合
+- `--batch-size 2`：指定训练批次大小，表示每次训练使用的样本数量，批次越大训练越快但占用显存越多
+- `--learning-rate 0.0001`：指定学习率，控制模型权重更新的幅度，学习率过大会导致训练不稳定，过小会导致收敛速度慢
+- `--num-epochs 1`：指定训练轮数，表示整个训练数据集被使用的次数，1轮仅用于快速测试
+- `--backend cpu`：指定计算后端为CPU，如果需要使用GPU加速训练可改为`gpu`
+
+**完整命令：**
 
 ```bash
 cargo run --bin train -- `
@@ -393,7 +408,22 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**GPU 加速多模态训练**
+#### GPU 加速多模态训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径
+- `--output-dir models/mm_model`：指定模型输出目录
+- `--vision-out-dim 512`：视觉编码器输出特征维度为512
+- `--fusion-strategy cross_attention`：使用跨模态注意力机制进行特征融合，适合复杂的多模态理解任务
+- `--batch-size 4`：训练批次大小为4，相比CPU训练可以设置更大的批次
+- `--learning-rate 0.0001`：学习率设置为0.0001，这是深度学习训练中常用的学习率
+- `--num-epochs 50`：训练50轮，足够让模型学习到数据中的模式和特征
+- `--backend gpu`：指定计算后端为GPU，使用显卡加速训练，大幅提升训练速度
+
+**完整命令：**
 
 ```bash
 cargo run --bin train -- `
@@ -408,7 +438,19 @@ cargo run --bin train -- `
     --backend gpu
 ```
 
-**ResNet 编码器训练**
+#### ResNet 编码器训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径
+- `--output-dir models/mm_resnet`：指定使用ResNet编码器的模型输出目录
+- `--vision-out-dim 512`：视觉编码器输出特征维度为512
+- `--fusion-strategy gated`：使用门控融合策略，通过可学习的门控机制自适应控制视觉和文本特征的融合权重，计算效率高
+- `--backend cpu`：使用CPU进行训练，适合快速验证和调试
+
+**完整命令：**
 
 ```bash
 cargo run --bin train -- `
@@ -420,7 +462,19 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**Vision Transformer 编码器训练**
+#### Vision Transformer 编码器训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径
+- `--output-dir models/mm_vit`：指定使用Vision Transformer编码器的模型输出目录
+- `--vision-out-dim 768`：Vision Transformer输出特征维度为768，比ResNet的512更大，提供更强的特征表达能力
+- `--fusion-strategy cross_attention`：使用跨模态注意力机制进行特征融合，充分利用Transformer的自注意力优势
+- `--backend gpu`：使用GPU进行训练，ViT模型计算量较大，需要GPU加速
+
+**完整命令：**
 
 ```bash
 cargo run --bin train -- `
@@ -434,7 +488,17 @@ cargo run --bin train -- `
 
 ### 多模态推理示例
 
-**基础多模态推理**
+#### 基础多模态推理
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定训练好的模型目录路径，包含模型权重和配置文件
+- `--multimodal`：启用多模态推理模式，处理图像和文本的联合输入
+- `--image-path data/text_to_images/cat.png`：指定输入图像的路径，支持PNG、JPG等常见图像格式
+- `--prompt "描述这张图片"`：指定输入的文本提示词，用于指导模型理解或描述图像内容
+
+**完整命令：**
 
 ```bash
 cargo run --bin infer -- `
@@ -444,7 +508,21 @@ cargo run --bin infer -- `
     --prompt "描述这张图片"
 ```
 
-**GPU 加速多模态推理**
+#### GPU 加速多模态推理
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定模型目录路径
+- `--use-best`：使用模型目录中的最佳检查点（best checkpoint）进行推理，通常是验证集上表现最好的模型
+- `--multimodal`：启用多模态推理模式
+- `--image-path data/text_to_images/cat.png`：指定输入图像路径
+- `--prompt "描述这张图片"`：文本提示词
+- `--num-tokens 100`：指定最大生成token数量，控制输出文本的长度，100个token约等于75个中文汉字
+- `--temperature 0.7`：指定采样温度参数，控制输出的随机性，值越低输出越确定性，0.7是生成质量和多样性的平衡点
+- `--backend gpu`：使用GPU进行推理加速，大幅提升推理速度
+
+**完整命令：**
 
 ```bash
 cargo run --bin infer -- `
@@ -458,7 +536,22 @@ cargo run --bin infer -- `
     --backend gpu
 ```
 
-**详细参数多模态推理**
+#### 详细参数多模态推理
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定模型目录路径
+- `--multimodal`：启用多模态推理模式
+- `--image-path data/text_to_images/dog.png`：指定输入图像路径，这里使用狗的图片作为示例
+- `--prompt "详细描述这张图片，包括颜色、动作和场景"`：详细的文本提示词，引导模型生成更丰富的描述
+- `--num-tokens 200`：最大生成200个token，允许模型输出更长的详细描述
+- `--temperature 0.8`：较高的温度参数，增加输出的创造性和多样性，适合需要丰富描述的场景
+- `--top-p 0.9`：核采样参数，0.9表示从累积概率达到0.9的token中进行采样，平衡质量和多样性
+- `--top-k 50`：限制每次从概率最高的50个token中进行采样，防止低概率token被选中
+- `--backend cpu`：使用CPU进行推理，适合在没有GPU的环境下使用
+
+**完整命令：**
 
 ```bash
 cargo run --bin infer -- `
@@ -473,7 +566,19 @@ cargo run --bin infer -- `
     --backend cpu
 ```
 
-**交互式多模态对话**
+#### 交互式多模态对话
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定模型目录路径
+- `--use-best`：使用最佳检查点进行推理
+- `--multimodal`：启用多模态推理模式
+- `--image-path data/text_to_images/cat.png`：指定输入图像路径
+- `--chat`：启用聊天模式，允许进行多轮对话交互
+- `--interactive`：启用交互式模式，用户可以在终端中连续输入多个问题或指令
+
+**完整命令：**
 
 ```bash
 cargo run --bin infer -- `

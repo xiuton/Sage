@@ -191,10 +191,24 @@ ImagePreprocessingConfig {
 
 ### 训练
 
-**完整的多模态训练命令：**
+#### 多模态模型训练（CPU）
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式，支持图像和文本的联合训练，用于训练能够理解和生成多模态内容的模型
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT（监督微调）训练数据文件路径，JSONL格式每行包含图像路径和文本对
+- `--output-dir models/mm_model`：指定模型输出目录，训练完成的模型权重和配置将保存在此目录
+- `--vision-out-dim 512`：指定视觉编码器的输出特征维度，维度越高视觉特征表达能力越强，但计算量越大
+- `--fusion-strategy cross_attention`：指定多模态融合策略为跨模态注意力机制，让文本和视觉特征通过注意力机制交互融合
+- `--batch-size 2`：训练批次大小，每批次处理2个样本，批次越小越节省显存但训练速度较慢
+- `--learning-rate 0.0001`：学习率设置为0.0001，标准深度学习训练学习率，控制权重更新幅度
+- `--num-epochs 1`：训练1轮，仅用于快速验证训练流程是否正常工作
+- `--backend cpu`：使用CPU进行训练，适合调试和没有GPU硬件的环境
+
+**完整命令：**
 
 ```bash
-# 多模态模型训练（CPU）
 cargo run --bin train -- `
     --multimodal `
     --sft-jsonl data/mm_test.jsonl `
@@ -207,10 +221,24 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**使用 GPU 加速训练：**
+#### 使用 GPU 加速训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径
+- `--output-dir models/mm_model`：指定模型输出目录
+- `--vision-out-dim 512`：视觉编码器输出特征维度为512
+- `--fusion-strategy cross_attention`：使用跨模态注意力机制进行特征融合，适合复杂的多模态理解任务
+- `--batch-size 4`：训练批次大小为4，GPU显存足够时可以设置更大的批次以加快训练速度
+- `--learning-rate 0.0001`：学习率设置为0.0001，标准的深度学习学习率
+- `--num-epochs 50`：训练50轮，足够让模型学习到数据中的模式和特征
+- `--backend gpu`：使用GPU进行训练，大幅加速训练过程
+
+**完整命令：**
 
 ```bash
-# 多模态模型训练（GPU）
 cargo run --bin train -- `
     --multimodal `
     --sft-jsonl data/mm_test.jsonl `
@@ -223,10 +251,21 @@ cargo run --bin train -- `
     --backend gpu
 ```
 
-**使用 ResNet 视觉编码器：**
+#### 使用 ResNet 视觉编码器
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径
+- `--output-dir models/mm_resnet`：指定使用ResNet编码器的模型输出目录
+- `--vision-out-dim 512`：视觉编码器输出特征维度为512
+- `--fusion-strategy gated`：使用门控融合策略，通过可学习的门控机制自适应控制视觉和文本特征的融合权重，计算效率高
+- `--backend cpu`：使用CPU进行训练，适合快速验证和调试
+
+**完整命令：**
 
 ```bash
-# 使用 ResNet 视觉编码器
 cargo run --bin train -- `
     --multimodal `
     --sft-jsonl data/mm_test.jsonl `
@@ -236,10 +275,21 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**使用 Vision Transformer 视觉编码器：**
+#### 使用 Vision Transformer 视觉编码器
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT训练数据文件路径
+- `--output-dir models/mm_vit`：指定使用Vision Transformer编码器的模型输出目录
+- `--vision-out-dim 768`：Vision Transformer输出特征维度为768，比ResNet的512更大，提供更强的特征表达能力
+- `--fusion-strategy cross_attention`：使用跨模态注意力机制进行特征融合，充分利用Transformer的自注意力优势处理视觉特征
+- `--backend gpu`：使用GPU进行训练，ViT模型计算量较大，需要GPU加速
+
+**完整命令：**
 
 ```bash
-# 使用 Vision Transformer 视觉编码器
 cargo run --bin train -- `
     --multimodal `
     --sft-jsonl data/mm_test.jsonl `
@@ -277,10 +327,19 @@ cargo run --bin train -- `
 
 ### 推理
 
-**完整的多模态推理命令：**
+#### 多模态模型推理（CPU）
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定训练好的模型目录路径，包含模型权重和配置文件
+- `--multimodal`：启用多模态推理模式，处理图像和文本的联合输入
+- `--image-path data/text_to_images/cat.png`：指定输入图像的路径，支持PNG、JPG等常见图像格式
+- `--prompt "描述这张图片"`：指定输入的文本提示词，用于指导模型理解或描述图像内容
+
+**完整命令：**
 
 ```bash
-# 多模态模型推理（CPU）
 cargo run --bin infer -- `
     --model-dir models/mm_model `
     --multimodal `
@@ -288,10 +347,23 @@ cargo run --bin infer -- `
     --prompt "描述这张图片"
 ```
 
-**使用 GPU 加速推理：**
+#### 使用 GPU 加速推理
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定模型目录路径
+- `--use-best`：使用模型目录中的最佳检查点（best checkpoint）进行推理，通常是验证集上表现最好的模型
+- `--multimodal`：启用多模态推理模式
+- `--image-path data/text_to_images/cat.png`：指定输入图像路径
+- `--prompt "描述这张图片"`：文本提示词
+- `--num-tokens 100`：指定最大生成token数量，控制输出文本的长度，100个token约等于75个中文汉字
+- `--temperature 0.7`：指定采样温度参数，控制输出的随机性，值越低输出越确定性，0.7是生成质量和多样性的平衡点
+- `--backend gpu`：使用GPU进行推理加速，大幅提升推理速度
+
+**完整命令：**
 
 ```bash
-# 多模态模型推理（GPU）
 cargo run --bin infer -- `
     --model-dir models/mm_model `
     --use-best `
@@ -303,10 +375,24 @@ cargo run --bin infer -- `
     --backend gpu
 ```
 
-**详细推理参数：**
+#### 详细推理参数
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定模型目录路径
+- `--multimodal`：启用多模态推理模式
+- `--image-path data/text_to_images/dog.png`：指定输入图像路径，这里使用狗的图片作为示例
+- `--prompt "详细描述这张图片，包括颜色、动作和场景"`：详细的文本提示词，引导模型生成更丰富的描述
+- `--num-tokens 200`：最大生成200个token，允许模型输出更长的详细描述
+- `--temperature 0.8`：较高的温度参数，增加输出的创造性和多样性，适合需要丰富描述的场景
+- `--top-p 0.9`：核采样参数，0.9表示从累积概率达到0.9的token中进行采样，平衡质量和多样性
+- `--top-k 50`：限制每次从概率最高的50个token中进行采样，防止低概率token被选中
+- `--backend cpu`：使用CPU进行推理，适合在没有GPU的环境下使用
+
+**完整命令：**
 
 ```bash
-# 详细配置的多模态推理
 cargo run --bin infer -- `
     --model-dir models/mm_model `
     --multimodal `
@@ -319,7 +405,20 @@ cargo run --bin infer -- `
     --backend cpu
 ```
 
-**批量推理示例：**
+#### 批量推理示例
+
+**参数详解：**
+
+- `for image in data/text_to_images/*.png; do`：遍历data/text_to_images目录下所有的PNG图像文件
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定模型目录路径
+- `--multimodal`：启用多模态推理模式
+- `--image-path "$image"`：每次循环中使用当前遍历到的图像文件路径，$image是Shell变量引用
+- `--prompt "描述这张图片"`：文本提示词
+- `--num-tokens 150`：最大生成150个token，控制每张图片描述的长度
+- `done`：for循环的结束标记
+
+**完整命令：**
 
 ```bash
 # 批量处理多张图片

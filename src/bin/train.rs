@@ -926,199 +926,208 @@ fn main() {
             if args.backend == "gpu" {
                 println!("尝试使用GPU后端进行文生图训练...");
                 
-                // 设置WGPU环境变量
-                unsafe {
-                    std::env::set_var("WGPU_POWER_PREFERENCE", "HighPerformance");
-                    std::env::set_var("WGPU_BACKEND", "vulkan"); // 尝试使用Vulkan后端
-                }
+                // 尝试不同的WGPU后端
+                let backends = ["vulkan", "dx12", "metal", "opengl"];
                 
-                // 尝试使用GPU后端，如果失败则回退到CPU
-                let gpu_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    use burn_wgpu::WgpuDevice;
+                for backend in &backends {
+                    println!("尝试使用{}后端...", backend);
                     
-                    type TrainBackend = Autodiff<Wgpu>;
-
-                    println!("初始化GPU设备...");
-                    let device = WgpuDevice::default();
-                    println!("GPU设备信息: {:?}", device);
-
-                    // 使用更小的配置来测试
-                    let test_batch_size = 1; // 进一步减小批次大小
-                    let test_epochs = 1; // 只训练1个 epoch
+                    // 设置WGPU环境变量
+                    unsafe {
+                        std::env::set_var("WGPU_POWER_PREFERENCE", "HighPerformance");
+                        std::env::set_var("WGPU_BACKEND", backend);
+                    }
                     
-                    // 使用更小的模型配置
-                    let diffusion_config = DiffusionConfig {
-                        image_size: 32, // 减小图像大小
-                        in_channels: 3,
-                        hidden_channels: 32, // 进一步减小通道数
-                        num_timesteps: 100, // 减小时间步数
-                        latent_dim: 64, // 减小 latent 维度
-                        beta_start,
-                        beta_end,
-                    };
+                    // 尝试使用GPU后端
+                    let gpu_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        use burn_wgpu::WgpuDevice;
+                        
+                        type TrainBackend = Autodiff<Wgpu>;
 
-                    println!("创建GPU模型...");
-                    let mut model = DiffusionModel::<TrainBackend>::new(&diffusion_config, &device);
-                    let mut optim = AdamConfig::new().init();
+                        println!("初始化GPU设备...");
+                        let device = WgpuDevice::default();
+                        println!("GPU设备信息: {:?}", device);
 
-                    println!("开始GPU训练... (批次大小: {}, 训练轮数: {})", test_batch_size, test_epochs);
+                        // 使用更小的模型配置来减少显存使用
+                        let diffusion_config = DiffusionConfig {
+                            image_size: 32, // 减小图像大小
+                            in_channels: 3,
+                            hidden_channels: 64, // 减小通道数
+                            num_timesteps: 500, // 减小时间步数
+                            latent_dim: 64, // 减小latent维度
+                            beta_start,
+                            beta_end,
+                        };
 
-                    for epoch in 0..test_epochs {
-                        let epoch_start = Instant::now();
-                        let mut total_loss = 0.0f32;
-                        let num_batches = (lines.len() + test_batch_size - 1) / test_batch_size;
+                        println!("创建GPU模型...");
+                        let mut model = DiffusionModel::<TrainBackend>::new(&diffusion_config, &device);
+                        let mut optim = AdamConfig::new().init();
 
-                        println!("Epoch {}: 共 {} 个批次", epoch + 1, num_batches);
+                        let actual_batch_size = 1; // 使用更小的批次大小
+                        let actual_epochs = args.num_epochs;
 
-                        for batch_idx in 0..num_batches {
-                            println!("处理批次 {}/{}", batch_idx + 1, num_batches);
-                            
-                            let start_idx = batch_idx * test_batch_size;
-                            let end_idx = (start_idx + test_batch_size).min(lines.len());
-                            let current_batch_size = end_idx - start_idx;
+                        println!("开始GPU训练... (批次大小: {}, 训练轮数: {})", actual_batch_size, actual_epochs);
 
-                            println!("  批次大小: {}", current_batch_size);
+                        for epoch in 0..actual_epochs {
+                            let epoch_start = Instant::now();
+                            let mut total_loss = 0.0f32;
+                            let num_batches = (lines.len() + actual_batch_size - 1) / actual_batch_size;
 
-                            // 创建随机图像数据
-                            let total_elements = current_batch_size * 3 * diffusion_config.image_size * diffusion_config.image_size;
-                            println!("  生成随机数据: {} 元素", total_elements);
-                            let data: Vec<f32> = (0..total_elements)
-                                .map(|_| rand::random::<f32>() * 2.0 - 1.0)
-                                .collect();
-                            
-                            println!("  创建GPU张量...");
-                            let batch_tensor: Tensor<TrainBackend, 4> = Tensor::from_data(
-                                TensorData::new(data, [current_batch_size, 3, diffusion_config.image_size, diffusion_config.image_size]),
-                                &device,
-                            );
+                            println!("Epoch {}: 共 {} 个批次", epoch + 1, num_batches);
 
-                            // VAE前向传播
-                            println!("  VAE前向传播...");
-                            let (recon, mu, log_var) = model.vae.forward(batch_tensor.clone());
+                            for batch_idx in 0..num_batches {
+                                println!("处理批次 {}/{}", batch_idx + 1, num_batches);
+                                
+                                let start_idx = batch_idx * actual_batch_size;
+                                let end_idx = (start_idx + actual_batch_size).min(lines.len());
+                                let current_batch_size = end_idx - start_idx;
 
-                            // 计算VAE损失
-                            println!("  计算VAE损失...");
-                            let diff = recon.clone().sub(batch_tensor);
-                            let mse_loss = diff.clone().mul(diff).mean();
-                            let kl_loss = mu.clone().mul(mu.clone()).add(log_var.clone().exp()).sub(log_var.clone().add_scalar(1.0)).mul_scalar(0.5).mean();
-                            let vae_loss = mse_loss + kl_loss.mul_scalar(0.01);
+                                println!("  批次大小: {}", current_batch_size);
 
-                            // 获取隐空间表示 (z) - 重参数采样
-                            println!("  重参数采样...");
-                            let std = log_var.clone().mul_scalar(0.5).exp();
-                            let z: Tensor<TrainBackend, 4> = Tensor::zeros(mu.dims(), &device);
-                            let z = mu.clone().add(std.mul(z));
+                                // 创建随机图像数据
+                                let total_elements = current_batch_size * 3 * diffusion_config.image_size * diffusion_config.image_size;
+                                println!("  生成随机数据: {} 元素", total_elements);
+                                let data: Vec<f32> = (0..total_elements)
+                                    .map(|_| rand::random::<f32>() * 2.0 - 1.0)
+                                    .collect();
+                                
+                                println!("  创建GPU张量...");
+                                let batch_tensor: Tensor<TrainBackend, 4> = Tensor::from_data(
+                                    TensorData::new(data, [current_batch_size, 3, diffusion_config.image_size, diffusion_config.image_size]),
+                                    &device,
+                                );
 
-                            // 随机采样时间步进行扩散模型训练
-                            let timestep = rand::random::<usize>() % num_timesteps;
-                            let alpha_bar_t = model.get_alpha_bar(timestep);
+                                // VAE前向传播
+                                println!("  VAE前向传播...");
+                                let (recon, mu, log_var) = model.vae.forward(batch_tensor.clone());
 
-                            // 生成噪声 - 在隐空间上生成噪声
-                            println!("  生成噪声...");
-                            let noise_dims = z.dims();
-                            let noise_elements: Vec<f32> = (0..noise_dims.iter().product::<usize>())
-                                .map(|_| rand::random::<f32>() * 2.0 - 1.0)
-                                .collect();
-                            let noise: Tensor<TrainBackend, 4> = Tensor::from_data(
-                                TensorData::new(noise_elements, noise_dims),
-                                &device,
-                            );
+                                // 计算VAE损失
+                                println!("  计算VAE损失...");
+                                let diff = recon.clone().sub(batch_tensor);
+                                let mse_loss = diff.clone().mul(diff).mean();
+                                let kl_loss = mu.clone().mul(mu.clone()).add(log_var.clone().exp()).sub(log_var.clone().add_scalar(1.0)).mul_scalar(0.5).mean();
+                                let vae_loss = mse_loss + kl_loss.mul_scalar(0.01);
 
-                            // 加噪 - 在隐空间上加噪
-                            println!("  加噪...");
-                            let alpha_bar_t_f32 = alpha_bar_t as f32;
-                            let noisy_latent = z.clone().mul_scalar(alpha_bar_t_f32.sqrt())
-                                .add(noise.clone().mul_scalar((1.0 - alpha_bar_t_f32).sqrt()));
+                                // 获取隐空间表示 (z) - 重参数采样
+                                println!("  重参数采样...");
+                                let std = log_var.clone().mul_scalar(0.5).exp();
+                                let z: Tensor<TrainBackend, 4> = Tensor::zeros(mu.dims(), &device);
+                                let z = mu.clone().add(std.mul(z));
 
-                            // UNet噪声预测
-                            println!("  UNet预测...");
-                            let time_tensor: Tensor<TrainBackend, 2> = Tensor::full(
-                                [current_batch_size, diffusion_config.latent_dim],
-                                timestep as i32,
-                                &device,
-                            );
-                            let noise_pred = model.unet.forward(noisy_latent, time_tensor);
+                                // 随机采样时间步进行扩散模型训练
+                                let timestep = rand::random::<usize>() % diffusion_config.num_timesteps;
+                                let alpha_bar_t = model.get_alpha_bar(timestep);
 
-                            // 噪声预测损失
-                            println!("  计算噪声损失...");
-                            let noise_diff = noise_pred.sub(noise);
-                            let noise_loss = noise_diff.clone().mul(noise_diff).mean();
-                            let total_batch_loss = vae_loss + noise_loss;
+                                // 生成噪声 - 在隐空间上生成噪声
+                                println!("  生成噪声...");
+                                let noise_dims = z.dims();
+                                let noise_elements: Vec<f32> = (0..noise_dims.iter().product::<usize>())
+                                    .map(|_| rand::random::<f32>() * 2.0 - 1.0)
+                                    .collect();
+                                let noise: Tensor<TrainBackend, 4> = Tensor::from_data(
+                                    TensorData::new(noise_elements, noise_dims),
+                                    &device,
+                                );
 
-                            // 反向传播
-                            println!("  反向传播...");
-                            let grads = total_batch_loss.backward();
-                            let grads = GradientsParams::from_grads(grads, &model);
+                                // 加噪 - 在隐空间上加噪
+                                println!("  加噪...");
+                                let alpha_bar_t_f32 = alpha_bar_t as f32;
+                                let noisy_latent = z.clone().mul_scalar(alpha_bar_t_f32.sqrt())
+                                    .add(noise.clone().mul_scalar((1.0 - alpha_bar_t_f32).sqrt()));
 
-                            // 更新权重
-                            println!("  更新权重...");
-                            model = optim.step(learning_rate as f64, model, grads);
+                                // UNet噪声预测
+                                println!("  UNet预测...");
+                                let time_tensor: Tensor<TrainBackend, 2> = Tensor::full(
+                                    [current_batch_size, diffusion_config.latent_dim],
+                                    timestep as i32,
+                                    &device,
+                                );
+                                let noise_pred = model.unet.forward(noisy_latent, time_tensor);
 
-                            // 获取损失值
-                            println!("  计算损失值...");
-                            let loss_val = total_batch_loss.to_data();
-                            let loss_vec: Vec<f32> = loss_val.to_vec().unwrap_or_default();
-                            if let Some(&l) = loss_vec.first() {
-                                total_loss += l;
-                                println!("  批次损失: {:.6}", l);
+                                // 噪声预测损失
+                                println!("  计算噪声损失...");
+                                let noise_diff = noise_pred.sub(noise);
+                                let noise_loss = noise_diff.clone().mul(noise_diff).mean();
+                                let total_batch_loss = vae_loss + noise_loss;
+
+                                // 反向传播
+                                println!("  反向传播...");
+                                let grads = total_batch_loss.backward();
+                                let grads = GradientsParams::from_grads(grads, &model);
+
+                                // 更新权重
+                                println!("  更新权重...");
+                                model = optim.step(learning_rate as f64, model, grads);
+
+                                // 获取损失值
+                                println!("  计算损失值...");
+                                let loss_val = total_batch_loss.to_data();
+                                let loss_vec: Vec<f32> = loss_val.to_vec().unwrap_or_default();
+                                if let Some(&l) = loss_vec.first() {
+                                    total_loss += l;
+                                    println!("  批次损失: {:.6}", l);
+                                }
                             }
+
+                            let avg_loss = total_loss / num_batches as f32;
+                            let epoch_time = epoch_start.elapsed();
+
+                            println!("\nEpoch {}/{} - 平均损失: {:.6} - 时间: {:.2}s\n",
+                                epoch + 1, actual_epochs, avg_loss, epoch_time.as_secs_f32());
                         }
 
-                        let avg_loss = total_loss / num_batches as f32;
-                        let epoch_time = epoch_start.elapsed();
+                        // 保存模型
+                        println!("训练完成，保存模型到: {}", output_dir);
+                        fs::create_dir_all(output_dir).expect("Failed to create output directory");
 
-                        println!("\nEpoch {}/{} - 平均损失: {:.6} - 时间: {:.2}s\n",
-                            epoch + 1, test_epochs, avg_loss, epoch_time.as_secs_f32());
-                    }
+                        // 保存配置文件
+                        use serde::Serialize;
+                        #[derive(Serialize)]
+                        struct ConfigJson {
+                            image_size: usize,
+                            in_channels: usize,
+                            latent_dim: usize,
+                            hidden_channels: usize,
+                            num_timesteps: usize,
+                            beta_start: f64,
+                            beta_end: f64,
+                        }
 
-                    // 保存模型
-                    println!("训练完成，保存模型到: {}", output_dir);
-                    fs::create_dir_all(output_dir).expect("Failed to create output directory");
+                        let config_json = ConfigJson {
+                            image_size: diffusion_config.image_size,
+                            in_channels: diffusion_config.in_channels,
+                            latent_dim: diffusion_config.latent_dim,
+                            hidden_channels: diffusion_config.hidden_channels,
+                            num_timesteps: diffusion_config.num_timesteps,
+                            beta_start: diffusion_config.beta_start as f64,
+                            beta_end: diffusion_config.beta_end as f64,
+                        };
 
-                    // 保存配置文件
-                    use serde::Serialize;
-                    #[derive(Serialize)]
-                    struct ConfigJson {
-                        image_size: usize,
-                        in_channels: usize,
-                        latent_dim: usize,
-                        hidden_channels: usize,
-                        num_timesteps: usize,
-                        beta_start: f64,
-                        beta_end: f64,
-                    }
+                        let config_path = format!("{}/config.json", output_dir);
+                        let config_str = serde_json::to_string_pretty(&config_json).expect("Failed to serialize config");
+                        fs::write(&config_path, config_str).expect("Failed to save config");
+                        println!("配置文件已保存到: {}", config_path);
 
-                    let config_json = ConfigJson {
-                        image_size: diffusion_config.image_size,
-                        in_channels: diffusion_config.in_channels,
-                        latent_dim: diffusion_config.latent_dim,
-                        hidden_channels: diffusion_config.hidden_channels,
-                        num_timesteps: diffusion_config.num_timesteps,
-                        beta_start: diffusion_config.beta_start as f64,
-                        beta_end: diffusion_config.beta_end as f64,
-                    };
+                        let model_path = format!("{}/diffusion_model.mpk", output_dir);
+                        model.save_file(&model_path, &CompactRecorder::new())
+                            .expect("Failed to save model");
 
-                    let config_path = format!("{}/config.json", output_dir);
-                    let config_str = serde_json::to_string_pretty(&config_json).expect("Failed to serialize config");
-                    fs::write(&config_path, config_str).expect("Failed to save config");
-                    println!("配置文件已保存到: {}", config_path);
+                        println!("GPU模型已保存到: {}", model_path);
+                        Ok::<(), String>(())
+                    }));
 
-                    let model_path = format!("{}/diffusion_model.mpk", output_dir);
-                    model.save_file(&model_path, &CompactRecorder::new())
-                        .expect("Failed to save model");
-
-                    println!("GPU模型已保存到: {}", model_path);
-                    Ok::<(), String>(())
-                }));
-
-                match gpu_result {
-                    Ok(_) => return,
-                    Err(_) => {
-                        println!("GPU后端初始化失败，自动回退到CPU后端...");
-                        // 继续执行CPU后端的代码
+                    match gpu_result {
+                        Ok(_) => {
+                            println!("{}后端训练成功！", backend);
+                            return;
+                        }
+                        Err(_) => {
+                            println!("{}后端初始化失败，尝试下一个后端...", backend);
+                        }
                     }
                 }
-            }
+
+                println!("所有GPU后端初始化失败，自动回退到CPU后端...");
 
             // CPU后端训练代码
             println!("使用CPU后端进行文生图训练...");
@@ -1128,9 +1137,9 @@ fn main() {
             let device: <TrainBackend as Backend>::Device = Default::default();
             println!("设备信息: {:?}", device);
 
-            // 使用更小的配置来测试
-            let test_batch_size = 2; // 减小批次大小
-            let test_epochs = 1; // 只训练1个 epoch
+            // 使用命令行参数的配置
+            let actual_batch_size = args.batch_size();
+            let actual_epochs = args.num_epochs;
             
             let diffusion_config = DiffusionConfig {
                 image_size,
@@ -1146,20 +1155,20 @@ fn main() {
             let mut model = DiffusionModel::<TrainBackend>::new(&diffusion_config, &device);
             let mut optim = AdamConfig::new().init();
 
-            println!("开始训练... (批次大小: {}, 训练轮数: {})", test_batch_size, test_epochs);
+            println!("开始训练... (批次大小: {}, 训练轮数: {})", actual_batch_size, actual_epochs);
 
-            for epoch in 0..test_epochs {
+            for epoch in 0..actual_epochs {
                 let epoch_start = Instant::now();
                 let mut total_loss = 0.0f32;
-                let num_batches = (lines.len() + test_batch_size - 1) / test_batch_size;
+                let num_batches = (lines.len() + actual_batch_size - 1) / actual_batch_size;
 
                 println!("Epoch {}: 共 {} 个批次", epoch + 1, num_batches);
 
                 for batch_idx in 0..num_batches {
                     println!("处理批次 {}/{}", batch_idx + 1, num_batches);
                     
-                    let start_idx = batch_idx * test_batch_size;
-                    let end_idx = (start_idx + test_batch_size).min(lines.len());
+                    let start_idx = batch_idx * actual_batch_size;
+                    let end_idx = (start_idx + actual_batch_size).min(lines.len());
                     let current_batch_size = end_idx - start_idx;
 
                     println!("  批次大小: {}", current_batch_size);
@@ -1253,7 +1262,7 @@ fn main() {
                 let epoch_time = epoch_start.elapsed();
 
                 println!("\nEpoch {}/{} - 平均损失: {:.6} - 时间: {:.2}s\n",
-                    epoch + 1, test_epochs, avg_loss, epoch_time.as_secs_f32());
+                    epoch + 1, actual_epochs, avg_loss, epoch_time.as_secs_f32());
             }
 
             // 保存模型
@@ -1295,6 +1304,7 @@ fn main() {
             println!("模型已保存到: {}", model_path);
             return;
         }
+    }
 
     // For ultra_quick mode, automatically limit data to 100 records for very fast testing
     if args.ultra_quick && args.sft_max_records == 0 {

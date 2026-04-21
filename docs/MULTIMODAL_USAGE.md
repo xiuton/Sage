@@ -45,10 +45,24 @@ cargo test test_vision_encoders -- --nocapture
 
 ### 3. 完整的多模态训练和推理流程
 
-**Step 1: 多模态模型训练**
+#### Step 1: 多模态模型训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--multimodal`：启用多模态训练模式，支持图像和文本的联合训练，用于训练能够理解和生成多模态内容的模型
+- `--sft-jsonl data/mm_test.jsonl`：指定SFT（监督微调）训练数据文件路径，JSONL格式每行包含图像路径和文本对
+- `--output-dir models/mm_model`：指定模型输出目录，训练完成的模型权重和配置将保存在此目录
+- `--vision-out-dim 512`：指定视觉编码器的输出特征维度，维度越高视觉特征表达能力越强
+- `--fusion-strategy cross_attention`：指定多模态融合策略为跨模态注意力机制，让文本和视觉特征通过注意力交互融合
+- `--batch-size 2`：训练批次大小，每批次处理2个样本，批次越小越节省显存但训练速度较慢
+- `--learning-rate 0.0001`：学习率设置为0.0001，标准深度学习训练学习率，控制权重更新幅度
+- `--num-epochs 1`：训练1轮，仅用于快速验证训练流程是否正常工作
+- `--backend cpu`：使用CPU进行训练，适合调试和没有GPU硬件的环境
+
+**完整命令：**
 
 ```bash
-# 基础多模态训练
 cargo run --bin train -- `
     --multimodal `
     --sft-jsonl data/mm_test.jsonl `
@@ -61,10 +75,19 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**Step 2: 多模态模型推理**
+#### Step 2: 多模态模型推理
+
+**参数详解：**
+
+- `--bin infer`：指定运行推理二进制文件
+- `--model-dir models/mm_model`：指定训练好的模型目录路径，包含模型权重和配置文件
+- `--multimodal`：启用多模态推理模式，处理图像和文本的联合输入
+- `--image-path data/text_to_images/cat.png`：指定输入图像的路径，支持PNG、JPG等常见图像格式
+- `--prompt "描述这张图片"`：指定输入的文本提示词，用于指导模型理解或描述图像内容
+
+**完整命令：**
 
 ```bash
-# 多模态模型推理
 cargo run --bin infer -- `
     --model-dir models/mm_model `
     --multimodal `
@@ -72,10 +95,23 @@ cargo run --bin infer -- `
     --prompt "描述这张图片"
 ```
 
-**Step 3: 文生图模型训练**
+#### Step 3: 文生图模型训练
+
+**参数详解：**
+
+- `--bin train`：指定运行训练二进制文件
+- `--text-to-image`：启用文生图训练模式，用于训练文本到图像的扩散模型
+- `--image-text-data data/text_to_image_pairs.jsonl`：指定图文训练数据文件路径，格式为JSONL，每行包含图像路径和文本描述
+- `--config-path configs/config_vae_diffusion.json`：指定模型配置文件路径，包含VAE和Diffusion模型的超参数配置
+- `--output-dir models/text_to_image`：指定模型输出目录，训练完成后会生成config.json和diffusion_model.mpk文件
+- `--batch-size 2`：训练批次大小，表示每次迭代使用的样本数量，批次越小越节省显存但训练速度较慢
+- `--learning-rate 0.001`：学习率设置为0.001，较大的学习率，适合快速收敛测试
+- `--num-epochs 1`：训练1轮，仅用于快速验证训练流程是否正常
+- `--backend cpu`：使用CPU进行训练，适合调试和没有GPU硬件的环境
+
+**完整命令：**
 
 ```bash
-# 文生图模型训练
 cargo run --bin train -- `
     --text-to-image `
     --image-text-data data/text_to_image_pairs.jsonl `
@@ -87,16 +123,59 @@ cargo run --bin train -- `
     --backend cpu
 ```
 
-**Step 4: 文生图模型推理**
+#### Step 4: 文生图模型推理
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--backend cpu`：使用CPU进行图像生成，适合在没有GPU硬件的环境下使用
+- `--model-path models/text_to_image`：指定训练好的模型目录路径，目录中应包含config.json和diffusion_model.mpk文件
+- `--prompt "一只可爱的小猫"`：文本提示词，描述想要生成的图像内容，支持中文和英文
+- `--steps 50`：Diffusion采样步数，步数越多生成质量越高但速度越慢，50步是质量和速度的平衡点
+
+**完整命令：**
 
 ```bash
-# 文生图模型推理
 cargo run --bin image_gen -- `
     --backend cpu `
     --model-path models/text_to_image `
     --prompt "一只可爱的小猫" `
     --steps 50
 ```
+
+#### Step 5: 使用完整训练模型生成高质量图像
+
+**参数详解：**
+
+- `--bin image_gen`：指定运行图像生成二进制文件
+- `--backend gpu`：使用GPU进行图像生成，大幅提升生成速度和质量
+- `--model-path models/text_to_image_full`：指定完整训练的模型目录路径，包含充分训练的模型权重
+- `--prompt "一只可爱的小猫，毛茸茸的，蓝色眼睛，在草地上玩耍"`：详细的文本提示词，引导模型生成更具体的图像
+- `--steps 100`：使用100步采样，获得更高质量的生成结果
+- `--output ./cat_generated.png`：指定输出图像路径
+
+**完整命令：**
+
+```bash
+cargo run --bin image_gen -- `
+    --backend gpu `
+    --model-path models/text_to_image_full `
+    --prompt "一只可爱的小猫，毛茸茸的，蓝色眼睛，在草地上玩耍" `
+    --steps 100 `
+    --output ./cat_generated.png
+```
+
+**解决马赛克图问题的完整流程：**
+
+1. **数据准备**：确保 `data/text_to_image_pairs.jsonl` 中有足够的高质量图文对（建议1000+）
+2. **完整训练**：使用 GPU 进行 100 轮训练，学习率 0.0001
+3. **模型加载**：使用 `models/text_to_image_full` 目录中的完整训练模型
+4. **高质量生成**：使用 100 步采样，详细的提示词，GPU 加速
+
+**注意事项：**
+- 快速测试训练（1轮）只能验证流程，生成的图像会是马赛克图
+- 完整训练（100轮）才能生成有意义的高质量图像
+- 训练时间取决于硬件，GPU 通常需要 6-24 小时完成 100 轮训练
 
 ### 2. 最小化多模态使用示例
 
