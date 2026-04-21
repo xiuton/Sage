@@ -1,0 +1,9 @@
+{
+  "image_size": 64,
+  "in_channels": 3,
+  "latent_dim": 128,
+  "hidden_channels": 128,
+  "num_timesteps": 1000,
+  "beta_start": 0.00009999999747378752,
+  "beta_end": 0.019999999552965164
+}
