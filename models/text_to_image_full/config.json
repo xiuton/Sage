@@ -1,8 +1,8 @@
 {
-  "image_size": 32,
+  "image_size": 48,
   "in_channels": 3,
-  "latent_dim": 64,
-  "hidden_channels": 64,
+  "latent_dim": 96,
+  "hidden_channels": 96,
   "num_timesteps": 500,
   "beta_start": 0.00009999999747378752,
   "beta_end": 0.019999999552965164

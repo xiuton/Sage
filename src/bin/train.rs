@@ -921,57 +921,70 @@ fn main() {
         let data_json = fs::read_to_string(image_text_data).expect("Failed to read data file");
         let lines: Vec<&str> = data_json.lines().filter(|l| !l.trim().is_empty()).collect();
         println!("共加载 {} 条训练数据", lines.len());
+        
+        // 解析训练数据
+        #[derive(serde::Deserialize)]
+        struct TrainingRecord {
+            image_path: String,
+            prompt: String,
+        }
+        
+        let training_records: Vec<TrainingRecord> = lines.iter()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        println!("共解析 {} 条有效训练记录", training_records.len());
 
-            // 根据命令行参数选择后端
-            if args.backend == "gpu" {
-                println!("尝试使用GPU后端进行文生图训练...");
+        // 根据命令行参数选择后端
+        if args.backend == "gpu" {
+            println!("尝试使用GPU后端进行文生图训练...");
+            
+            // 尝试不同的WGPU后端
+            let backends = ["vulkan", "dx12", "metal", "opengl"];
+            
+            for backend in &backends {
+                println!("尝试使用{}后端...", backend);
                 
-                // 尝试不同的WGPU后端
-                let backends = ["vulkan", "dx12", "metal", "opengl"];
+                // 设置WGPU环境变量
+                unsafe {
+                    std::env::set_var("WGPU_POWER_PREFERENCE", "HighPerformance");
+                    std::env::set_var("WGPU_BACKEND", backend);
+                }
                 
-                for backend in &backends {
-                    println!("尝试使用{}后端...", backend);
+                // 尝试使用GPU后端
+                let gpu_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    use burn_wgpu::WgpuDevice;
+                    use sage::core::image_generation::load_image_as_tensor;
                     
-                    // 设置WGPU环境变量
-                    unsafe {
-                        std::env::set_var("WGPU_POWER_PREFERENCE", "HighPerformance");
-                        std::env::set_var("WGPU_BACKEND", backend);
-                    }
-                    
-                    // 尝试使用GPU后端
-                    let gpu_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        use burn_wgpu::WgpuDevice;
-                        
-                        type TrainBackend = Autodiff<Wgpu>;
+                    type TrainBackend = Autodiff<Wgpu>;
 
-                        println!("初始化GPU设备...");
-                        let device = WgpuDevice::default();
-                        println!("GPU设备信息: {:?}", device);
+                    println!("初始化GPU设备...");
+                    let device = WgpuDevice::default();
+                    println!("GPU设备信息: {:?}", device);
 
-                        // 使用更小的模型配置来减少显存使用
-                        let diffusion_config = DiffusionConfig {
-                            image_size: 32, // 减小图像大小
-                            in_channels: 3,
-                            hidden_channels: 64, // 减小通道数
-                            num_timesteps: 500, // 减小时间步数
-                            latent_dim: 64, // 减小latent维度
-                            beta_start,
-                            beta_end,
-                        };
+                    // 使用较小的模型配置来减少显存使用，但比之前大一些以提升质量
+                    let diffusion_config = DiffusionConfig {
+                        image_size: 48, // 适中的图像大小
+                        in_channels: 3,
+                        hidden_channels: 96, // 适中的通道数
+                        num_timesteps: 500, // 适中的时间步数
+                        latent_dim: 96, // 适中的latent维度
+                        beta_start,
+                        beta_end,
+                    };
 
-                        println!("创建GPU模型...");
-                        let mut model = DiffusionModel::<TrainBackend>::new(&diffusion_config, &device);
-                        let mut optim = AdamConfig::new().init();
+                    println!("创建GPU模型...");
+                    let mut model = DiffusionModel::<TrainBackend>::new(&diffusion_config, &device);
+                    let mut optim = AdamConfig::new().init();
 
-                        let actual_batch_size = 1; // 使用更小的批次大小
-                        let actual_epochs = args.num_epochs;
+                    let actual_batch_size = 2; // 使用较小的批次大小避免显存溢出
+                    let actual_epochs = args.num_epochs;
 
                         println!("开始GPU训练... (批次大小: {}, 训练轮数: {})", actual_batch_size, actual_epochs);
 
                         for epoch in 0..actual_epochs {
                             let epoch_start = Instant::now();
                             let mut total_loss = 0.0f32;
-                            let num_batches = (lines.len() + actual_batch_size - 1) / actual_batch_size;
+                            let num_batches = (training_records.len() + actual_batch_size - 1) / actual_batch_size;
 
                             println!("Epoch {}: 共 {} 个批次", epoch + 1, num_batches);
 
@@ -979,21 +992,36 @@ fn main() {
                                 println!("处理批次 {}/{}", batch_idx + 1, num_batches);
                                 
                                 let start_idx = batch_idx * actual_batch_size;
-                                let end_idx = (start_idx + actual_batch_size).min(lines.len());
+                                let end_idx = (start_idx + actual_batch_size).min(training_records.len());
                                 let current_batch_size = end_idx - start_idx;
 
                                 println!("  批次大小: {}", current_batch_size);
 
-                                // 创建随机图像数据
-                                let total_elements = current_batch_size * 3 * diffusion_config.image_size * diffusion_config.image_size;
-                                println!("  生成随机数据: {} 元素", total_elements);
-                                let data: Vec<f32> = (0..total_elements)
-                                    .map(|_| rand::random::<f32>() * 2.0 - 1.0)
-                                    .collect();
+                                // 加载真实图像数据
+                                let mut batch_data: Vec<f32> = Vec::new();
+                                for i in 0..current_batch_size {
+                                    let record_idx = (start_idx + i) % training_records.len();
+                                    let record = &training_records[record_idx];
+                                    println!("  加载图像: {}", record.image_path);
+                                    match load_image_as_tensor(&record.image_path, diffusion_config.image_size) {
+                                        Ok(img_data) => {
+                                            println!("  图像大小: {} 元素", img_data.len());
+                                            batch_data.extend(img_data);
+                                        }
+                                        Err(e) => {
+                                            println!("  加载图像失败: {}，使用随机数据", e);
+                                            let total_elements = 3 * diffusion_config.image_size * diffusion_config.image_size;
+                                            let random_data: Vec<f32> = (0..total_elements)
+                                                .map(|_| rand::random::<f32>() * 2.0 - 1.0)
+                                                .collect();
+                                            batch_data.extend(random_data);
+                                        }
+                                    }
+                                }
                                 
                                 println!("  创建GPU张量...");
                                 let batch_tensor: Tensor<TrainBackend, 4> = Tensor::from_data(
-                                    TensorData::new(data, [current_batch_size, 3, diffusion_config.image_size, diffusion_config.image_size]),
+                                    TensorData::new(batch_data, [current_batch_size, 3, diffusion_config.image_size, diffusion_config.image_size]),
                                     &device,
                                 );
 
@@ -1129,6 +1157,8 @@ fn main() {
 
                 println!("所有GPU后端初始化失败，自动回退到CPU后端...");
 
+            use sage::core::image_generation::load_image_as_tensor;
+            
             // CPU后端训练代码
             println!("使用CPU后端进行文生图训练...");
             type TrainBackend = Autodiff<NdArray>;
@@ -1138,7 +1168,7 @@ fn main() {
             println!("设备信息: {:?}", device);
 
             // 使用命令行参数的配置
-            let actual_batch_size = args.batch_size();
+            let actual_batch_size = batch_size;
             let actual_epochs = args.num_epochs;
             
             let diffusion_config = DiffusionConfig {
@@ -1160,7 +1190,7 @@ fn main() {
             for epoch in 0..actual_epochs {
                 let epoch_start = Instant::now();
                 let mut total_loss = 0.0f32;
-                let num_batches = (lines.len() + actual_batch_size - 1) / actual_batch_size;
+                let num_batches = (training_records.len() + actual_batch_size - 1) / actual_batch_size;
 
                 println!("Epoch {}: 共 {} 个批次", epoch + 1, num_batches);
 
@@ -1168,21 +1198,36 @@ fn main() {
                     println!("处理批次 {}/{}", batch_idx + 1, num_batches);
                     
                     let start_idx = batch_idx * actual_batch_size;
-                    let end_idx = (start_idx + actual_batch_size).min(lines.len());
+                    let end_idx = (start_idx + actual_batch_size).min(training_records.len());
                     let current_batch_size = end_idx - start_idx;
 
                     println!("  批次大小: {}", current_batch_size);
 
-                    // 创建随机图像数据
-                    let total_elements = current_batch_size * 3 * image_size * image_size;
-                    println!("  生成随机数据: {} 元素", total_elements);
-                    let data: Vec<f32> = (0..total_elements)
-                        .map(|_| rand::random::<f32>() * 2.0 - 1.0)
-                        .collect();
+                    // 加载真实图像数据
+                    let mut batch_data: Vec<f32> = Vec::new();
+                    for i in 0..current_batch_size {
+                        let record_idx = (start_idx + i) % training_records.len();
+                        let record = &training_records[record_idx];
+                        println!("  加载图像: {}", record.image_path);
+                        match load_image_as_tensor(&record.image_path, image_size) {
+                            Ok(img_data) => {
+                                println!("  图像大小: {} 元素", img_data.len());
+                                batch_data.extend(img_data);
+                            }
+                            Err(e) => {
+                                println!("  加载图像失败: {}，使用随机数据", e);
+                                let total_elements = 3 * image_size * image_size;
+                                let random_data: Vec<f32> = (0..total_elements)
+                                    .map(|_| rand::random::<f32>() * 2.0 - 1.0)
+                                    .collect();
+                                batch_data.extend(random_data);
+                            }
+                        }
+                    }
                     
                     println!("  创建张量...");
                     let batch_tensor: Tensor<TrainBackend, 4> = Tensor::from_data(
-                        TensorData::new(data, [current_batch_size, 3, image_size, image_size]),
+                        TensorData::new(batch_data, [current_batch_size, 3, image_size, image_size]),
                         &device,
                     );
 

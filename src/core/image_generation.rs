@@ -11,6 +11,33 @@ use burn::{
     tensor::backend::Backend,
 };
 use serde::{Serialize, Deserialize};
+use image::{GenericImageView, DynamicImage};
+
+pub fn load_image_as_tensor(path: &str, target_size: usize) -> Result<Vec<f32>, String> {
+    let img = image::open(path).map_err(|e| format!("Failed to open image {}: {}", path, e))?;
+    
+    let (width, height) = img.dimensions();
+    let resized = if width != target_size as u32 || height != target_size as u32 {
+        img.resize_exact(target_size as u32, target_size as u32, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    
+    let rgb = resized.to_rgb8();
+    let pixels = rgb.as_raw();
+    
+    let mut data = Vec::with_capacity(3 * target_size * target_size);
+    for pixel in pixels.chunks(3) {
+        let r = pixel[0] as f32 / 127.5 - 1.0;
+        let g = pixel[1] as f32 / 127.5 - 1.0;
+        let b = pixel[2] as f32 / 127.5 - 1.0;
+        data.push(r);
+        data.push(g);
+        data.push(b);
+    }
+    
+    Ok(data)
+}
 
 #[derive(Debug, Clone)]
 pub struct SimpleTokenizer {
