@@ -103,11 +103,11 @@ impl Dataset<TextItem> for TextDataset {
         let token_type_ids = Some(vec![0; self.seq_len]);
         
         // 获取对应的图像（优先从内存，其次路径）
-        let mut image = self.images.as_ref().and_then(|imgs| imgs.get(index).cloned().flatten());
+        let image = self.images.as_ref().and_then(|imgs| imgs.get(index).cloned().flatten());
         let image_path = self.image_paths.as_ref().and_then(|paths| paths.get(index).cloned().flatten());
 
         if image.is_none() {
-            if let Some(ref path) = image_path {
+            if let Some(_path) = image_path.as_ref() {
                 // 如果有路径但没内存数据，尝试加载并处理（这里仅作占位，真实处理在 batcher 或外部完成更高效）
             }
         }

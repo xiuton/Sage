@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-api = ["axum", "hyper", "tokio", "uuid", "tower", "async-stream"]
+api = ["axum", "hyper", "tokio", "uuid", "tower", "async-stream", "tokio-stream", "tower-http", "futures-util"]
 tools = []
 web = ["reqwest"]
 full = ["api", "tools", "web"]
@@ -29,12 +29,15 @@ num_cpus = "1.16"
 image = "0.24"
 rustyline = "10.0"
 reqwest = { version = "0.11", features = ["json", "blocking"], optional = true }
-axum = { version = "0.7", optional = true }
+axum = { version = "0.7", features = ["ws"], optional = true }
 hyper = { version = "1.0", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 tower = { version = "0.4", features = ["make"], optional = true }
 async-stream = { version = "0.3", optional = true }
+tokio-stream = { version = "0.1", optional = true, features = ["sync"] }
+tower-http = { version = "0.5", features = ["cors"], optional = true }
+futures-util = { version = "0.3", optional = true }
 log = "0.4"
 
 [dev-dependencies]

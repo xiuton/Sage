@@ -1,5 +1,5 @@
 use burn::{
-    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig,
+    nn::{Embedding, EmbeddingConfig, LinearConfig,
         transformer::{TransformerEncoder, TransformerEncoderConfig, TransformerEncoderInput, TransformerEncoderAutoregressiveCache},
         loss::CrossEntropyLossConfig,
     },
@@ -555,12 +555,12 @@ impl<B: Backend> Model<B> {
 impl<B: AutodiffBackend> TrainStep<TextBatch<B>, ClassificationOutput<B>> for Model<B> {
     fn step(&self, batch: TextBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
         let item = self.forward_step(batch);
-        let mut grads = item.loss.backward();
+        let grads = item.loss.backward();
         
         // 如果 output_head.enabled 为 true，且我们只想训练 LoRA
         // 注意：目前为了简化，我们假设启用 LoRA 时只训练 LoRA
         if self.output_head.enabled {
-            let lora_ids = self.get_lora_params();
+            let _lora_ids = self.get_lora_params();
             // 在 Burn 中，如果不想要某些参数的梯度，可以在 backward 后将其从 Gradients 中移除，
             // 或者在 step 时不更新。这里我们通过保留 LoRA 参数梯度来实现。
             // 但 Gradients 的 API 比较底层，最稳妥的方法是在应用梯度前处理。

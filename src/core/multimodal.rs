@@ -318,7 +318,7 @@ impl<B: Backend> MultiHeadAttention<B> {
     }
     
     pub fn forward(&self, query: Tensor<B, 3>, key: Tensor<B, 3>, value: Tensor<B, 3>) -> Tensor<B, 3> {
-        let [batch, seq_len, _] = query.dims();
+        let [_batch, _seq_len, _] = query.dims();
 
         let q = self.q_proj.forward(query);
         let k = self.k_proj.forward(key);
@@ -813,12 +813,12 @@ impl<B: Backend> MultimodalModule<B> {
 
 pub struct ImagePreprocessor<B: Backend> {
     config: ImagePreprocessingConfig,
-    device: B::Device,
+    _device: B::Device,
 }
 
 impl<B: Backend> ImagePreprocessor<B> {
     pub fn new(config: ImagePreprocessingConfig, device: B::Device) -> Self {
-        Self { config, device }
+        Self { config, _device: device }
     }
     
     pub fn preprocess(&self, image: Tensor<B, 4>) -> Tensor<B, 4> {

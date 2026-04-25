@@ -40,7 +40,7 @@ struct Args {
     #[arg(short = 's', long)]
     seed: Option<u64>,
 
-    #[arg(long, default_value = "./tmp/sage_model_formal")]
+    #[arg(long, default_value = "./models/sage_model_formal")]
     model_dir: String,
 
     #[arg(long, default_value_t = false)]

@@ -4,14 +4,13 @@ use burn::{
         Dropout, DropoutConfig,
         Linear, LinearConfig,
         BatchNorm, BatchNormConfig,
-        activation::{Gelu, Relu},
-        Embedding, EmbeddingConfig,
+        activation::Gelu,
     },
     prelude::*,
     tensor::backend::Backend,
 };
 use serde::{Serialize, Deserialize};
-use image::{GenericImageView, DynamicImage};
+use image::GenericImageView;
 
 pub fn load_image_as_tensor(path: &str, target_size: usize) -> Result<Vec<f32>, String> {
     let img = image::open(path).map_err(|e| format!("Failed to open image {}: {}", path, e))?;

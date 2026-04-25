@@ -169,7 +169,7 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
                 
                 // 如果启用了 LoRA 且设置了仅训练 LoRA，则过滤梯度
                 let grads = if adjusted_context.config.use_lora {
-                    let lora_param_ids = model.get_lora_params();
+                    let _lora_param_ids = model.get_lora_params();
                     // 这里我们创建一个新的 GradientsParams 只包含 LoRA 参数的梯度
                     // 注意：这在某些 Burn 版本中可能需要特定的方法来访问内部数据
                     // 这里采用简单的逻辑：只有 LoRA 参数才会被更新

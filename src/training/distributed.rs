@@ -101,7 +101,7 @@ impl<B: AutodiffBackend, O: Optimizer<crate::core::model::Model<B>, B> + Clone> 
         // 这里的简化实现仅做演示，真实高性能同步需要底层的 Tensor 通信
         
         // 获取主模型的权重副本
-        let mut base_model = self.models[0].clone();
+        let base_model = self.models[0].clone();
         
         // 对每个参数进行平均
         // 简化：这里仅同步第一个模型到其他模型（即主从同步）
@@ -124,7 +124,7 @@ pub fn train_parallel<B: AutodiffBackend, D: Dataset<TextItem> + Send + Sync + '
     let mut handles = Vec::with_capacity(world_size);
     
     // 使用第一个设备作为参考
-    let master_device = devices[0].clone();
+    let _master_device = devices[0].clone();
     
     for rank in 0..world_size {
         let dataset_clone = Arc::clone(&dataset);

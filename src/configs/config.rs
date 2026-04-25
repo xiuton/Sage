@@ -256,8 +256,8 @@ pub struct InferenceConfig {
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
-            model_path: "./tmp/model.mpk".to_string(),
-            tokenizer_path: "./tmp/tokenizer.json".to_string(),
+            model_path: "./models/model.mpk".to_string(),
+            tokenizer_path: "./models/tokenizer.json".to_string(),
             max_seq_len: 512,
             temperature: 0.8,
             top_k: 10,
@@ -451,7 +451,7 @@ impl Default for ApiConfig {
             api_key: None,
             log_level: "info".to_string(),
             use_gpu: false,
-            model_dir: "./tmp/sage_model_formal".to_string(),
+            model_dir: "./models/sage_model_formal".to_string(),
             use_best: false,
             context_len: 0,
         }
