@@ -354,22 +354,90 @@ cargo run --release --bin api_server -- [OPTIONS]
 
 ### 5.1 启动 API 服务器
 
+#### 完整模式（LLM + 多模态）
+需要同时提供 tokenizer.json 和 model.mpk 文件：
+
 ```bash
-cargo run --release --bin api_server -- --port 8080 --model-dir ./models/sage_model_formal
+# 基本启动（CPU 后端）
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --port 8000
+
+# 使用 GPU 后端
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --backend gpu `
+    --port 8000
+
+# 启用 API Key 认证
+$env:SAGE_API_KEY="your-secret-key"
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --port 8000 `
+    --max-concurrent 4
+```
+
+#### 多模态专用模式
+仅提供多模态图像生成功能，不需要 LLM 模型文件：
+
+```bash
+# 启动多模态专用服务器（使用训练后的多模态模型）
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/text_to_image_full `
+    --backend gpu `
+    --port 8000
+
+# 启动 CPU 版本
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/text_to_image_full `
+    --backend cpu `
+    --port 8000
 ```
 
 ### 5.2 API 调用示例
 
 ```bash
-# 文本生成
-curl -X POST http://localhost:8080/generate `
+# 聊天完成
+curl -X POST http://localhost:8000/api/v1/chat/completions `
   -H "Content-Type: application/json" `
-  -d '{"prompt": "你好", "max_tokens": 100}'
+  -H "Authorization: Bearer your-secret-key" `
+  -d '{
+    "model": "sage-llm",
+    "messages": [
+      {"role": "system", "content": "你是一个有帮助的助手"},
+      {"role": "user", "content": "什么是深度学习？"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100
+  }'
 
-# 多模态推理
-curl -X POST http://localhost:8080/multimodal `
+# 文本补全
+curl -X POST http://localhost:8000/api/v1/completions `
   -H "Content-Type: application/json" `
-  -d '{"prompt": "描述这张图片", "image_path": "./test.jpg"}'
+  -H "Authorization: Bearer your-secret-key" `
+  -d '{
+    "prompt": "什么是深度学习？",
+    "max_length": 100,
+    "temperature": 0.7
+  }'
+
+# 加载 Diffusion 模型
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
+  -d '{
+    "model_path": "text_to_image_full",
+    "config_path": ""
+  }'
+
+# 生成图像
+curl -X POST http://localhost:8000/api/v1/images/generate `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
+  -d '{
+    "prompt": "一只可爱的小猫",
+    "steps": 100
+  }'
 ```
 
 ---
@@ -640,5 +708,5 @@ cargo run --bin infer -- `
 
 ---
 
-**最后更新：** 2026-04-21
+**最后更新：** 2026-04-25
 **版本：** v1.3

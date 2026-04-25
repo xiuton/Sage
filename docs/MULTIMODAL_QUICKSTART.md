@@ -159,6 +159,37 @@ cargo run --example multimodal_quickstart
 
 ---
 
+## 🚀 API 服务器使用（进阶）
+
+API 服务器在启动时会加载 LLM 模型，同时提供 LLM 对话和多模态图像生成服务。
+
+### 快速启动
+
+```bash
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --backend gpu `
+    --port 8000
+```
+
+### API 调用示例
+
+```bash
+# 加载 Diffusion 模型
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
+  -H "Content-Type: application/json" `
+  -d '{"model_path": "./models/text_to_image_full", "config_path": "./configs/config_vae_diffusion.json"}'
+
+# 生成图像
+curl -X POST http://localhost:8000/api/v1/images/generate `
+  -H "Content-Type: application/json" `
+  -d '{"prompt": "一只可爱的小猫", "steps": 100}'
+```
+
+详细文档请查看 **[API_GUIDE.md](./API_GUIDE.md)**。
+
+---
+
 ## 🎉 下一步
 
 1. 阅读 **[完整使用指南](./MULTIMODAL_USAGE.md)**
@@ -170,4 +201,4 @@ cargo run --example multimodal_quickstart
 
 **有问题？** 查看 **[常见问题解答](./MULTIMODAL_USAGE.md#常见问题)** 或提交 Issue。
 
-**最后更新：** 2026-04-19
+**最后更新：** 2026-04-25

@@ -12,7 +12,7 @@
 6. [性能优化](#性能优化)
 7. [监控和维护](#监控和维护)
 8. [认证机制](#认证机制)
-9. [API接口说明](#api接口说明)
+9. [API使用指南](#api使用指南)
 
 ---
 
@@ -55,7 +55,7 @@ cargo build --release
 训练完成后，模型会自动保存到指定目录，包含以下文件：
 
 ```
-./tmp/your_model/
+./models/your_model/
 ├── model.mpk          # 模型权重文件
 ├── best_model.mpk     # 最佳模型权重（如果启用）
 ├── config.json        # 模型配置文件
@@ -70,10 +70,10 @@ cargo build --release
 
 ```bash
 # 检查模型文件是否完整
-ls -la ./tmp/your_model/
+ls -la ./models/your_model/
 
 # 验证模型配置
-cat ./tmp/your_model/config.json
+cat ./models/your_model/config.json
 ```
 
 ### 2.3 创建部署目录
@@ -83,10 +83,10 @@ cat ./tmp/your_model/config.json
 mkdir -p ./deploy
 
 # 复制模型文件
-cp ./tmp/your_model/model.mpk ./deploy/model.mpk
-cp ./tmp/your_model/best_model.mpk ./deploy/best_model.mpk
-cp ./tmp/your_model/config.json ./deploy/config.json
-cp ./tmp/your_model/tokenizer.json ./deploy/tokenizer.json
+cp ./models/your_model/model.mpk ./deploy/model.mpk
+cp ./models/your_model/best_model.mpk ./deploy/best_model.mpk
+cp ./models/your_model/config.json ./deploy/config.json
+cp ./models/your_model/tokenizer.json ./deploy/tokenizer.json
 ```
 
 ### 2.4 模型验证测试
@@ -94,7 +94,7 @@ cp ./tmp/your_model/tokenizer.json ./deploy/tokenizer.json
 ```bash
 # 使用训练好的模型进行推理测试
 cargo run --release --bin infer -- `
-    --model-dir ./tmp/your_model `
+    --model-dir ./models/your_model `
     --use-best `
     --prompt "什么是深度学习？" `
     --num-tokens 100 `
@@ -110,7 +110,7 @@ cargo run --release --bin infer -- `
 ```bash
 # 使用infer工具提供交互式推理服务
 cargo run --release --bin infer -- `
-    --model-dir ./tmp/your_model `
+    --model-dir ./models/your_model `
     --use-best `
     --chat `
     --interactive
@@ -121,7 +121,7 @@ cargo run --release --bin infer -- `
 ```bash
 # 启用流式输出的交互式部署
 cargo run --release --bin infer -- `
-    --model-dir ./tmp/your_model `
+    --model-dir ./models/your_model `
     --use-best `
     --chat `
     --interactive `
@@ -134,7 +134,7 @@ cargo run --release --bin infer -- `
 ```bash
 # 使用GPU加速的交互式部署
 cargo run --release --bin infer -- `
-    --model-dir ./tmp/your_model `
+    --model-dir ./models/your_model `
     --use-best `
     --chat `
     --interactive `
@@ -143,19 +143,17 @@ cargo run --release --bin infer -- `
 
 ### 3.4 多模态推理部署
 
-Sage 支持基础的多模态能力，但请注意以下限制：
+Sage 支持完整的多模态能力，包括图像生成和多模态理解。
 
 #### 支持的功能
 - **推理侧**：使用 `infer --multimodal --image-path <图像路径>` 进行图像输入推理
-- **核心组件**：已实现 `VisionEncoder` 和 `MultimodalFusion` 模块
-- **模型架构**：支持文本和图像特征融合
+- **图像生成**：使用 `image_gen` 工具进行文本到图像生成
+- **核心组件**：已实现 `VisionEncoder`、`MultimodalFusion`、`VAE` 和 `DiffusionModel` 模块
+- **模型架构**：支持文本和图像特征融合，以及文本到图像生成
 
-#### 限制和未完成的功能
-- **训练侧**：尚未实现带图像的数据集加载和训练循环
-- **图像预处理**：缺少标准化、缩放等预处理步骤
-- **数据格式**：不支持包含图像路径的训练数据格式
+#### 使用示例
 
-#### 使用示例（仅推理）
+##### 1. 多模态推理
 ```bash
 # 基本多模态推理
 cargo run --bin infer -- `
@@ -171,10 +169,23 @@ cargo run --bin infer -- `
     --backend gpu
 ```
 
-#### 注意事项
-- 多模态功能目前仅用于演示目的，不建议用于生产环境
-- 训练多模态模型需要额外的代码实现，包括数据集加载和预处理
-- 图像编码器目前是简单的线性投影，性能和效果有限
+##### 2. 图像生成（文生图）
+```bash
+# 使用CPU生成图像
+cargo run --bin image_gen -- `
+    --backend cpu `
+    --model-path models/text_to_image `
+    --prompt "一只可爱的小猫" `
+    --steps 50
+
+# 使用GPU生成高质量图像
+cargo run --bin image_gen -- `
+    --backend gpu `
+    --model-path models/text_to_image_full `
+    --prompt "一只可爱的小猫，毛茸茸的，蓝色眼睛，在草地上玩耍" `
+    --steps 100 `
+    --output ./cat_generated.png
+```
 
 ---
 
@@ -182,18 +193,43 @@ cargo run --bin infer -- `
 
 ### 4.1 启动API服务器
 
+#### 完整模式（LLM + 多模态）
+需要同时提供 tokenizer.json 和 model.mpk 文件：
+
 ```bash
-# 启动API服务器（默认端口8000，CPU后端）
-cargo run --release --bin api_server -- `
-    --model-dir ./tmp/your_model `
-    --use-best `
+# 基本启动（CPU 后端）
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
     --port 8000
 
-# 使用GPU后端加速推理
-cargo run --release --bin api_server -- `
-    --model-dir ./tmp/your_model `
-    --use-best `
+# 使用 GPU 后端
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
     --backend gpu `
+    --port 8000
+
+# 启用 API Key 认证
+$env:SAGE_API_KEY="your-secret-key"
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --port 8000 `
+    --max-concurrent 4
+```
+
+#### 多模态专用模式
+仅提供多模态图像生成功能，不需要 LLM 模型文件：
+
+```bash
+# 启动多模态专用服务器（使用训练后的多模态模型）
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/text_to_image_full `
+    --backend gpu `
+    --port 8000
+
+# 启动 CPU 版本
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/text_to_image_full `
+    --backend cpu `
     --port 8000
 ```
 
@@ -201,28 +237,28 @@ cargo run --release --bin api_server -- `
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--model-dir` | 模型目录路径 | 必填 |
-| `--use-best` | 使用最佳模型权重 | false |
+| `--model-dir` | 模型目录路径 | `./models/sage_model_formal` |
 | `--port` | 服务器端口 | 8000 |
 | `--backend` | 推理后端（`cpu` 或 `gpu`） | cpu |
-| `--context-len` | 上下文长度 | 默认跟随模型配置 |
-| `--log-level` | 日志级别 | info |
+| `--log-level` | 日志级别（`error`, `warn`, `info`, `debug`, `trace`） | info |
+| `--max-concurrent` | 最大并发请求数 | 4 |
+| `--api-key` | API密钥（也可通过环境变量 `SAGE_API_KEY` 设置） | 无 |
 
 认证机制：
-- 若设置环境变量 `SAGE_API_KEY`，则除 `/api/health` 外的接口需要 `Authorization: Bearer <SAGE_API_KEY>`。
-- 若未设置 `SAGE_API_KEY`，则不做认证。
+- 若设置 `--api-key` 或环境变量 `SAGE_API_KEY`，则除 `/health` 和 `/api/v1/models` 外的接口需要 `Authorization: Bearer <API_KEY>`。
+- 若未设置，则不做认证。
 
 ### 4.3 健康检查
 
 ```bash
 # 检查API服务器是否正常运行
-curl http://localhost:8000/api/health
+curl http://localhost:8000/health
 ```
 
 ### 4.4 获取模型信息
 
 ```bash
-curl -X GET http://localhost:8000/api/model-info `
+curl -X GET http://localhost:8000/api/v1/model/info `
   -H "Authorization: Bearer your-secret-key"
 ```
 
@@ -236,11 +272,18 @@ curl -X GET http://localhost:8000/api/model-info `
 # 构建Docker镜像
 docker build -t sage-api .
 
-# 运行Docker容器
+# 运行Docker容器（完整模式）
 docker run -d `
   -p 8000:8000 `
-  -v ./tmp/your_model:/app/models `
+  -v ./models/sage_model_formal:/app/models `
   --name sage-api `
+  sage-api
+
+# 运行Docker容器（多模态专用模式）
+docker run -d `
+  -p 8000:8000 `
+  -v ./models/text_to_image_full:/app/models `
+  --name sage-api-multimodal `
   sage-api
 ```
 
@@ -399,7 +442,7 @@ export SAGE_API_KEY="your-secret-key"
 
 ```bash
 # 使用API密钥调用接口
-curl -X POST http://localhost:8000/v1/chat/completions `
+curl -X POST http://localhost:8000/api/v1/chat/completions `
   -H "Content-Type: application/json" `
   -H "Authorization: Bearer your-secret-key" `
   -d '{
@@ -418,62 +461,59 @@ curl -X POST http://localhost:8000/v1/chat/completions `
 
 | 端点 | 方法 | 描述 | 认证 |
 |------|------|------|------|
-| `/api/generate` | POST | 简单文本生成接口 | 可选 |
-| `/api/health` | GET | 健康检查接口 | 不需要 |
-| `/api/model-info` | GET | 获取模型信息 | 可选 |
-| `/api/performance` | GET | 获取性能监控信息 | 可选 |
-| `/v1/chat/completions` | POST | Chat Completion接口（OpenAI标准） | 可选 |
-| `/v1/batch-chat/completions` | POST | 批量Chat Completion接口 | 可选 |
-| `/v1/async-chat/completions` | POST | 异步Chat Completion接口 | 可选 |
-| `/api/task/:task_id` | GET | 查询任务状态 | 可选 |
-| `/api/models` | GET | 列出所有已加载模型 | 可选 |
-| `/api/models` | POST | 加载新模型 | 可选 |
-| `/api/models/:model_id` | DELETE | 卸载模型 | 可选 |
-| `/api/models/:model_id/activate` | POST | 切换活动模型 | 可选 |
-| `/api/models/:model_id/reload` | POST | 热更新模型 | 可选 |
-| `/api/models/download` | POST | 下载模型（需web feature） | 可选 |
+| `/health` | GET | 健康检查 | 不需要 |
+| `/api/v1/models` | GET | 列出可用模型 | 不需要 |
+| `/api/v1/model/info` | GET | 获取模型详细信息 | 需要 |
+| `/api/v1/chat/completions` | POST | 聊天完成（支持流式） | 需要 |
+| `/api/v1/completions` | POST | 文本补全 | 需要 |
+| `/api/v1/images/generate` | POST | 图像生成 | 需要 |
+| `/api/v1/images/generations` | POST | 批量图像生成 | 需要 |
+| `/api/v1/diffusion/load` | POST | 加载 Diffusion 模型 | 需要 |
+| `/api/v1/diffusion/unload` | POST | 卸载 Diffusion 模型 | 需要 |
+| `/api/v1/training/start` | POST | 启动训练任务 | 需要 |
+| `/api/v1/training/status/:id` | GET | 查询训练状态 | 需要 |
+| `/api/v1/training/cancel/:id` | POST | 取消训练任务 | 需要 |
+| `/api/v1/training/list` | GET | 列出所有训练任务 | 需要 |
+| `/api/v1/performance` | GET | 获取性能统计 | 需要 |
+| `/api/v1/rate-limit` | GET | 获取限流信息 | 需要 |
+| `/ws` | WS | WebSocket 实时通信 | 需要 |
+| `/events` | GET | SSE 事件流 | 需要 |
 
-### 9.2 /api/generate 简单文本生成接口
+### 9.2 /api/v1/completions 文本补全接口
 
 **请求示例：**
 ```bash
-curl -X POST http://localhost:8000/api/generate `
-  -H "Content-Type: application/json" `
-  -d '{"prompt": "你好，请介绍一下你自己", "max_length": 100}'
-```
-
-**请求参数：**
-| 参数 | 类型 | 必填 | 说明 | 默认值 |
-|------|------|------|------|--------|
-| `prompt` | string | 是 | 用户输入文本 | - |
-| `max_length` | integer | 否 | 最大生成长度 | 50 |
-| `temperature` | float | 否 | 采样温度 | 0.8 |
-| `top_p` | float | 否 | top-p采样参数 | 0.9 |
-| `top_k` | integer | 否 | top-k采样参数 | 10 |
-
-**响应格式：**
-```json
-{
-  "prompt": "你好，请介绍一下你自己",
-  "text": "我叫Sage，是一个AI助手..."
-}
-```
-
-**响应字段说明：**
-- `prompt`：用户输入的原始问题
-- `text`：模型生成的助手回复
-
-### 9.3 Chat Completion接口（OpenAI标准）
-
-**请求示例（普通模式）：**
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions `
+curl -X POST http://localhost:8000/api/v1/completions `
   -H "Content-Type: application/json" `
   -H "Authorization: Bearer your-secret-key" `
   -d '{
-    "model": "sage-model",
+    "prompt": "什么是深度学习？",
+    "max_length": 100,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 10
+  }'
+```
+
+**响应示例：**
+```json
+{
+  "prompt": "什么是深度学习？",
+  "text": "深度学习是机器学习的一个分支，使用多层神经网络..."
+}
+```
+
+### 9.3 /api/v1/chat/completions 聊天完成接口（OpenAI标准）
+
+**请求示例（普通模式）：**
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
+  -d '{
+    "model": "sage-llm",
     "messages": [
-      {"role": "system", "content": "你是一个助手"},
+      {"role": "system", "content": "你是一个有帮助的助手"},
       {"role": "user", "content": "什么是深度学习？"}
     ],
     "temperature": 0.7,
@@ -485,19 +525,14 @@ curl -X POST http://localhost:8000/v1/chat/completions `
 
 **请求示例（流式输出）：**
 ```bash
-curl -X POST http://localhost:8000/v1/chat/completions `
+curl -X POST http://localhost:8000/api/v1/chat/completions `
   -H "Content-Type: application/json" `
   -H "Authorization: Bearer your-secret-key" `
   -d '{
-    "model": "sage-model",
-    "messages": [
-      {"role": "system", "content": "你是一个助手"},
-      {"role": "user", "content": "什么是深度学习？"}
-    ],
+    "model": "sage-llm",
+    "messages": [{"role": "user", "content": "什么是深度学习？"}],
     "temperature": 0.7,
     "max_tokens": 100,
-    "top_p": 0.9,
-    "top_k": 10,
     "stream": true
   }'
 ```
@@ -505,9 +540,9 @@ curl -X POST http://localhost:8000/v1/chat/completions `
 **流式输出响应说明：**
 流式输出使用Server-Sent Events (SSE)格式，每个token生成后立即返回，格式如下：
 ```
-data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-model","choices":[{"index":0,"message":{"role":"assistant","content":"深"},"finish_reason":null}]}
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-llm","choices":[{"index":0,"message":{"role":"assistant","content":"深"},"finish_reason":null}]}
 
-data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-model","choices":[{"index":0,"message":{"role":"assistant","content":"深度学习"},"finish_reason":null}]}
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242,"model":"sage-llm","choices":[{"index":0,"message":{"role":"assistant","content":"深度学习"},"finish_reason":null}]}
 ```
 
 **响应示例：**
@@ -516,7 +551,7 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242
   "id": "chatcmpl-123",
   "object": "chat.completion",
   "created": 1677858242,
-  "model": "sage-model",
+  "model": "sage-llm",
   "choices": [
     {
       "index": 0,
@@ -535,251 +570,85 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677858242
 }
 ```
 
-### 9.4 批量Chat Completion接口
+### 9.4 图像生成接口
 
 **请求示例：**
 ```bash
-curl -X POST http://localhost:8000/v1/batch-chat/completions `
+curl -X POST http://localhost:8000/api/v1/images/generate `
   -H "Content-Type: application/json" `
   -H "Authorization: Bearer your-secret-key" `
   -d '{
-    "requests": [
-      {
-        "model": "sage-model",
-        "messages": [{"role": "user", "content": "什么是人工智能？"}],
-        "max_tokens": 50
-      },
-      {
-        "model": "sage-model",
-        "messages": [{"role": "user", "content": "什么是机器学习？"}],
-        "max_tokens": 50
-      }
-    ]
+    "prompt": "一只可爱的小猫",
+    "model_path": "text_to_image_full",
+    "steps": 100,
+    "latent_dim": 128,
+    "image_size": 64
   }'
 ```
 
 **响应示例：**
 ```json
 {
-  "responses": [
-    {
-      "id": "chatcmpl-124",
-      "object": "chat.completion",
-      "created": 1677858243,
-      "model": "sage-model",
-      "choices": [
-        {
-          "index": 0,
-          "message": {
-            "role": "assistant",
-            "content": "人工智能是计算机科学的一个分支..."
-          },
-          "finish_reason": "stop"
-        }
-      ],
-      "usage": {
-        "prompt_tokens": 15,
-        "completion_tokens": 35,
-        "total_tokens": 50
-      }
-    },
-    {
-      "id": "chatcmpl-125",
-      "object": "chat.completion",
-      "created": 1677858244,
-      "model": "sage-model",
-      "choices": [
-        {
-          "index": 0,
-          "message": {
-            "role": "assistant",
-            "content": "机器学习是人工智能的一个分支..."
-          },
-          "finish_reason": "stop"
-        }
-      ],
-      "usage": {
-        "prompt_tokens": 16,
-        "completion_tokens": 34,
-        "total_tokens": 50
-      }
-    }
-  ],
-  "total_duration_ms": 920,
-  "request_count": 2
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "image_path": "./assets/550e8400-e29b-41d4-a716-446655440000.png",
+  "message": "Image generated successfully"
 }
 ```
 
-### 9.5 异步Chat Completion接口
+### 9.5 Diffusion 模型管理接口
 
-**请求示例：**
+**加载模型：**
 ```bash
-curl -X POST http://localhost:8000/v1/async-chat/completions `
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
   -H "Content-Type: application/json" `
   -H "Authorization: Bearer your-secret-key" `
   -d '{
-    "model": "sage-model",
-    "messages": [{"role": "user", "content": "什么是深度学习？"}],
-    "max_tokens": 200
+    "model_path": "text_to_image_full",
+    "config_path": ""
   }'
 ```
 
-**响应示例：**
-```json
-{
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "Pending",
-  "result": null,
-  "error": null
-}
-```
-
-### 9.6 任务状态查询接口
-
-**请求示例：**
+**卸载模型：**
 ```bash
-curl -X GET http://localhost:8000/api/task/550e8400-e29b-41d4-a716-446655440000 `
+curl -X POST http://localhost:8000/api/v1/diffusion/unload `
   -H "Authorization: Bearer your-secret-key"
 ```
 
-**响应示例：**
-```json
-{
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "Completed",
-  "result": {
-    "id": "chatcmpl-126",
-    "object": "chat.completion",
-    "created": 1677858245,
-    "model": "sage-model",
-    "choices": [
-      {
-        "index": 0,
-        "message": {
-          "role": "assistant",
-          "content": "深度学习是机器学习的一个分支..."
-        },
-        "finish_reason": "stop"
-      }
-    ],
-    "usage": {
-      "prompt_tokens": 20,
-      "completion_tokens": 180,
-      "total_tokens": 200
-    }
-  },
-  "error": null,
-  "created_at": 1000,
-  "started_at": 1500,
-  "completed_at": 2700
-}
+### 9.6 训练任务管理接口
+
+**启动训练：**
+```bash
+curl -X POST http://localhost:8000/api/v1/training/start `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer your-secret-key" `
+  -d '{
+    "mode": "text_to_image",
+    "data_path": "./data/text_to_image_pairs.jsonl",
+    "config_path": "./configs/config_vae_diffusion.json",
+    "output_dir": "./models/training_output",
+    "batch_size": 4,
+    "learning_rate": 0.0001,
+    "num_epochs": 10,
+    "backend": "cpu"
+  }'
 ```
 
-### 9.7 API参数说明（OpenAI标准）
+**查询训练状态：**
+```bash
+curl -X GET http://localhost:8000/api/v1/training/status/550e8400-e29b-41d4-a716-446655440000 `
+  -H "Authorization: Bearer your-secret-key"
+```
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `model` | 模型名称 | sage-model |
-| `messages` | 消息数组 | 必填 |
-| `max_tokens` | 生成的最大token数 | 50 |
-| `temperature` | 采样温度 | 0.8 |
-| `top_p` | top-p采样参数 | 0.9 |
-| `top_k` | top-k采样参数 | 10 |
-| `n` | 生成的回复数量 | 1 |
-| `stop` | 停止序列 | 无 |
-| `presence_penalty` | 存在惩罚 | 无 |
-| `frequency_penalty` | 频率惩罚 | 无 |
-| `seed` | 随机种子 | 无 |
-
-### 9.8 批量推理限制
-
-- 最大批量大小：100个请求
-- 批量请求不能为空
-
-### 9.9 异步任务状态
-
-- `Pending`：任务等待处理
-- `Running`：任务正在处理中
-- `Completed`：任务处理完成
-- `Failed`：任务处理失败
+**列出所有训练任务：**
+```bash
+curl -X GET http://localhost:8000/api/v1/training/list `
+  -H "Authorization: Bearer your-secret-key"
+```
 
 ---
 
-## 10. 增强功能使用
 
-### 10.1 模型管理接口使用
-
-#### 1. 列出所有模型
-```bash
-curl -X GET http://localhost:8000/api/models `
-  -H "Authorization: Bearer your-api-key"
-```
-
-#### 2. 加载新模型
-```bash
-curl -X POST http://localhost:8000/api/models `
-  -H "Authorization: Bearer your-api-key" `
-  -H "Content-Type: application/json" `
-  -d '{
-    "model_id": "my-custom-model",
-    "model_dir": "./models/custom-model"
-  }'
-```
-
-#### 3. 切换活动模型
-```bash
-curl -X POST http://localhost:8000/api/models/my-custom-model/activate `
-  -H "Authorization: Bearer your-api-key"
-```
-
-#### 4. 热更新模型
-```bash
-curl -X POST http://localhost:8000/api/models/my-custom-model/reload `
-  -H "Authorization: Bearer your-api-key"
-```
-
-#### 5. 卸载模型
-```bash
-curl -X DELETE http://localhost:8000/api/models/my-custom-model `
-  -H "Authorization: Bearer your-api-key"
-```
-
-#### 6. 下载模型
-```bash
-curl -X POST http://localhost:8000/api/models/download `
-  -H "Authorization: Bearer your-api-key" `
-  -H "Content-Type: application/json" `
-  -d '{
-    "model_id": "downloaded-model",
-    "url": "https://example.com/models/model.mpk"
-  }'
-```
-
-#### 7. 更新模型
-```bash
-curl -X POST http://localhost:8000/api/models/my-model/update `
-  -H "Authorization: Bearer your-api-key" `
-  -H "Content-Type: application/json" `
-  -d '{
-    "url": "https://example.com/models/model_v2.mpk"
-  }'
-```
-
-### 10.2 模型导出使用
-
-#### 导出为ONNX格式
-cargo run --bin export -- `
-  --model-dir ./models/my-model `
-  --output ./exports/model.onnx `
-  --format onnx
-```
-
-#### 导出为GGUF格式
-cargo run --bin export -- `
-  --model-dir ./models/my-model `
-  --output ./exports/model.gguf `
-  --format gguf
-```
 
 ---
 
@@ -839,17 +708,20 @@ cargo run --bin export -- `
 
 ---
 
-## 13. 版本更新记录
+## 10. 版本更新记录
 
 | 版本 | 主要特性 |
 |------|----------|
 | 0.1.0 | 初始版本，基础部署功能 |
 | 0.1.1 | 添加 GPU 推理支持与部署指南完善 |
 | 0.1.2 | 添加完整 API 接口支持 |
-| 1.0.0 | 添加 DPO 偏好对齐与多模态推理支持（量化/分布式训练仍在规划中） |
+| 1.0.0 | 添加 DPO 偏好对齐与多模态推理支持 |
+| 1.1.0 | 完善 API 服务模式：流式输出、WebSocket、训练任务管理、性能监控 |
+| 1.2.0 | 扩展 API 服务器支持多模态，添加专门的多模态路由 |
+| 1.3.0 | 优化 API 接口，支持通过模型名称自动查找模型（无需完整路径） |
 
 ---
 
-**更新日期：** 2026-03-25  
-**版本：** v1.1  
+**更新日期：** 2026-04-25  
+**版本：** v1.3  
 **作者：** Sage团队

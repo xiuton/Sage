@@ -434,6 +434,84 @@ done
 
 ---
 
+## API 服务器使用
+
+API 服务器在启动时会加载 LLM 模型，同时提供 LLM 对话和多模态图像生成服务。
+
+### 启动 API 服务器
+
+```bash
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --backend gpu `
+    --port 8000
+```
+
+**参数详解：**
+
+- `--model-dir`：模型目录路径，需要包含 LLM 模型文件（`tokenizer.json` 和 `model.mpk`）
+- `--backend gpu`：使用 GPU 后端进行推理，显著提升性能
+- `--port 8000`：服务器监听端口
+
+### 加载 Diffusion 模型
+
+```bash
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model_path": "./models/text_to_image_full",
+    "config_path": "./configs/config_vae_diffusion.json"
+  }'
+```
+
+### 生成图像
+
+```bash
+curl -X POST http://localhost:8000/api/v1/images/generate `
+  -H "Content-Type: application/json" `
+  -d '{
+    "prompt": "一只可爱的小猫",
+    "steps": 100
+  }'
+```
+
+**参数详解：**
+
+- `prompt`：文本提示词，描述想要生成的图像内容
+- `steps`：Diffusion 采样步数，步数越多生成质量越高（建议 50-100）
+
+### 完整 API 使用流程
+
+```bash
+# 1. 启动 API 服务器（需要 LLM 模型文件）
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --backend gpu `
+    --port 8000
+
+# 2. 加载 Diffusion 模型
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model_path": "./models/text_to_image_full",
+    "config_path": "./configs/config_vae_diffusion.json"
+  }'
+
+# 3. 生成图像
+curl -X POST http://localhost:8000/api/v1/images/generate `
+  -H "Content-Type: application/json" `
+  -d '{
+    "prompt": "一只可爱的小猫",
+    "steps": 100
+  }'
+```
+
+**前置条件**：
+- LLM 模型目录需包含 `tokenizer.json` 和 `model.mpk`
+- Diffusion 模型目录需包含 `config.json` 和 `diffusion_model.mpk`
+
+---
+
 ## 配置选项
 
 ### MultimodalConfig 配置
@@ -668,5 +746,5 @@ CrossAttentionConfig {
 ---
 
 **作者：** Sage 团队  
-**最后更新：** 2026-04-19  
-**版本：** v1.2
+**最后更新：** 2026-04-25  
+**版本：** v1.3

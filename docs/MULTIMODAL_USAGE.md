@@ -177,6 +177,119 @@ cargo run --bin image_gen -- `
 - 完整训练（100轮）才能生成有意义的高质量图像
 - 训练时间取决于硬件，GPU 通常需要 6-24 小时完成 100 轮训练
 
+### 3. 通过 API 服务器使用多模态功能
+
+API 服务器在启动时会加载 LLM 模型，同时提供 LLM 对话和多模态图像生成服务。
+
+#### 3.1 启动 API 服务器
+
+```bash
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --backend gpu `
+    --port 8000
+```
+
+**参数详解：**
+
+- `--model-dir`：模型目录路径，需要包含 LLM 模型文件（`tokenizer.json` 和 `model.mpk`）
+- `--backend gpu`：使用 GPU 后端进行推理，显著提升性能
+- `--port 8000`：服务器监听端口
+
+**启动日志示例：**
+```
+[INFO] api_server: 正在启动API服务器...
+[INFO] api_server: 模型目录: ./models/sage_model_formal
+[INFO] api_server: 端口: 8000
+[INFO] api_server: 找到tokenizer，加载中...
+[INFO] api_server: Tokenizer加载成功
+[INFO] api_server: 使用GPU后端进行推理...
+[INFO] api_server: 初始化GPU懒加载模型...
+[INFO] api_server: API服务器启动在 http://0.0.0.0:8000
+```
+
+#### 3.2 加载 Diffusion 模型
+
+在使用图像生成功能前，需要先加载 Diffusion 模型：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model_path": "./models/text_to_image_full",
+    "config_path": "./configs/config_vae_diffusion.json"
+  }'
+```
+
+**参数详解：**
+
+- `model_path`：扩散模型的文件路径，API 服务器会在此路径下查找 `diffusion_model.mpk`
+- `config_path`：模型配置文件路径，API 服务器从此文件读取模型超参数
+
+#### 3.3 生成图像
+
+加载模型后，可以通过 API 生成图像：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/images/generate `
+  -H "Content-Type: application/json" `
+  -d '{
+    "prompt": "一只可爱的小猫，毛茸茸的，蓝色眼睛",
+    "steps": 100,
+    "image_size": 64
+  }'
+```
+
+**参数详解：**
+
+- `prompt`：文本提示词，描述想要生成的图像内容
+- `steps`：Diffusion 采样步数，步数越多生成质量越高（建议 50-100）
+- `image_size`：输出图像尺寸，默认 64
+
+**响应示例：**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "image_path": "./assets/550e8400-e29b-41d4-a716-446655440000.png",
+  "message": "Image generated successfully"
+}
+```
+
+#### 3.4 完整 API 使用流程
+
+```bash
+# 1. 启动 API 服务器（需要 LLM 模型文件）
+cargo run --release --features="api" --bin api_server -- `
+    --model-dir ./models/sage_model_formal `
+    --backend gpu `
+    --port 8000
+
+# 2. 在另一个终端中，加载 Diffusion 模型
+curl -X POST http://localhost:8000/api/v1/diffusion/load `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model_path": "./models/text_to_image_full",
+    "config_path": "./configs/config_vae_diffusion.json"
+  }'
+
+# 3. 生成图像
+curl -X POST http://localhost:8000/api/v1/images/generate `
+  -H "Content-Type: application/json" `
+  -d '{
+    "prompt": "一只可爱的小猫",
+    "steps": 100
+  }'
+```
+
+**前置条件**：确保 LLM 模型目录（`./models/sage_model_formal`）包含：
+- `tokenizer.json` - 分词器文件
+- `model.mpk` - LLM 模型权重文件
+
+确保 Diffusion 模型目录（`./models/text_to_image_full`）包含：
+- `config.json` - 模型配置文件
+- `diffusion_model.mpk` - 训练好的模型权重文件
+
 ### 2. 最小化多模态使用示例
 
 ```rust
@@ -1083,5 +1196,5 @@ let config = load_config("configs/multimodal_config.json")?;
 ---
 
 **作者：** Sage 团队  
-**最后更新：** 2026-04-19  
-**版本：** v1.2
+**最后更新：** 2026-04-25  
+**版本：** v1.3
