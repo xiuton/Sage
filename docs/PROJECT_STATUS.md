@@ -25,22 +25,28 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 ### 2.1 工程结构
 
 - **模块化组织**：采用功能模块化的目录结构
-  - `src/core/`：核心模型和推理功能（模型定义、分词器、生成算法、KV缓存）
-  - `src/training/`：训练相关功能（训练器、流式数据加载、LoRA支持）
-  - `src/inference/`：推理相关功能（懒加载模型）
+  - `src/core/`：核心模型和推理功能（模型定义、分词器、生成算法、KV缓存、多模态、图像生成）
+  - `src/training/`：训练相关功能（训练器、流式数据加载、LoRA支持、DPO、分布式训练）
+  - `src/inference/`：推理相关功能（懒加载模型、生成策略、内核优化）
   - `src/data/`：数据处理功能（数据集、批处理器）
   - `src/api/`：API服务器功能
   - `src/tools/`：工具类功能（模型下载、导出）
   - `src/utils/`：通用工具函数（错误处理、日志系统、性能监控）
   - `src/quantization/`：量化功能
-- **七个可执行程序**：
-  - `train`：训练入口（LM/SFT）
-  - `infer`：推理入口（续写/Chat/交互）
-  - `api_server`：API 服务器（模型管理、推理服务）
-  - `accuracy_eval`：模型准确率评估工具
-  - `benchmark`：性能基准测试工具
-  - `export`：模型导出工具
-  - `gen_sft`：生成 SFT JSONL（测试/压测）
+  - `src/configs/`：配置定义和加载
+  - `src/transformer/`：底层基础组件（Transformer模块）
+- **可执行程序**（11个）：
+  - `train`：训练入口（LM/SFT/DPO/LoRA/多模态/文生图）
+  - `infer`：推理入口（续写/Chat/交互/多模态）
+  - `api_server`：API 服务器（兼容 OpenAI 格式）
+  - `gen_data`：综合数据生成工具（SFT/Web/多模态）
+  - `accuracy_eval`：精度评估（含量化对比）
+  - `benchmark`：性能基准测试
+  - `export`：模型导出 (ONNX/GGUF)
+  - `convert`：权重格式转换
+  - `create_tokenizer`：分词器构建工具
+  - `generate`：文本生成工具
+  - `image_gen`：图像生成工具（VAE/Diffusion）
 - **文档体系**：
   - [README.md](../README.md)
   - [COMMANDS.md](COMMANDS.md)
@@ -50,7 +56,13 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
   - [TRAINING_PHASES.md](TRAINING_PHASES.md)（显存探测 vs 正式训练）
   - [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)（规范与取舍审阅）
   - [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-  - 本文件 [PROJECT_STATUS.md](PROJECT_STATUS.md)
+  - [PROJECT_STATUS.md](PROJECT_STATUS.md)
+  - [PROJECT_CHECKLIST.md](PROJECT_CHECKLIST.md)（功能检查清单）
+  - [QUICK_TEST_GUIDE.md](QUICK_TEST_GUIDE.md)（全流程测试指南）
+  - [IMAGE_GENERATION_GUIDE.md](IMAGE_GENERATION_GUIDE.md)（图像生成指南）
+  - [MULTIMODAL_GUIDE.md](MULTIMODAL_GUIDE.md)（多模态功能指南）
+  - [MULTIMODAL_USAGE.md](MULTIMODAL_USAGE.md)（多模态使用指南）
+  - [MULTIMODAL_QUICKSTART.md](MULTIMODAL_QUICKSTART.md)（多模态快速开始）
 
 ### 2.2 模型（Transformer LM）
 
@@ -114,7 +126,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 
 ### 2.6 数据生成工具
 
-- `gen_sft` 支持生成可训练 JSONL：
+- `gen_data` 支持生成可训练 JSONL：
   - `{"messages":[...], "id": ...}`
   - 用于 smoke test / 压测训练管线
 

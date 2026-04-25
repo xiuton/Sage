@@ -154,8 +154,7 @@
 |------|------|------|
 | train.rs | ✅ 完整 | 训练功能完整 |
 | infer.rs | ✅ 完整 | 推理功能完整 |
-| gen_sft.rs | ✅ 完整 | SFT 生成完整 |
-| gen_web_sft.rs | ✅ 完整 | 网页 SFT 完整 |
+| gen_data.rs | ✅ 完整 | 综合数据生成（SFT/Web/多模态）|
 | api_server.rs | ✅ 完整 | 依赖问题已解决，重复代码已消除 |
 | benchmark.rs | ✅ 完整 | 基准测试完整 |
 | accuracy_eval.rs | ✅ 完整 | 准确率评估完整 |

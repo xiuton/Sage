@@ -17,8 +17,8 @@ Cargo.lock.bk
 /models/*.safetensors
 
 # But ensure essential configuration files are tracked
-!/models/config.json
-!/models/tokenizer.json
+!/models/**/config.json
+!/models/**/tokenizer.json
 !/inference/configs/*.json
 
 # Data & Corpus

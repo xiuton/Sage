@@ -102,6 +102,8 @@ cargo run --bin image_gen -- --image-size 64 --latent-dim 128 --steps 20
 
 ```
 Sage/
+  .cargo/                  # Cargo 配置文件
+    config.toml            # 构建和编译配置
   src/
     bin/                    # 可执行文件入口
       train.rs              # 训练入口（LM/SFT/DPO/LoRA/多模态/文生图）
@@ -115,6 +117,11 @@ Sage/
       create_tokenizer.rs   # 分词器构建工具
       generate.rs           # 文本生成工具
       image_gen.rs          # 图像生成工具（VAE/Diffusion）
+    api/                    # API 服务器功能实现
+      mod.rs
+    configs/                # 配置定义
+      mod.rs                # 配置加载和管理
+      config.rs             # 配置结构定义
     core/                   # 规范化核心入口：模型定义、Tokenizer、KV Cache、多模态、图像生成
       mod.rs                # 统一导出
       model.rs              # Transformer LM（含 TrainStep/ValidStep）
@@ -132,6 +139,13 @@ Sage/
       lazy_load.rs          # 懒加载模型功能
       model.rs              # 模型推理实现
       kernels.rs            # 优化内核
+    quantization/           # 量化支持
+      mod.rs                # 量化模块导出
+      quantization.rs       # 量化框架/体积估算
+    tools/                  # 开发辅助工具
+      mod.rs
+      model_download.rs     # 模型下载功能
+      export.rs             # 模型导出功能
     training/               # 规范化训练入口：训练循环、DPO、调度器、流式、显存探测
       mod.rs                # 对外统一入口
       training.rs           # 训练循环实现
@@ -143,25 +157,18 @@ Sage/
       lr_scheduler.rs       # 学习率调度器
     transformer/            # 底层基础组件
       mod.rs                # Transformer 模块导出
-    quantization/           # 量化支持
-      mod.rs                # 量化模块导出
-      quantization.rs       # 量化框架/体积估算
-    configs/                # 配置定义
-      mod.rs                # 配置加载和管理
-      config.rs             # 配置结构定义
-    api/                    # API 服务器功能实现
-    tools/                  # 开发辅助工具
-      model_download.rs     # 模型下载功能
-      export.rs             # 模型导出功能
+      kv_cache.rs           # KV 缓存实现
     utils/                  # 辅助工具 (logger, performance, error, etc.)
+      mod.rs
+      common.rs
+      error.rs
+      logger.rs
+      metrics.rs
+      performance.rs
     lib.rs                  # 库导出
   configs/                  # 配置文件目录
     config_vae_diffusion.json # VAE/Diffusion 模型配置
-  scripts/                  # 脚本和工具
-    evaluate_model.py       # 模型评估脚本
-    convert_model.py        # 模型转换脚本
-    download_model.py       # 模型下载脚本
-    README.md               # 脚本说明文档
+    config_vae_diffusion_small.json # VAE/Diffusion 小模型配置
   inference/configs/        # 模型配置文件
     config_1B.json          # 1B 参数模型配置
     config_16B.json         # 16B 参数模型配置
@@ -181,9 +188,7 @@ Sage/
     MULTIMODAL_GUIDE.md    # 多模态功能指南
     MULTIMODAL_USAGE.md    # 多模态使用指南
     MULTIMODAL_QUICKSTART.md # 多模态快速开始
-  test_scripts/             # 测试脚本
-    test_concurrent.py      # Python 并发测试脚本
-    test_concurrent.ps1     # PowerShell 并发测试脚本
+    PROJECT_CHECKLIST.md   # 功能检查清单与优化计划
   tests/                    # 测试目录
     test_api_server.rs     # API服务器测试
     test_kv_cache.rs       # KV缓存测试
@@ -194,8 +199,8 @@ Sage/
     test_dpo.rs            # DPO训练测试
     test_vae.rs            # VAE模型测试
     test_basic.rs          # 基础功能测试
-  data/                     # 生成的数据文件目录
-  models/                   # 模型保存目录
+  data/                     # 数据目录（训练数据、生成的数据）
+  models/                   # 模型保存目录（训练产出的模型权重和配置）
   .gitignore
   Cargo.toml
   Cargo.lock
@@ -326,13 +331,14 @@ Sage/
 
 代码入口：[configs/config.rs](src/configs/config.rs)
 
-### 脚本和工具
+### 辅助工具
 
-- **模型评估**：`scripts/evaluate_model.py` - 评估模型性能和质量
-- **模型转换**：`scripts/convert_model.py` - 在不同格式之间转换模型
-- **模型下载**：`scripts/download_model.py` - 从网络下载预训练模型
+- **模型评估**：`accuracy_eval` - 评估模型性能和质量
+- **性能基准测试**：`benchmark` - 测试推理性能
+- **模型导出**：`export` - 导出模型为 ONNX/GGUF 格式
+- **模型下载**：`model_download`（在 `src/tools/` 中）- 从网络下载预训练模型
 
-代码入口：[scripts/](scripts/)
+代码入口：[src/tools/](src/tools/)
 
 ---
 
@@ -445,10 +451,10 @@ output-dir/
 
 ```bash
 # 使用GPU后端（需要支持WGPU的显卡）
-cargo run --release --bin train -- --backend gpu --sft-jsonl data.jsonl --output-dir ./tmp/gpu_model --config-path ./inference/configs/config_1B.json
+cargo run --release --bin train -- --backend gpu --sft-jsonl data.jsonl --output-dir ./models/gpu_model --config-path ./inference/configs/config_1B.json
 
 # 使用CPU后端（默认）
-cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --output-dir ./tmp/cpu_model --config-path ./inference/configs/config_1B.json
+cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --output-dir ./models/cpu_model --config-path ./inference/configs/config_1B.json
 ```
 
 **注意**：GPU后端需要支持WGPU的显卡。
@@ -459,7 +465,7 @@ cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --output
 ```bash
 # CPU 后端会根据机器核心数自动提高数据加载线程（最少 4；`--fast` 时最少 8）。
 # 如需更高并发可手动指定：
-cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --artifact-dir ./tmp/cpu_model --num-workers 16
+cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --output-dir ./models/cpu_model --num-workers 16
 ```
 
 ---
@@ -471,7 +477,7 @@ cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --artifa
 ### 快速开始
 ```bash
 # 使用学习率调度器训练（推荐）
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --output-dir ./tmp/sft_lr_scheduler --config-path ./inference/configs/config_1B.json --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --output-dir ./models/sft_lr_scheduler --config-path ./inference/configs/config_1B.json --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
 ```
 
 ### 参数说明

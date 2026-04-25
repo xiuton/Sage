@@ -107,7 +107,7 @@
 
 #### 关于 Cargo Features
 本项目使用 Cargo Features 进行功能模块化：
-- `core`（默认）：只编译 `train`、`infer`、`gen_sft` 核心功能
+- `core`（默认）：只编译 `train`、`infer`、`gen_data` 核心功能
 - `api`：API 服务器功能
 - `tools`：辅助工具（benchmark、accuracy_eval、export）
 - `full`：所有功能
@@ -128,7 +128,7 @@ cargo build --release -j 1
 cargo build --release
 
 # === 只编译需要的二进制文件（节省时间）===
-cargo build --release --bin gen_sft -j 1
+cargo build --release --bin gen_data -j 1
 
 # 验证编译成功（应该无错误无警告）
 Write-Host "✅ 编译成功！"
@@ -146,7 +146,7 @@ Write-Host "✅ 编译成功！"
 2. 如果修改了代码，才会触发重新编译
 3. 建议先编译所有需要的二进制文件：
    ```powershell
-   cargo build --release --bin train --bin infer --bin gen_sft -j 1
+   cargo build --release --bin train --bin infer --bin gen_data -j 1
    ```
 
 ---
@@ -156,7 +156,7 @@ Write-Host "✅ 编译成功！"
 ### 2. 生成小规模 SFT 数据
 ```powershell
 # 生成 500 条 SFT 数据（快速测试用，默认保存到 data 目录）
-cargo run --release --bin gen_sft -- --count 500 --out sft_small.jsonl
+cargo run --release --bin gen_data -- --count 500 --out sft_small.jsonl
 
 # 验证数据生成
 if (Test-Path .\data\sft_small.jsonl) {
@@ -1132,7 +1132,7 @@ Write-Host "✅ 仅网络数据生成测试完成！"
   - [ ] 无错误无警告
 
 - [ ] **数据生成**
-  - [ ] `gen_sft` 命令成功生成数据
+  - [ ] `gen_data` 命令成功生成数据
   - [ ] 生成的 JSONL 文件格式正确
 
 - [ ] **训练阶段**
@@ -1242,7 +1242,7 @@ Write-Host "✅ 仅网络数据生成测试完成！"
 cargo build --release -j 1
 
 # 方案 2：只编译需要的二进制文件
-cargo build --release --bin gen_sft -j 1
+cargo build --release --bin gen_data -j 1
 
 # 方案 3：使用 Debug 模式（内存占用更小，但运行速度慢）
 cargo build -j 1
@@ -1261,7 +1261,7 @@ cargo build -j 1
 cargo build --release -j 1
 
 # 2. 编译完成后，后续运行无需重新编译
-cargo run --release --bin gen_sft -- --count 500 --out sft_small.jsonl
+cargo run --release --bin gen_data -- --count 500 --out sft_small.jsonl
 ```
 
 ### 问题 2：编译错误（其他）
@@ -1294,10 +1294,10 @@ Get-ChildItem .\tmp\
 **解决方案：**
 ```powershell
 # 先编译需要的二进制文件
-cargo build --release --bin gen_sft -j 1
+cargo build --release --bin gen_data -j 1
 
 # 然后运行
-cargo run --release --bin gen_sft -- --count 500 --out sft_small.jsonl
+cargo run --release --bin gen_data -- --count 500 --out sft_small.jsonl
 ```
 
 ---
@@ -1311,7 +1311,7 @@ cargo run --release --bin gen_sft -- --count 500 --out sft_small.jsonl
 cargo build --release -j 1
 
 # 2. 生成数据（保存到 data 目录）
-cargo run --release --bin gen_sft -- --count 200 --out sft_quick.jsonl
+cargo run --release --bin gen_data -- --count 200 --out sft_quick.jsonl
 
 # 3. 超快速训练（结果自动保存到 tmp 目录）
 cargo run --bin train -- --ultra-quick --sft-sample --backend cpu --artifact-dir .\tmp\test_all_in_one --no-progress

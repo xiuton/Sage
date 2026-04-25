@@ -161,7 +161,7 @@ cargo run --release --bin train -- ... > train.log 2>&1
 1) 先做小规模 smoke test，确认流程没问题：
 
 ```bash
-cargo run --release --bin gen_sft -- --out sft_smoke_200.jsonl --count 200 --seed 1
+cargo run --release --bin gen_data -- --out sft_smoke_200.jsonl --count 200 --seed 1
 cargo run --release --bin train -- --sft-jsonl sft_smoke_200.jsonl --sft-max-records 200 --artifact-dir ./tmp/smoke --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
 ```
 
