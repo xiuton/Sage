@@ -111,3 +111,32 @@ fn test_model_config_medium_30m() {
     assert_eq!(config.n_layers, 12);
     assert_eq!(config.n_heads, 12);
 }
+
+#[test]
+fn test_model_config_100m() {
+    let config = ModelConfig::small_100m();
+    assert_eq!(config.d_model, 1024);
+    assert_eq!(config.n_layers, 16);
+    assert_eq!(config.n_heads, 16);
+    assert_eq!(config.max_seq_len, 1024);
+    assert!(config.num_params() > 90_000_000);
+}
+
+#[test]
+fn test_model_config_1b() {
+    let config = ModelConfig::medium_1b();
+    assert_eq!(config.d_model, 1536);
+    assert_eq!(config.n_layers, 24);
+    assert_eq!(config.n_heads, 24);
+    assert!(config.num_params() > 900_000_000);
+}
+
+#[test]
+fn test_model_config_ro_fields() {
+    let config = ModelConfig::small_10m();
+    assert_eq!(config.pos_encoding_type, "learned");
+    assert_eq!(config.rope_theta, 10000.0);
+    assert!(!config.use_moe);
+    assert_eq!(config.num_experts, 8);
+    assert_eq!(config.top_k_experts, 2);
+}

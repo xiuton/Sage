@@ -1,3 +1,8 @@
+//! 配置管理模块
+//!
+//! 定义训练、推理、API 服务的完整配置结构，支持 JSON 序列化和环境变量覆盖。
+//! 核心类型：[TrainingConfig]、[InferenceConfig]、[ApiConfig]、[LRSchedulerConfig]。
+
 use serde::{Deserialize, Serialize};
 use crate::core::ModelConfig;
 use crate::training::DPOConfig;
@@ -28,6 +33,9 @@ pub struct TrainingConfig {
     pub eval_interval: usize,
     pub eval_steps: usize,
     pub use_amp: bool,
+    /// 混合精度模式: fp32(全精度), fp16(半精度), bf16(brain float)
+    #[serde(default = "default_precision")]
+    pub precision: String,
     pub use_lora: bool,
     pub lora_rank: usize,
     pub lora_alpha: f32,
@@ -44,7 +52,15 @@ pub struct TrainingConfig {
     pub gradient_accumulation_steps: usize,
     pub dpo_config: Option<DPOConfig>,
     pub lr_scheduler: Option<LRSchedulerConfig>,
+    /// 梯度裁剪
+    pub gradient_clip: Option<f64>,
+    /// QLoRA: 基础模型量化 + LoRA 微调
+    #[serde(default = "default_false")]
+    pub quantize_base: bool,
 }
+
+fn default_precision() -> String { "fp32".to_string() }
+fn default_false() -> bool { false }
 
 impl TrainingConfig {
     pub fn create(model: ModelConfig, optimizer: burn::optim::AdamConfig) -> Self {
@@ -61,6 +77,7 @@ impl TrainingConfig {
             eval_interval: 1000,
             eval_steps: 100,
             use_amp: false,
+            precision: "fp32".to_string(),
             use_lora: false,
             lora_rank: 8,
             lora_alpha: 16.0,
@@ -77,6 +94,8 @@ impl TrainingConfig {
             gradient_accumulation_steps: 1,
             dpo_config: None,
             lr_scheduler: None,
+            gradient_clip: None,
+            quantize_base: false,
         }
     }
     

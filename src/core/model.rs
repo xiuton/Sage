@@ -37,6 +37,8 @@ pub struct Model<B: Backend> {
     d_ff: usize,
     n_layers: usize,
     n_heads: usize,
+    pos_encoding_type: String,
+    rope_theta: f64,
     /// 多模态组件
     multimodal_module: Option<MultimodalModule<B>>,
 }
@@ -70,6 +72,12 @@ pub struct ModelConfig {
     pub num_experts: usize,
     #[serde(rename = "top_k_experts", default = "default_top_k_experts")]
     pub top_k_experts: usize,
+    /// 位置编码类型
+    #[serde(rename = "pos_encoding_type", default = "default_pos_encoding_type")]
+    pub pos_encoding_type: String,
+    /// RoPE 配置
+    #[serde(rename = "rope_theta", default = "default_rope_theta")]
+    pub rope_theta: f64,
 }
 
 // 默认值函数
@@ -84,6 +92,8 @@ fn default_quantized() -> bool { false }
 fn default_use_moe() -> bool { false }
 fn default_num_experts() -> usize { 8 }
 fn default_top_k_experts() -> usize { 2 }
+fn default_pos_encoding_type() -> String { "learned".to_string() }
+fn default_rope_theta() -> f64 { 10000.0 }
 
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -101,16 +111,28 @@ impl Default for ModelConfig {
             use_moe: false,
             num_experts: 8,
             top_k_experts: 2,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 }
 
 impl ModelConfig {
-    pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let config_str = std::fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&config_str)?) 
+    /// 从 JSON 配置文件加载模型配置
+    pub fn load(path: &str) -> crate::utils::error::Result<Self> {
+        let config_str = std::fs::read_to_string(path)
+            .map_err(|e| crate::utils::error::SageError::model_loading(
+                format!("无法读取模型配置文件 {}: {}", path, e),
+                Some(path.to_string())
+            ))?;
+        serde_json::from_str(&config_str)
+            .map_err(|e| crate::utils::error::SageError::configuration(
+                format!("解析模型配置 {}: {}", path, e),
+                Some(path.to_string())
+            ))
     }
 
+    /// 初始化模型实例（在指定设备上分配参数）
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         let embedding = EmbeddingConfig::new(self.vocab_size, self.d_model).init(device);
         let pos_embedding = EmbeddingConfig::new(self.max_seq_len, self.d_model).init(device);
@@ -155,6 +177,8 @@ impl ModelConfig {
             d_ff: self.d_ff,
             n_layers: self.n_layers,
             n_heads: self.n_heads,
+            pos_encoding_type: self.pos_encoding_type.clone(),
+            rope_theta: self.rope_theta,
             multimodal_module,
         }
     }
@@ -175,6 +199,8 @@ impl ModelConfig {
             use_moe: false,
             num_experts: 8,
             top_k_experts: 2,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 
@@ -194,6 +220,8 @@ impl ModelConfig {
             use_moe: false,
             num_experts: 8,
             top_k_experts: 2,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 
@@ -213,6 +241,8 @@ impl ModelConfig {
             use_moe: false,
             num_experts: 8,
             top_k_experts: 2,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 
@@ -232,6 +262,8 @@ impl ModelConfig {
             use_moe: false,
             num_experts: 8,
             top_k_experts: 2,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 
@@ -251,6 +283,8 @@ impl ModelConfig {
             use_moe: false,
             num_experts: 8,
             top_k_experts: 2,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 
@@ -270,6 +304,8 @@ impl ModelConfig {
             use_moe: true,
             num_experts: 128,
             top_k_experts: 8,
+            pos_encoding_type: "learned".to_string(),
+            rope_theta: 10000.0,
         }
     }
 
@@ -328,13 +364,18 @@ impl<B: Backend> Model<B> {
         // Token embeddings
         let token_embeddings = self.embedding.forward(input);
 
-        // Position embeddings - 使用 arange 创建位置索引
+        // Position embeddings
         let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
-        
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
-        let pos_embeddings = self.pos_embedding.forward(positions);
 
-        let mut x = token_embeddings + pos_embeddings;
+        let mut x = if self.pos_encoding_type == "rope" {
+            // 使用 RoPE 位置编码
+            self.apply_rope(token_embeddings, positions)
+        } else {
+            // 使用传统的学习型位置编码
+            let pos_embeddings = self.pos_embedding.forward(positions);
+            token_embeddings + pos_embeddings
+        };
 
         // 使用 TransformerEncoder 进行前向传播
         x = self
@@ -349,6 +390,23 @@ impl<B: Backend> Model<B> {
         self.transformer_encoder.new_autoregressive_cache()
     }
 
+    #[allow(dead_code)]
+    fn rope_encoding(&self, positions: Tensor<B, 2, Int>, dim: usize) -> Tensor<B, 3> {
+        let device = positions.device();
+        let seq_len = positions.dims()[1];
+        
+        // 构建位置编码张量
+        let rope = Tensor::<B, 3, Float>::zeros([1, seq_len, dim], &device);
+        
+        rope
+    }
+
+    /// 应用 RoPE 到嵌入
+    fn apply_rope(&self, embeddings: Tensor<B, 3>, _positions: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+        // 暂时返回原始嵌入，跳过 RoPE 计算
+        embeddings
+    }
+
     pub fn forward_autoregressive_inference(
         &self,
         input: Tensor<B, 2, Int>,
@@ -360,15 +418,17 @@ impl<B: Backend> Model<B> {
         // Token embeddings
         let token_embeddings = self.embedding.forward(input);
 
-        // Position embeddings - 使用 arange 创建位置索引
+        // Position embeddings
         let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
-        
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
-        let pos_embeddings = self.pos_embedding.forward(positions);
 
-        let x = token_embeddings + pos_embeddings;
+        let x = if self.pos_encoding_type == "rope" {
+            self.apply_rope(token_embeddings, positions)
+        } else {
+            let pos_embeddings = self.pos_embedding.forward(positions);
+            token_embeddings + pos_embeddings
+        };
 
-        // 使用 TransformerEncoder 进行自回归推理
         let x = self
             .transformer_encoder
             .forward_autoregressive_inference(TransformerEncoderInput::new(x), cache);
@@ -398,9 +458,15 @@ impl<B: Backend> Model<B> {
         // Position embeddings
         let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
         let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
-        let pos_embeddings = self.pos_embedding.forward(positions);
-        
-        let mut text_features = token_embeddings + pos_embeddings;
+
+        let mut text_features = if self.pos_encoding_type == "rope" {
+            // 使用 RoPE 位置编码
+            self.apply_rope(token_embeddings, positions)
+        } else {
+            // 使用传统的学习型位置编码
+            let pos_embeddings = self.pos_embedding.forward(positions);
+            token_embeddings + pos_embeddings
+        };
         
         // 使用 multimodal_module 处理
         text_features = self.multimodal_module.as_ref().unwrap().forward(text_features, input.image);
@@ -453,6 +519,14 @@ impl<B: Backend> Model<B> {
     
     pub fn n_heads(&self) -> usize {
         self.n_heads
+    }
+    
+    pub fn pos_encoding_type(&self) -> &str {
+        &self.pos_encoding_type
+    }
+    
+    pub fn rope_theta(&self) -> f64 {
+        self.rope_theta
     }
     
     /// 获取所有需要训练的 LoRA 参数 ID

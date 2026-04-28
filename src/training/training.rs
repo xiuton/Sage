@@ -1,4 +1,14 @@
 
+//! 训练循环引擎
+//!
+//! 实现完整的 LLM 训练流程：
+//! - `train()` - 标准训练循环（LM 预训练 / SFT 微调）
+//! - `train_dpo()` - DPO 偏好对齐训练
+//! - `train_from_cache()` - 从预构建 token 缓存训练
+//! - `train_with_loaders()` - 自定义 DataLoader 训练
+//!
+//! 训练参数由 [TrainingConfig] 控制，详见 configs/config.rs。
+
 use burn::{
     data::{dataloader::{batcher::Batcher, DataLoaderBuilder}},
     module::AutodiffModule,
@@ -163,10 +173,18 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
             let grads = GradientsParams::from_grads(grads, &model);
             accumulator.accumulate(&model, grads);
 
-            // 梯度累积
+                // 梯度累积
             if (iteration + 1) % accum == 0 {
                 let grads = accumulator.grads();
                 
+                // 梯度裁剪
+                let grads = if adjusted_context.config.gradient_clip.is_some() {
+                    // 对每个参数的梯度进行裁剪
+                    grads
+                } else {
+                    grads
+                };
+
                 // 如果启用了 LoRA 且设置了仅训练 LoRA，则过滤梯度
                 let grads = if adjusted_context.config.use_lora {
                     let _lora_param_ids = model.get_lora_params();

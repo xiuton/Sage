@@ -33,19 +33,19 @@ cargo run --release --bin gen_data -- --out data/train.jsonl --count 1000 --web 
 训练命令（示例）：
 
 ```bash
-cargo run --release --bin train -- --corpus corpus_cn.txt --artifact-dir ./tmp/lm_cn --num-epochs 3 --max-seq-len 64
+cargo run --release --bin train -- --corpus corpus_cn.txt --output-dir ./tmp/lm_cn --num-epochs 3 --max-seq-len 64
 ```
 
 或目录模式（递归读取所有 `.txt` 文件）：
 
 ```bash
-cargo run --release --bin train -- --corpus-dir D:\data\lm_texts --artifact-dir ./tmp/lm_cn --num-epochs 3 --max-seq-len 64
+cargo run --release --bin train -- --corpus-dir D:\data\lm_texts --output-dir ./tmp/lm_cn --num-epochs 3 --max-seq-len 64
 ```
 
 当语料很大时建议启用 `--stream`：
 
 ```bash
-cargo run --release --bin train -- --stream --corpus-dir D:\data\lm_texts --artifact-dir ./tmp/lm_cn --num-epochs 3 --max-seq-len 64
+cargo run --release --bin train -- --stream --corpus-dir D:\data\lm_texts --output-dir ./tmp/lm_cn --num-epochs 3 --max-seq-len 64
 ```
 
 ### 1.2 拼接规则（目录模式）
@@ -68,19 +68,19 @@ cargo run --release --bin train -- --stream --corpus-dir D:\data\lm_texts --arti
 训练命令（示例）：
 
 ```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --num-epochs 3 --max-seq-len 64 --force --reset-tokenizer
+cargo run --release --bin train -- --sft-jsonl your_data.jsonl --output-dir ./tmp/sft_cn --num-epochs 3 --max-seq-len 64 --force --reset-tokenizer
 ```
 
 大 JSONL 建议启用 `--stream`（逐行读取并写入 token cache）：
 
 ```bash
-cargo run --release --bin train -- --stream --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --num-epochs 3 --max-seq-len 64 --force --reset-tokenizer
+cargo run --release --bin train -- --stream --sft-jsonl your_data.jsonl --output-dir ./tmp/sft_cn --num-epochs 3 --max-seq-len 64 --force --reset-tokenizer
 ```
 
 如果你希望“不落盘、边读边训”，可以使用 `--stream --stream-direct`（当前仅支持 SFT）：
 
 ```bash
-cargo run --release --bin train -- --stream --stream-direct --sft-jsonl your_data.jsonl --artifact-dir ./tmp/sft_cn --num-epochs 3 --max-seq-len 64 --force --reset-tokenizer
+cargo run --release --bin train -- --stream --stream-direct --sft-jsonl your_data.jsonl --output-dir ./tmp/sft_cn --num-epochs 3 --max-seq-len 64 --force --reset-tokenizer
 ```
 
 ### 2.2 支持的 schema
@@ -207,7 +207,7 @@ Sage 会把 SFT 数据转换成内部模板文本进行训练：
 ### 4.1 DPO 训练命令
 
 ```bash
-cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --artifact-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --output-dir ./tmp/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
 ```
 
 ### 4.2 DPO 数据格式
@@ -249,7 +249,7 @@ DPO 训练需要包含偏好信息的数据，每行一个 JSON 对象，包含�
 1) 只训练 200~1000 条记录：
 
 ```bash
-cargo run --release --bin train -- --sft-jsonl your_data.jsonl --sft-max-records 500 --artifact-dir ./tmp/sft_smoke --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
+cargo run --release --bin train -- --sft-jsonl your_data.jsonl --sft-max-records 500 --output-dir ./tmp/sft_smoke --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
 ```
 
 2) 用 chat 推理快速看输出是否“像人话”：

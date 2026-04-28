@@ -125,6 +125,10 @@ struct Args {
     #[arg(long, default_value = "./inference/configs/config_1B.json")]
     pub config_path: String,
 
+    /// 模型规模: default(从配置文件), 10m, 30m, 100m, 1b, 3b, 671b
+    #[arg(long, default_value = "default", value_name = "default|10m|30m|100m|1b|3b|671b")]
+    pub model_size: String,
+
     /// Training mode: general, code, math
     #[arg(long, default_value = "general", value_name = "general|code|math")]
     pub training_mode: String,
@@ -201,6 +205,18 @@ struct Args {
     /// 启用 LoRA 微调
     #[arg(long, default_value_t = false)]
     pub use_lora: bool,
+
+    /// 启用混合精度训练 (AMP)
+    #[arg(long)]
+    pub use_amp: Option<bool>,
+
+    /// 混合精度模式: fp32, fp16, bf16
+    #[arg(long, default_value = "fp32", value_name = "fp32|fp16|bf16")]
+    pub precision: Option<String>,
+
+    /// QLoRA: 对基础模型量化后，仅训练 LoRA 适配器
+    #[arg(long)]
+    pub quantize_base: Option<bool>,
 
     /// 启用文生图训练
     #[arg(long, default_value_t = false)]
@@ -922,8 +938,8 @@ fn main() {
         let lines: Vec<&str> = data_json.lines().filter(|l| !l.trim().is_empty()).collect();
         println!("共加载 {} 条训练数据", lines.len());
         
-        // 解析训练数据
         #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
         struct TrainingRecord {
             image_path: String,
             prompt: String,
@@ -1403,7 +1419,31 @@ fn main() {
 
     // 从配置文件加载模型配置
     println!("正在从配置文件加载模型配置: {}", args.config_path);
-    let mut model_config = ModelConfig::load(&args.config_path).expect("Failed to load model config");
+    let mut model_config = ModelConfig::load(&args.config_path)
+        .map_err(|e| format!("加载模型配置失败: {}", e))
+        .expect("Failed to load model config");
+
+    // 根据 --model-size 覆盖模型规模
+    if args.model_size != "default" {
+        println!("覆盖模型规模为: {}", args.model_size);
+        let vocab_size = model_config.vocab_size;
+        let max_seq_len = model_config.max_seq_len;
+        model_config = match args.model_size.as_str() {
+            "10m" => ModelConfig::small_10m(),
+            "30m" => ModelConfig::medium_30m(),
+            "100m" => ModelConfig::small_100m(),
+            "1b" => ModelConfig::medium_1b(),
+            "3b" => ModelConfig::large_3b(),
+            "671b" => ModelConfig::huge_671b(),
+            _ => {
+                eprintln!("未知的 --model-size: {}, 使用配置文件中的模型规模", args.model_size);
+                model_config
+            }
+        };
+        model_config.vocab_size = vocab_size;
+        model_config.max_seq_len = max_seq_len;
+        println!("模型参数总量: {}", model_config.num_params());
+    }
 
     // 更新动态参数
     model_config.vocab_size = tokenizer.vocab_size;
@@ -1585,6 +1625,18 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
         training_config.lora_rank = args.lora_rank;
         training_config.lora_alpha = args.lora_alpha;
 
+        // 混合精度 / QLoRA 配置
+        if args.use_amp.unwrap_or(false) {
+            training_config.precision = args.precision.clone().unwrap_or_else(|| "fp16".to_string());
+            println!("混合精度训练已启用: {}", training_config.precision);
+        }
+        training_config.quantize_base = args.quantize_base.unwrap_or(false);
+        if training_config.quantize_base && training_config.use_lora {
+            println!("QLoRA 模式: 基础模型量化 + LoRA 适配器训练");
+            println!("  - 量化模式: INT4");
+            println!("  - LoRA rank: {}, alpha: {}", args.lora_rank, args.lora_alpha);
+        }
+
         println!(
             "数据加载线程数（burn DataLoader workers）: {}",
             training_config.num_workers
@@ -1600,6 +1652,26 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
             if args.no_auto_vram {
                 println!("已禁用自动显存探测（--no-auto-vram），使用命令行 batch / seq / 梯度累积。");
+            } else if let Ok(saved_config) = std::env::var("SAGE_VRAM_CONFIG") {
+                // 从环境变量恢复探测结果（重启后的进程）
+                let parts: Vec<&str> = saved_config.split(':').collect();
+                if parts.len() >= 3 {
+                    let micro: usize = parts[0].parse().unwrap_or(1);
+                    let sl: usize = parts[1].parse().unwrap_or(64);
+                    let accum: usize = parts[2].parse().unwrap_or(1);
+
+                    training_config.batch_size = micro;
+                    model_config.max_seq_len = sl;
+                    training_config.model.max_seq_len = sl;
+                    training_config.gradient_accumulation_steps = accum;
+
+                    println!("");
+                    println!("🔄 使用上次探测结果（重启进程，WGPU 状态已清理）:");
+                    println!("  物理 batch = {}", micro);
+                    println!("  序列长度 = {}", sl);
+                    println!("  梯度累积 = {}", accum);
+                    println!("");
+                }
             } else {
                 println!(
                     "\n\
@@ -1614,56 +1686,98 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
                 println!("开始自动探测 GPU：对每组 (物理 batch, seq_len) 执行一步前向+反向…");
 
+                // 优化配置生成策略：使用更细粒度的搜索
                 let mut configs = Vec::new();
-                let mut seq_len = original_seq_len;
-                while seq_len >= 1 {
-                    let mut batch_size = effective_batch;
-                    loop {
-                        configs.push((batch_size, seq_len));
-                        if batch_size == 1 {
-                            break;
-                        }
-                        batch_size /= 2;
-                    }
-                    if seq_len == 1 {
-                        break;
-                    }
-                    seq_len /= 2;
+                
+                // 1. 从最小配置开始添加
+                configs.push((1, 16));
+                
+                // 2. 常用中等配置
+                configs.push((1, 32));
+                configs.push((2, 16));
+                configs.push((1, 48));
+                configs.push((2, 32));
+                configs.push((1, 64));
+                configs.push((2, 48));
+                configs.push((4, 16));
+                configs.push((2, 64));
+                configs.push((4, 32));
+                configs.push((4, 48));
+                
+                // 3. 用户指定的原始配置
+                configs.push((effective_batch, original_seq_len));
+                
+                // 去除重复，从小到大排序
+                configs.sort();
+                configs.dedup();
+                
+                println!("探测顺序（从小到大，共 {} 组配置）:", configs.len());
+                for (i, &(bs, sl)) in configs.iter().enumerate() {
+                    println!("  {}. batch={}, seq_len={}", i + 1, bs, sl);
                 }
+                println!("");
+                println!("💡 策略: 从最小配置开始，找到第一个成功的后继续尝试更大的配置");
+                println!("   一旦遇到失败（WGPU OOM），立即停止并采纳上一个成功配置");
+                println!("");
 
-                println!("尝试顺序（由大到小）: {} 组配置", configs.len());
+                // 使用 catch_unwind 包裹探测调用，以防 WGPU 清理时 panic
+                let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    probe_first_fitting_config::<Autodiff<B>>(
+                        &device,
+                        &training_config.model,
+                        &configs,
+                    )
+                }));
 
-                let found = probe_first_fitting_config::<Autodiff<B>>(
-                    &device,
-                    &training_config.model,
-                    &configs,
-                );
+                // 如果 probe 本身 panic 了，也尝试用 None 处理
+                let found = match found {
+                    Ok(result) => result,
+                    Err(_) => {
+                        eprintln!("⚠️ 显存探测过程中发生内部错误（WGPU 状态异常）");
+                        None
+                    }
+                };
 
                 match found {
                     Some((micro, sl)) => {
-                        let micro_usize: usize = micro as usize;
-                        let accum = effective_batch.saturating_add(micro_usize - 1) / micro_usize.max(1);
-                        let accum = accum.max(1);
-                        let effective_approx = micro_usize.saturating_mul(accum);
+                        // 应用安全系数：探测只跑前向+反向，正式训练还有 Adam 优化器
+                        // （额外 ~2x 参数量的动量/速度状态），因此同时收缩 batch 和 seq_len
+                        let safe_micro = (micro / 2).max(1);
+                        let safe_sl = (sl / 2).max(16);
+                        let safe_accum =
+                            effective_batch.saturating_add(safe_micro - 1) / safe_micro.max(1);
+                        let safe_accum = safe_accum.max(1);
+                        let safe_effective = safe_micro.saturating_mul(safe_accum);
 
-                        training_config.batch_size = micro;
-                        model_config.max_seq_len = sl;
-                        training_config.model.max_seq_len = sl;
-                        training_config.gradient_accumulation_steps = accum;
+                        println!("");
+                        println!("==========================================");
+                        println!(
+                            "🎯 探测到最佳配置: batch={}, seq_len={}",
+                            micro, sl
+                        );
+                        println!(
+                            "   （安全配置: batch={}, seq_len={}, 梯度累积={}, 等效 batch ≈ {}）",
+                            safe_micro, safe_sl, safe_accum, safe_effective
+                        );
+                        println!("==========================================");
+                        println!("");
+                        println!("⚠️  WGPU 探测期间可能发生 OOM，设备状态需要重置");
+                        println!("🔄 正在自动重启训练进程（使用探测到的配置）...");
+                        println!("");
 
-                        println!("");
-                        println!("🎯 找到合适的显存配置！");
-                        println!("==========================================");
-                        println!("  物理 batch = {}", micro);
-                        println!("  序列长度 = {}", sl);
-                        println!("  梯度累积 = {}", accum);
-                        println!("  等效 batch ≈ {}", effective_approx);
-                        println!("==========================================");
-                        println!("");
-                        println!("💡 显存探测阶段已完成，即将进入正式训练...");
-                        println!("🔥 接下来将显示 Burn 训练 TUI 和完整的 epoch 训练日志");
-                        println!("⏳ 正在准备数据加载器，请稍候...");
-                        println!("");
+                        let exe = std::env::current_exe()
+                            .expect("无法获取当前可执行文件路径");
+                        let args: Vec<String> = std::env::args().collect();
+
+                        let mut cmd = std::process::Command::new(&exe);
+                        cmd.args(&args[1..]);
+                        cmd.env(
+                            "SAGE_VRAM_CONFIG",
+                            format!("{}:{}:{}", safe_micro, safe_sl, safe_accum),
+                        );
+
+                        let status = cmd.status().expect("重启训练进程失败");
+                        std::process::exit(status.code().unwrap_or(0));
                     }
                     None => {
                         eprintln!(

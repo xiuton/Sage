@@ -1,3 +1,10 @@
+//! 分词器模块
+//!
+//! 提供字符级和 BPE（Byte-Pair Encoding）两种分词器实现。
+//! - [Tokenizer::new] - 从文本构建字符级分词器
+//! - [Tokenizer::new_bpe] - 从文本构建 BPE 分词器
+//! - [Tokenizer::load] / [Tokenizer::save] - 序列化读写
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 

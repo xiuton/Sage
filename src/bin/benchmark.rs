@@ -80,6 +80,8 @@ fn main() {
                 stop_sequences: Vec::new(),
                 use_kv_cache: true,
                 streaming: false,
+                beam_size: 1,
+                beam_penalty: 0.0,
             };
             
             let response = generate(&*model_guard, &tokenizer, &args.prompt, &options, &device);
@@ -111,6 +113,8 @@ fn main() {
                 stop_sequences: Vec::new(),
                 use_kv_cache: true,
                 streaming: false,
+                beam_size: 1,
+                beam_penalty: 0.0,
             };
             
             let response = generate(&*model_guard, &tokenizer, &args.prompt, &options, &device);

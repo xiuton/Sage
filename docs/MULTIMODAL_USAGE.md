@@ -185,7 +185,7 @@ API 服务器在启动时会加载 LLM 模型，同时提供 LLM 对话和多模
 
 ```bash
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 ```
@@ -199,7 +199,7 @@ cargo run --release --features="api" --bin api_server -- `
 **启动日志示例：**
 ```
 [INFO] api_server: 正在启动API服务器...
-[INFO] api_server: 模型目录: ./models/sage_model_formal
+[INFO] api_server: 模型目录: ./models/lm_100m
 [INFO] api_server: 端口: 8000
 [INFO] api_server: 找到tokenizer，加载中...
 [INFO] api_server: Tokenizer加载成功
@@ -261,7 +261,7 @@ curl -X POST http://localhost:8000/api/v1/images/generate `
 ```bash
 # 1. 启动 API 服务器（需要 LLM 模型文件）
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 
@@ -282,7 +282,7 @@ curl -X POST http://localhost:8000/api/v1/images/generate `
   }'
 ```
 
-**前置条件**：确保 LLM 模型目录（`./models/sage_model_formal`）包含：
+**前置条件**：确保 LLM 模型目录（`./models/lm_100m`）包含：
 - `tokenizer.json` - 分词器文件
 - `model.mpk` - LLM 模型权重文件
 

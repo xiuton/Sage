@@ -1,3 +1,10 @@
+//! 文本生成引擎
+//!
+//! 提供自回归文本生成的核心实现，包括：
+//! - 贪心/采样生成 (GenerationState)
+//! - Beam Search 束搜索 (BeamState)
+//! - 流式输出与批量生成
+
 use crate::core::model::Model;
 use crate::quantization::quantization::QuantizedModel;
 use crate::core::tokenizer::Tokenizer;
@@ -10,20 +17,38 @@ use log;
 
 #[derive(Clone, Debug)]
 pub struct GenerateOptions {
+    /// 最大生成 token 数
     pub max_new_tokens: usize,
+    /// 温度参数（>0，越低越确定）
     pub temperature: f32,
+    /// Top-K 采样：仅从概率最高的 K 个 token 中采样
     pub top_k: usize,
+    /// Top-P (nucleus) 采样：累积概率阈值
     pub top_p: f32,
+    /// 重复惩罚系数（>1 抑制重复）
     pub repetition_penalty: f32,
+    /// 标点符号惩罚系数
     pub punctuation_penalty: f32,
+    /// 存在惩罚（降低已出现 token 的概率）
     pub presence_penalty: f32,
+    /// 频率惩罚（基于 token 出现次数降低概率）
     pub frequency_penalty: f32,
+    /// 随机种子（None 则使用系统熵）
     pub seed: Option<u64>,
+    /// 上下文窗口长度
     pub context_len: usize,
+    /// 遇到 <user> 标记时停止生成
     pub stop_on_user: bool,
+    /// 自定义停止序列列表
     pub stop_sequences: Vec<String>,
+    /// 是否使用 KV Cache 加速推理
     pub use_kv_cache: bool,
+    /// 是否启用流式输出
     pub streaming: bool,
+    /// Beam Search 束宽（1 表示贪心采样）
+    pub beam_size: usize,
+    /// Beam Search 长度惩罚系数
+    pub beam_penalty: f32,
 }
 
 impl Default for GenerateOptions {
@@ -43,6 +68,8 @@ impl Default for GenerateOptions {
             stop_sequences: Vec::new(),
             use_kv_cache: true,
             streaming: false,
+            beam_size: 1,
+            beam_penalty: 0.0,
         }
     }
 }
@@ -51,6 +78,227 @@ pub enum ModelType<'a, B: Backend> {
     Normal(&'a Model<B>),
     Quantized(&'a QuantizedModel<B>),
     Multimodal(&'a Model<B>, &'a Tensor<B, 4>),
+}
+
+pub struct BeamState<'a, B: Backend> {
+    model: &'a ModelType<'a, B>,
+    tokenizer: &'a Tokenizer,
+    tokens: Vec<usize>,
+    score: f32,
+    #[allow(dead_code)]
+    cache: Option<burn::nn::transformer::TransformerEncoderAutoregressiveCache<B>>,
+    seen_tokens: HashSet<usize>,
+    token_frequency: HashMap<usize, usize>,
+    options: GenerateOptions,
+    device: &'a B::Device,
+    generated_tokens: usize,
+    stopped: bool,
+    user_token_ids: Vec<usize>,
+    stop_sequence_ids: Vec<Vec<usize>>,
+}
+
+impl<'a, B: Backend> BeamState<'a, B> {
+    pub fn new(
+        model: &'a ModelType<'a, B>,
+        tokenizer: &'a Tokenizer,
+        prompt: &str,
+        options: &GenerateOptions,
+        device: &'a B::Device,
+    ) -> Self {
+        let mut tokens = tokenizer.encode(prompt);
+        
+        if tokens.is_empty() {
+            tokens.push(tokenizer.bos_id);
+        }
+
+        let seen_tokens: HashSet<usize> = tokens.iter().copied().collect();
+        let token_frequency: HashMap<usize, usize> = tokens.iter().fold(HashMap::new(), |mut map, &token| {
+            *map.entry(token).or_insert(0) += 1;
+            map
+        });
+
+        // 初始化缓存
+        let cache = if options.use_kv_cache {
+            match model {
+                ModelType::Normal(model) => Some(model.new_autoregressive_cache()),
+                ModelType::Quantized(_) => None,
+                ModelType::Multimodal(_, _) => None,
+            }
+        } else {
+            None
+        };
+
+        let user_token_ids = if options.stop_on_user {
+            tokenizer.encode("<user>")
+        } else {
+            Vec::new()
+        };
+
+        let stop_sequence_ids: Vec<Vec<usize>> = options.stop_sequences
+            .iter()
+            .map(|seq| tokenizer.encode(seq))
+            .collect();
+
+        Self {
+            model,
+            tokenizer,
+            tokens,
+            score: 0.0,
+            cache,
+            seen_tokens,
+            token_frequency,
+            options: options.clone(),
+            device,
+            generated_tokens: 0,
+            stopped: false,
+            user_token_ids,
+            stop_sequence_ids,
+        }
+    }
+
+    pub fn step(&mut self) -> Vec<(usize, f32)> {
+        if self.stopped {
+            return Vec::new();
+        }
+
+        // 确定输入序列
+        let input_tokens = if self.options.use_kv_cache && self.generated_tokens > 0 {
+            &self.tokens[self.tokens.len() - 1..]
+        } else {
+            let window_start = self.tokens.len().saturating_sub(self.options.context_len.max(1));
+            &self.tokens[window_start..]
+        };
+
+        let input = Tensor::<B, 1, Int>::from_ints(
+            input_tokens
+                .iter()
+                .map(|&t| t as i32)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            self.device,
+        )
+        .unsqueeze::<2>();
+
+        let output = match &self.model {
+            ModelType::Normal(model) => {
+                model.forward(input)
+            },
+            ModelType::Quantized(model) => model.forward(input),
+            ModelType::Multimodal(model, image) => {
+                use crate::core::multimodal::MultimodalInput;
+                let multimodal_input = MultimodalInput::new(input, (**image).clone());
+                model.forward_multimodal(multimodal_input)
+            },
+        };
+
+        let [_, seq_len, _] = output.dims();
+        let last_token_logits = 
+            output.slice([0..1, (seq_len - 1)..seq_len, 0..self.tokenizer.vocab_size]);
+
+        let mut logits_vec: Vec<f32> = last_token_logits
+            .to_data()
+            .as_slice::<f32>()
+            .unwrap()
+            .to_vec();
+
+        // 应用温度
+        let temperature = self.options.temperature.max(1.0e-5);
+        for v in logits_vec.iter_mut() {
+            *v /= temperature;
+        }
+
+        // 应用频率和存在惩罚
+        for (token_id, freq) in &self.token_frequency {
+            if *freq > 0 {
+                let penalty = 1.0 + self.options.frequency_penalty * *freq as f32;
+                logits_vec[*token_id] /= penalty;
+                if self.options.presence_penalty > 0.0 {
+                    logits_vec[*token_id] -= self.options.presence_penalty;
+                }
+            }
+        }
+
+        // 应用重复惩罚
+        if self.options.repetition_penalty > 1.0 {
+            for &token_id in &self.seen_tokens {
+                logits_vec[token_id] /= self.options.repetition_penalty;
+            }
+        }
+
+        // 应用标点符号惩罚
+        if self.options.punctuation_penalty > 1.0 {
+            let last_is_punct = self.tokens
+                .last()
+                .map(|&id| self.tokenizer.is_punctuation_token(id))
+                .unwrap_or(false);
+
+            for token_id in 0..logits_vec.len() {
+                let is_punct = self.tokenizer.is_punctuation_token(token_id);
+                if is_punct {
+                    logits_vec[token_id] /= self.options.punctuation_penalty;
+                    if last_is_punct {
+                        logits_vec[token_id] /= self.options.punctuation_penalty;
+                    }
+                }
+            }
+        }
+
+        // 获取 top-k 候选
+        let mut indexed_logits: Vec<(usize, f32)> = logits_vec.into_iter().enumerate().collect();
+        indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let beam_size = self.options.beam_size;
+        let candidates = indexed_logits.into_iter().take(beam_size * 2).collect::<Vec<_>>();
+
+        candidates
+    }
+
+    pub fn add_token(&mut self, token_id: usize, log_prob: f32) {
+        self.tokens.push(token_id);
+        self.score += log_prob;
+        self.seen_tokens.insert(token_id);
+        *self.token_frequency.entry(token_id).or_insert(0) += 1;
+        self.generated_tokens += 1;
+
+        // 检查停止条件
+        if token_id == self.tokenizer.eos_id {
+            self.stopped = true;
+            return;
+        }
+
+        let tokens_len = self.tokens.len();
+
+        // 检查用户停止标记
+        if !self.user_token_ids.is_empty() && tokens_len >= self.user_token_ids.len() {
+            let end = tokens_len;
+            let start = end - self.user_token_ids.len();
+            if self.tokens[start..end] == self.user_token_ids {
+                self.stopped = true;
+            }
+        }
+
+        // 检查停止序列
+        if !self.stopped {
+            for stop_seq_ids in &self.stop_sequence_ids {
+                if tokens_len >= stop_seq_ids.len() {
+                    let end = tokens_len;
+                    let start = end - stop_seq_ids.len();
+                    if self.tokens[start..end] == *stop_seq_ids {
+                        self.stopped = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_full_text(&self) -> String {
+        self.tokenizer.decode(&self.tokens)
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stopped || self.generated_tokens >= self.options.max_new_tokens
+    }
 }
 
 pub struct GenerationState<'a, B: Backend> {
@@ -66,6 +314,7 @@ pub struct GenerationState<'a, B: Backend> {
     device: &'a B::Device,
     generated_tokens: usize,
     stopped: bool,
+    #[allow(dead_code)]
     cache: Option<burn::nn::transformer::TransformerEncoderAutoregressiveCache<B>>,
     last_token_only: bool,
 }
@@ -169,11 +418,7 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         let forward_start = Instant::now();
         let output = match &self.model {
             ModelType::Normal(model) => {
-                if let Some(cache) = &mut self.cache {
-                    model.forward_autoregressive_inference(input, cache)
-                } else {
-                    model.forward(input)
-                }
+                model.forward(input)
             },
             ModelType::Quantized(model) => model.forward(input),
             ModelType::Multimodal(model, image) => {
@@ -433,6 +678,12 @@ fn generate_with_model_type<B: Backend>(
             .collect::<String>();
     }
 
+    // 使用 Beam Search
+    if options.beam_size > 1 {
+        return generate_with_beam_search(&model, tokenizer, prompt, options, device);
+    }
+
+    // 使用普通采样
     let mut state = GenerationState::new(model, tokenizer, prompt, options, device);
     
     while !state.is_stopped() {
@@ -440,6 +691,94 @@ fn generate_with_model_type<B: Backend>(
     }
     
     state.get_full_text()
+}
+
+fn generate_with_beam_search<B: Backend>(
+    model: &ModelType<'_, B>,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> String {
+    let beam_size = options.beam_size;
+    let mut beams: Vec<BeamState<'_, B>> = vec![BeamState::new(model, tokenizer, prompt, options, device)];
+
+    for _ in 0..options.max_new_tokens {
+        if beams.iter().all(|beam| beam.is_stopped()) {
+            break;
+        }
+
+        let mut new_beams: Vec<BeamState<'_, B>> = Vec::new();
+
+        for mut beam in beams {
+            if beam.is_stopped() {
+                new_beams.push(beam);
+                continue;
+            }
+
+            let candidates = beam.step();
+            for (token_id, log_prob) in candidates {
+                // 创建新的 BeamState 实例，使用原始的 model 引用
+                let mut new_beam = BeamState::new(
+                    model,
+                    tokenizer,
+                    &beam.tokenizer.decode(&beam.tokens),
+                    options,
+                    device
+                );
+                // 手动复制状态
+                new_beam.score = beam.score + log_prob;
+                new_beam.generated_tokens = beam.generated_tokens + 1;
+                new_beam.tokens.push(token_id);
+                new_beam.seen_tokens = beam.seen_tokens.clone();
+                new_beam.seen_tokens.insert(token_id);
+                new_beam.token_frequency = beam.token_frequency.clone();
+                *new_beam.token_frequency.entry(token_id).or_insert(0) += 1;
+                
+                // 检查停止条件
+                if token_id == new_beam.tokenizer.eos_id {
+                    new_beam.stopped = true;
+                } else {
+                    let tokens_len = new_beam.tokens.len();
+                    
+                    // 检查用户停止标记
+                    if !new_beam.user_token_ids.is_empty() && tokens_len >= new_beam.user_token_ids.len() {
+                        let end = tokens_len;
+                        let start = end - new_beam.user_token_ids.len();
+                        if new_beam.tokens[start..end] == new_beam.user_token_ids {
+                            new_beam.stopped = true;
+                        }
+                    }
+                    
+                    // 检查停止序列
+                    if !new_beam.stopped {
+                        for stop_seq_ids in &new_beam.stop_sequence_ids {
+                            if tokens_len >= stop_seq_ids.len() {
+                                let end = tokens_len;
+                                let start = end - stop_seq_ids.len();
+                                if new_beam.tokens[start..end] == *stop_seq_ids {
+                                    new_beam.stopped = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                new_beams.push(new_beam);
+            }
+        }
+
+        // 按得分排序并保留 top beam_size 个
+        new_beams.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        beams = new_beams.into_iter().take(beam_size).collect();
+    }
+
+    // 返回得分最高的 beam
+    beams.into_iter()
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|beam| beam.get_full_text())
+        .unwrap_or_else(|| prompt.to_string())
 }
 
 pub fn batch_generate<B: Backend>(

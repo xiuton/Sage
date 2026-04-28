@@ -167,7 +167,7 @@ API 服务器在启动时会加载 LLM 模型，同时提供 LLM 对话和多模
 
 ```bash
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 ```

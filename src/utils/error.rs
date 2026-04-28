@@ -144,6 +144,12 @@ impl From<serde_json::Error> for SageError {
     }
 }
 
+impl From<String> for SageError {
+    fn from(s: String) -> Self {
+        SageError::configuration(s, None::<String>)
+    }
+}
+
 pub type Result<T> = std::result::Result<T, SageError>;
 
 // 便捷的错误创建函数

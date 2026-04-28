@@ -1,8 +1,7 @@
-use sage::utils::common::{arg_value, get_unique_file_path};
+use sage::utils::common::get_unique_file_path;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json::json;
 use std::{
-    env,
     fs::File,
     io::{BufWriter, Write},
     path::PathBuf,

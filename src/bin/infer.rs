@@ -105,6 +105,8 @@ impl Args {
             stop_sequences: self.stop_sequence.clone(),
             use_kv_cache: true,
             streaming: self.stream || self.terminal || self.interactive,
+            beam_size: 1,
+            beam_penalty: 0.0,
         }
     }
 }

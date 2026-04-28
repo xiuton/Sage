@@ -367,3 +367,72 @@ fn test_performance_integration() {
         assert_eq!(output.dims(), [2, 8, 100]);
     }
 }
+
+#[test]
+fn test_generate_options_defaults() {
+    use sage::generation::GenerateOptions;
+    let opts = GenerateOptions::default();
+    assert_eq!(opts.max_new_tokens, 100);
+    assert_eq!(opts.temperature, 1.0);
+    assert_eq!(opts.top_k, 50);
+    assert_eq!(opts.top_p, 0.9);
+    assert_eq!(opts.repetition_penalty, 1.0);
+    assert_eq!(opts.beam_size, 1);
+    assert_eq!(opts.beam_penalty, 0.0);
+    assert!(opts.use_kv_cache);
+    assert!(!opts.streaming);
+}
+
+#[test]
+fn test_generate_options_beam_search() {
+    use sage::generation::GenerateOptions;
+    let opts = GenerateOptions {
+        beam_size: 4,
+        beam_penalty: 0.5,
+        ..GenerateOptions::default()
+    };
+    assert_eq!(opts.beam_size, 4);
+    assert_eq!(opts.beam_penalty, 0.5);
+}
+
+#[test]
+fn test_training_config_validation() {
+    use sage::configs::config::TrainingConfig;
+    use sage::core::model::ModelConfig;
+    
+    let config = TrainingConfig {
+        model: ModelConfig::small_10m(),
+        batch_size: 4,
+        num_epochs: 1,
+        lr: 1e-4,
+        max_seq_len: 64,
+        gradient_accumulation_steps: 1,
+        num_workers: 0,
+        no_progress: true,
+        distributed: false,
+        devices: vec![],
+        dpo_config: None,
+        lr_scheduler: None,
+        use_lora: false,
+        lora_rank: 8,
+        lora_alpha: 16.0,
+        gradient_clip: Some(1.0),
+    };
+    
+    assert_eq!(config.batch_size, 4);
+    assert_eq!(config.num_epochs, 1);
+    assert_eq!(config.gradient_clip, Some(1.0));
+    assert!(!config.use_lora);
+}
+
+#[test]
+fn test_model_config_parameter_count() {
+    let small = ModelConfig::small_10m();
+    let medium = ModelConfig::medium_30m();
+    let large = ModelConfig::small_100m();
+    
+    assert!(small.num_params() < medium.num_params());
+    assert!(medium.num_params() < large.num_params());
+    assert!(small.num_params() > 5_000_000);
+    assert!(small.num_params() < 20_000_000);
+}

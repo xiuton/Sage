@@ -96,11 +96,13 @@ fn run_training_step_once<B: AutodiffBackend>(
 
 /// 按顺序尝试多组 `(batch_size, seq_len)`。
 ///
-/// - **相同 `seq_len` 时复用同一套模型**，避免每组都 `init`（减少 WGPU 重复编译 / 长时间无输出）。
-/// - 每次打印后立即 `flush`，避免看起来像「卡住」。
-/// - 成功时打印明确提示并返回该组配置。
+/// - Configs 必须按**从小到大排序**，函数将从最小配置开始尝试。
+/// - **失败即停**：一旦某个配置失败（WGPU OOM），WGPU 状态被破坏，立即停止探测。
+/// - **返回最佳成功配置**：即失败前最后一个成功的配置。
+/// - **相同 seq_len 时复用模型**，减少 WGPU 重复编译。
 ///
-/// 注意：部分 GPU 驱动在 OOM 时直接 abort 进程而无法被 `catch_unwind` 捕获。
+/// 注意：WGPU OOM 会破坏设备状态，`catch_unwind` 只能捕获 Rust panic，
+/// 无法恢复 WGPU 内部状态，因此失败后必须停止探测。
 #[allow(unused_assignments)]
 pub fn probe_first_fitting_config<B: AutodiffBackend>(
     device: &B::Device,
@@ -109,6 +111,7 @@ pub fn probe_first_fitting_config<B: AutodiffBackend>(
 ) -> Option<(usize, usize)> {
     let mut cached_seq: Option<usize> = None;
     let mut model: Option<Model<B>> = None;
+    let mut best_config: Option<(usize, usize)> = None;
 
     for &(batch_size, seq_len) in configs {
         print_flush(&format!("  尝试: 物理 batch = {}, seq_len = {} …", batch_size, seq_len));
@@ -118,20 +121,35 @@ pub fn probe_first_fitting_config<B: AutodiffBackend>(
             continue;
         }
 
-        if cached_seq != Some(seq_len) || model.is_none() {
+        let need_new_model = cached_seq != Some(seq_len) || model.is_none();
+        if need_new_model {
             print_flush(&format!(
                 "     （seq_len={}：正在构建模型；WGPU 首次可能编译 shader，需等待一段时间属正常）",
                 seq_len
             ));
+            drop(model.take());
+            cached_seq = None;
+
             let mut cfg = model_config.clone();
             cfg.max_seq_len = seq_len;
-            let m = {
+
+            let init_result = {
                 let _hb = ProbeHeartbeat::start();
-                cfg.init::<B>(device)
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cfg.init::<B>(device)
+                }))
             };
-            drop(model.take());
-            model = Some(m);
-            cached_seq = Some(seq_len);
+
+            match init_result {
+                Ok(m) => {
+                    model = Some(m);
+                    cached_seq = Some(seq_len);
+                }
+                Err(_) => {
+                    print_flush("  ✗ 模型构建失败（WGPU 状态异常），停止探测");
+                    break;
+                }
+            }
         }
 
         print_flush("     执行一步前向+反向（显存探测，非 Learner 训练循环）…");
@@ -144,17 +162,51 @@ pub fn probe_first_fitting_config<B: AutodiffBackend>(
 
         if step_ok {
             print_flush(&format!(
-                "  ✓ 成功: 物理 batch = {}, seq_len = {} — 一步训练（前向+反向）已完成。",
+                "  ✓ 成功: batch={}, seq_len={}",
                 batch_size, seq_len
             ));
-            print_flush("  🎯 找到合适的显存配置，即将进入正式训练阶段...");
-            print_flush("  💡 接下来将显示 Burn 训练 TUI 和完整的 epoch 训练日志");
-            return Some((batch_size, seq_len));
+            best_config = Some((batch_size, seq_len));
+        } else {
+            print_flush(&format!(
+                "  ✗ 失败: batch={}, seq_len={} — 达到显存上限，停止探测",
+                batch_size, seq_len
+            ));
+            break;
         }
-        print_flush("  ✗ 失败（OOM、panic 或错误），尝试更小配置…");
-        drop(model.take());
-        cached_seq = None;
     }
+
+    if let Some((batch_size, seq_len)) = best_config {
+        // 强制遗忘模型，避免 Drop 时 WGPU 已损坏导致 panic
+        // 内存会泄漏，但进程即将重启，因此可接受
+        if let Some(m) = model.take() {
+            std::mem::forget(m);
+        }
+
+        print_flush("");
+        print_flush("==========================================");
+        print_flush(&format!(
+            "🎯 显存探测完成！最佳配置: batch={}, seq_len={}",
+            batch_size, seq_len
+        ));
+        print_flush("==========================================");
+        return Some((batch_size, seq_len));
+    }
+
+    print_flush("");
+    print_flush("==========================================");
+    print_flush("⚠️ 显存探测失败：连最小配置都无法在 GPU 上运行");
+    print_flush("==========================================");
+    print_flush(&format!(
+        "模型参数总量: {}（约 {:.1}M）",
+        model_config.num_params(),
+        model_config.num_params() as f64 / 1_000_000.0
+    ));
+    print_flush("建议：");
+    print_flush("  1. 使用更小的模型（--model-size 10m 或 30m）");
+    print_flush("  2. 使用 CPU 后端训练（--backend cpu）");
+    print_flush("  3. 手工设置参数并跳过探测（--no-auto-vram --batch-size 1 --max-seq-len 16）");
+    print_flush("==========================================");
+
     None
 }
 

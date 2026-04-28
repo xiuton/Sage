@@ -58,7 +58,7 @@ cargo run --release --bin train -- [OPTIONS]
 
 ### 1.2 常用示例
 
-> 说明：当前 `train` 实际参数以代码为准，核心输出参数是 `--output-dir`，学习率参数是 `--learning-rate`，模型规格通过 `--config-path` 指定；旧文档里的 `--artifact-dir`、`--lr`、`--model-size` 属历史写法。
+> 说明：当前 `train` 实际参数以代码为准，核心输出参数是 `--output-dir`，学习率参数是 `--learning-rate`。通过 `--config-path` 指定基础配置，用 `--model-size` 覆盖模型规模。
 
 **A. 目录语料训练（续写 LM - 预训练）**
 
@@ -66,27 +66,25 @@ cargo run --release --bin train -- [OPTIONS]
 cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./models/lm_cn --num-epochs 5 --max-seq-len 64
 ```
 
-**A4. 分布式训练（权重同步）**
+**A1. GPU 训练（自动显存探测）**
 
 ```bash
-cargo run --release --bin train -- --distributed --devices gpu:0,gpu:1 --sft-jsonl data.jsonl
+cargo run --release --bin train -- --corpus-dir ./corpus --output-dir ./models/lm_gpu --num-epochs 1 --max-seq-len 64 --batch-size 4 --backend gpu
 ```
-当前实现了基础的分布式权重平均与同步逻辑，支持多设备协同训练。
+GPU 训练会自动进行显存探测：从最小配置 (batch=1, seq_len=16) 开始尝试，找到显存不溢出的最大配置，探测成功后自动重启进程以清理 WGPU 状态。
 
-**A5. LoRA 轻量化微调**
+**A2. 选择模型规模**
 
 ```bash
-cargo run --release --bin train -- --use-lora --lora-rank 8 --lora-alpha 16 --sft-jsonl data.jsonl --output-dir ./models/lora_model
+# 100M 参数模型（推荐 8GB 显存 GPU）
+cargo run --release --bin train -- --config-path ./inference/configs/config_1B.json --model-size 100m --corpus-dir ./corpus --output-dir ./models/lm_100m --num-epochs 1 --max-seq-len 64 --batch-size 4 --backend gpu
+
+# 30M 参数模型（适合较小 GPU / CPU 训练）
+cargo run --release --bin train -- --config-path ./inference/configs/config_1B.json --model-size 30m --corpus-dir ./corpus --output-dir ./models/lm_30m  --num-epochs 1 --max-seq-len 64 --batch-size 4 --backend gpu
 ```
-LoRA 模式下仅训练低秩矩阵，可大幅降低显存占用。
+`--model-size` 可选值：`default`, `10m`, `30m`, `100m`, `1b`, `3b`, `671b`
 
-**A6. DPO偏好对齐训练**
-
-```bash
-cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --output-dir ./models/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
-```
-
-**A2. 目录语料训练（限制读取大小 + 快速验证 - 预训练）**
+**A2b. 目录语料训练（限制读取大小 + 快速验证 - 预训练）**
 
 ```bash
 cargo run --release --bin train -- --corpus-dir D:\data\cn_texts --output-dir ./models/lm_cn_quick --num-epochs 1 --max-seq-len 64 --max-bytes 10000000 --force --reset-tokenizer
@@ -102,6 +100,45 @@ cargo run --release --bin train -- --corpus-dir ./corpus --max-bytes 1000000000 
 
 ```bash
 cargo run --release --bin train -- --corpus-dir ./corpus --output-dir ./models/lm_basic --num-epochs 1 --max-seq-len 64 --batch-size 4
+```
+
+**A4a. 分布式训练（权重同步）**
+
+```bash
+cargo run --release --bin train -- --distributed --devices gpu:0,gpu:1 --sft-jsonl data.jsonl
+```
+
+**A5. LoRA 轻量化微调**
+
+```bash
+cargo run --release --bin train -- --use-lora --lora-rank 8 --lora-alpha 16 --sft-jsonl data.jsonl --output-dir ./models/lora_model
+```
+LoRA 模式下仅训练低秩矩阵，可大幅降低显存占用。
+
+**A5b. QLoRA（量化基础模型 + LoRA）**
+
+```bash
+cargo run --release --bin train -- --use-lora --quantize-base --lora-rank 8 --lora-alpha 16 --sft-jsonl data.jsonl --output-dir ./models/qlora_model
+```
+QLoRA 将基础模型量化（INT4）后冻结，仅训练 LoRA 适配器，可将 4B 模型训练显存从 ~8GB 降至 ~1.5GB。
+
+**A6. DPO偏好对齐训练**
+
+```bash
+cargo run --release --bin train -- --dpo --dpo-data dpo_data.jsonl --output-dir ./models/dpo_model --dpo-beta 0.1 --dpo-kl-weight 0.1 --num-epochs 30 --batch-size 16 --backend gpu --force
+```
+
+**A7. 混合精度训练**
+
+```bash
+cargo run --release --bin train -- --use-amp --precision fp16 --corpus-dir ./corpus --output-dir ./models/lm_amp --backend gpu
+```
+`--precision` 可选值：`fp32`（默认）、`fp16`、`bf16`。FP16 可节省约 50% 显存。
+
+**A8. 禁用自动显存探测**
+
+```bash
+cargo run --release --bin train -- --no-auto-vram --batch-size 2 --max-seq-len 32 --backend gpu --corpus-dir ./corpus --output-dir ./models/lm_manual
 ```
 
 ---
@@ -125,13 +162,13 @@ cargo run --bin infer -- --prompt "你好，请介绍一下自己" --num-tokens 
 **B. 使用特定模型**
 
 ```bash
-cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --prompt "写一首关于春天的诗"
+cargo run --bin infer -- --model-dir ./models/lm_100m --use-best --prompt "写一首关于春天的诗"
 ```
 
 **C. GPU 加速推理**
 
 ```bash
-cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --prompt "解释量子计算" --backend gpu
+cargo run --bin infer -- --model-dir ./models/lm_100m --use-best --prompt "解释量子计算" --backend gpu
 ```
 
 ### 2.2 交互式对话
@@ -139,19 +176,19 @@ cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --pro
 **A. 交互模式**
 
 ```bash
-cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --interactive
+cargo run --bin infer -- --model-dir ./models/lm_100m --use-best --interactive
 ```
 
 **B. 终端模式（推荐）**
 
 ```bash
-cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --terminal
+cargo run --bin infer -- --model-dir ./models/lm_100m --use-best --terminal
 ```
 
 **C. Chat 模式**
 
 ```bash
-cargo run --bin infer -- --model-dir ./models/sage_model_formal --use-best --chat --prompt "你好"
+cargo run --bin infer -- --model-dir ./models/lm_100m --use-best --chat --prompt "你好"
 ```
 
 ### 2.3 采样参数调优
@@ -360,19 +397,19 @@ cargo run --release --bin api_server -- [OPTIONS]
 ```bash
 # 基本启动（CPU 后端）
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --port 8000
 
 # 使用 GPU 后端
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 
 # 启用 API Key 认证
 $env:SAGE_API_KEY="your-secret-key"
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --port 8000 `
     --max-concurrent 4
 ```

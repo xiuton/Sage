@@ -30,19 +30,19 @@
 ```bash
 # 基本启动（CPU 后端）
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --port 8000
 
 # 使用 GPU 后端
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 
 # 启用 API Key 认证
 $env:SAGE_API_KEY="your-secret-key"
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --port 8000 `
     --max-concurrent 4
 ```
@@ -87,7 +87,7 @@ curl http://localhost:8000/health
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--model-dir` | 模型目录路径 | `./models/sage_model_formal` |
+| `--model-dir` | 模型目录路径 | `./models/lm_100m` |
 | `--port` | 服务器端口 | 8000 |
 | `--backend` | 推理后端（`cpu` 或 `gpu`） | cpu |
 | `--log-level` | 日志级别（`error`, `warn`, `info`, `debug`, `trace`） | info |

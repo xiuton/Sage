@@ -162,7 +162,7 @@ cargo run --release --bin train -- ... > train.log 2>&1
 
 ```bash
 cargo run --release --bin gen_data -- --out sft_smoke_200.jsonl --count 200 --seed 1
-cargo run --release --bin train -- --sft-jsonl sft_smoke_200.jsonl --sft-max-records 200 --artifact-dir ./tmp/smoke --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
+cargo run --release --bin train -- --sft-jsonl sft_smoke_200.jsonl --sft-max-records 200 --output-dir ./tmp/smoke --num-epochs 1 --max-seq-len 64 --force --reset-tokenizer
 ```
 
 2) 降低 `--max-bytes` 或减少 `--num-epochs`
@@ -289,7 +289,7 @@ cargo run --release --bin train -- --quick-dev [其他参数]
 ### 示例
 
 ```bash
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./tmp/quick_test --quick-dev --force --reset-tokenizer
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --output-dir ./tmp/quick_test --quick-dev --force --reset-tokenizer
 ```
 
 ### 注意事项
@@ -317,37 +317,119 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 
 ### 解决方案
 
-1) 降低显存压力（推荐按顺序尝试）：
+1) **优先依赖自动显存探测**（默认开启）：
+
+GPU 训练会自动从小配置开始探测 (batch=1, seq_len=16 → 逐步增大)，找到不 OOM 的最佳配置后自动重启进程重置 WGPU 状态。探测包含 50% 安全系数，为 Adam 优化器留出额外显存。
+
+2) 手动降低显存压力：
 
 - 降低 `--batch-size`（例如 8/16）
 - 降低 `--max-seq-len`（例如 64/128）
 - 不要开启 `--fast`（会提高 batch/worker/lr）
 - 保持等效 batch：例如把 `--batch-size 8` 改为 `--batch-size 2 --gradient-accumulation 4`
 
-2) 用 `--no-auto-vram` 手动控制（避免探测阶段的自动改参）：
+3) 用 `--no-auto-vram` 手动控制（跳过探测阶段的自动调整）：
 
 ```bash
 cargo run --release --bin train -- --backend gpu --no-auto-vram --batch-size 2 --gradient-accumulation 4 [其他参数]
 ```
 
-3) 使用 CPU 后端验证流程：
+4) 使用更小的模型规模：
+
+```bash
+cargo run --release --bin train -- --model-size 30m --backend gpu [其他参数]
+```
+
+5) 使用 CPU 后端验证流程：
 
 ```bash
 cargo run --release --bin train -- --backend cpu [其他参数]
 ```
 
-4) 更新到最新代码并重新编译：
+6) 更新到最新代码并重新编译。
 
-- 已优化 batch 构建方式，减少 GPU 端临时分配，缓解该类 OOM。
+7) 如果出现 `Loss: NaN`
 
-5) 如果出现 `Loss: NaN`
-
-- 优先检查训练数据是否包含模板标签（`<assistant>...</assistant>` 等）作为普通文本：SFT 训练会在内部套模板，并基于模板的 `<assistant>` 区间生成 loss mask；把标签混进内容会干扰 mask 与训练目标。
-- 先做 smoke test：`--sft-max-records 200 --num-epochs 1 --max-seq-len 64`，观察是否仍然在前几个 batch 就 NaN。
+- 优先检查训练数据是否包含模板标签作为普通文本
+- 先做 smoke test：`--sft-max-records 200 --num-epochs 1 --max-seq-len 64`
 
 ---
 
-## 12) 分布式训练（`--distributed`）说明
+## 12) Windows：`STATUS_STACK_OVERFLOW` 推理/训练崩溃
+
+### 现象
+
+```text
+thread 'main' has overflowed its stack
+error: process didn't exit successfully (exit code: 0xc00000fd, STATUS_STACK_OVERFLOW)
+```
+
+### 原因
+
+Windows debug 模式默认栈空间仅 **1MB**，加载大模型（100M+ 参数）时 `spawn_blocking` 等异步调用或深层递归张量操作会耗尽栈空间。
+
+### 解决方案
+
+已通过 `.cargo/config.toml` 全局配置栈空间为 8MB：
+
+```toml
+[target.'cfg(windows)']
+rustflags = ["-C", "link-args=/STACK:8388608"]
+```
+
+重建项目即可生效：
+
+```bash
+cargo clean
+cargo build --release --bin infer
+```
+
+如果仍遇到栈溢出（如加载 1B+ 模型），可手动增加到 16MB：
+
+```bash
+$env:RUSTFLAGS="-C link-args=/STACK:16777216"
+cargo build --release --bin infer
+```
+
+---
+
+## 13) Rust build scripts 构建失败（沙箱环境）
+
+### 现象
+
+```text
+called `Result::unwrap()` on an `Err` value: Os { code: 0, kind: Uncategorized, message: "操作成功完成。" }
+error: failed to run custom build command for `proc-macro2` / `serde` / `quote`
+```
+
+### 原因
+
+Trae 沙箱环境中 `cargo clean` 后重新编译时，build scripts（proc-macro crates）调用 `process::Command` 受沙箱限制，`cargo check` 或 `cargo build` 会报错。
+
+### 解决方案
+
+- 不要手动执行 `cargo clean`，使用 `cargo build --lib --release` 增量编译
+- 如已执行 `cargo clean`：重启终端 / IDE 即可恢复
+
+---
+
+## 14) 推理输出全是标点/乱码
+
+### 现象
+
+模型推理输出为大量碎片标点（。，；、），无连贯语义。
+
+### 原因
+
+模型训练不足——epoch 太少或数据量太小，Perplexity 仍然很高（>100）。
+
+### 解决方案
+
+- 增加训练数据量和 epoch
+- 降低 temperature（0.5~0.7）使输出更保守
+- 使用 `--model-size` 选择更适配硬件的规模
+
+## 15) 分布式训练（`--distributed`）说明
 
 当前版本的分布式训练属于**框架/占位实现**：CLI 参数已提供，但未完成真实的多 GPU 训练与权重/梯度同步。
 

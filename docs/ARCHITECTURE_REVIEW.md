@@ -11,7 +11,7 @@
 | **核心模型** | `core/model.rs`：TransformerEncoder + LM head；多档 `ModelConfig`；`core/kv_cache.rs`：推理加速 KV 缓存；`core/multimodal.rs`：CNN 视觉编码器与门控融合层 | CNN 编码器比简单投影更具特征提取能力；门控融合支持动态权衡图文权重。 |
 | **分词** | `core/tokenizer.rs`：字符级 + BPE | 符合小模型与大一点实验需求；BPE 对中文更实用。 |
 | **数据** | `data/data.rs`：LM/SFT 数据集、mask、Batcher、**自动化图像加载流水线** | 自动处理 `image_path` 字段，实现端到端多模态训练。 |
-| **训练** | `training/training.rs`：自实现训练循环；`streaming.rs` 大语料；`vram_probe.rs` GPU 预检；`distributed.rs` 分布式权重同步；`dpo.rs` DPO偏好对齐 | 实现了基础的分布式同步逻辑，支持多卡/多设备协同。 |
+| **训练** | `training/training.rs`：自实现训练循环；`streaming.rs` 大语料；`vram_probe.rs` GPU 预检（从小到大探测 + OOM 自动重启）；`distributed.rs` 分布式权重同步；`dpo.rs` DPO偏好对齐；`precision.rs` 混合精度训练 (FP16/BF16)；`qlora.rs` QLoRA (INT4 + LoRA) | 实现了完整的混合精度基础设施（损失缩放、动态 scale 调整）和 QLoRA 训练显存估算。 |
 | **推理** | `inference/generation.rs`、`bin/infer.rs` | 包含高级终端交互模式 (`--terminal`) 与多模态推理。 |
 | **量化** | `quantization/`：支持 INT8/INT4 模拟量化推理 | 可在不改变硬件的前提下评估量化对精度和模型体积的影响。 |
 | **LoRA** | `training/lora.rs` | **已深度集成到训练路径**；支持仅微调低秩矩阵，大幅节省资源。 |
@@ -23,7 +23,7 @@
 ## 2. 实现与设计上需注意的点
 
 1. **显存探测 vs 正式训练**  
-   探测只做 **单次** `step`，不进入完整训练循环；行为与心理预期需在文档中对齐（见 [TRAINING_PHASES.md](TRAINING_PHASES.md)）。
+   探测从最小配置 `(batch=1, seq_len=16)` 开始逐步增大，找到不 OOM 的最佳配置后自动重启进程（通过 `SAGE_VRAM_CONFIG` 环境变量传递配置），确保正式训练在干净的 WGPU 状态下运行。探测包含 50% 安全系数（batch/seq_len 各减半），为 Adam 优化器额外显存留出空间。行为与心理预期需在文档中对齐（见 [TRAINING_PHASES.md](TRAINING_PHASES.md)）。
 
 2. **`--training-mode`（general/code/math）** | **Training_mode**  
    主要影响 **内置样例/模板与部分数据过滤路径**，不是独立的第二套优化器或损失；命名上易让人以为「互斥训练算法」，实为 **场景化默认值/模板**。文档与 README 已逐步澄清；代码注释可继续写清。
@@ -113,8 +113,10 @@ docs/            # 文档说明
 
 - **流式数据**：小模型也会遇到「语料大、内存紧」。  
 - **BPE + SFT mask**：小模型要中文可用性时很关键。  
-- **显存探测 + 梯度累积**：在消费级 GPU 上训 10M～30M 仍实用。  
+- **显存探测 + 梯度累积**：在消费级 GPU 上训 10M～30M 仍实用（已增强为从小到大探测 + 自动重启 + 安全系数）。  
 - **checkpoint / best_model**：实验管理基础能力。
+- **混合精度训练 + QLoRA**：在 8GB 消费级 GPU 上训 100M 模型时显存节省效果显著。
+- **SageError 统一错误处理**：结构化错误信息含上下文和修复建议，提升调试效率。
 
 ---
 

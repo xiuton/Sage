@@ -584,22 +584,6 @@ async fn chat_completions_handler(
         ));
     }
 
-    let model = state.llm_model.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: "model_not_available".to_string(),
-            message: "LLM模型未加载，请检查model.mpk文件是否存在".to_string(),
-        }),
-    ))?;
-
-    let tokenizer = state.llm_tokenizer.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: "tokenizer_not_available".to_string(),
-            message: "Tokenizer未加载，请检查tokenizer.json文件是否存在".to_string(),
-        }),
-    ))?;
-
     let formatted_prompt = format_messages_to_prompt(&req.messages);
 
     let options = GenerateOptions {
@@ -618,11 +602,6 @@ async fn chat_completions_handler(
         use_kv_cache: true,
         streaming: false,
     };
-
-    let device = NdArrayDevice::Cpu;
-    let model_guard = model.get_model(&device);
-    let model_guard = model_guard.lock().unwrap();
-    let tokenizer_ref: &Tokenizer = tokenizer;
 
     let start_time = std::time::Instant::now();
 
@@ -644,15 +623,10 @@ async fn chat_completions_handler(
     //     return Ok::<_, (StatusCode, Json<ErrorResponse>)>(response.into_response());
     // }
 
-    let response_text =
-        sage::inference::generate(&*model_guard, tokenizer_ref, &formatted_prompt, &options, &device);
-    let reply = extract_assistant_reply(&response_text);
+    let (reply, prompt_tokens, completion_tokens) = perform_llm_inference(&state, &formatted_prompt, options)?;
     let duration_ms = start_time.elapsed().as_millis();
 
     log::info!("推理完成，耗时: {}ms", duration_ms);
-
-    let prompt_tokens = formatted_prompt.len() / 4;
-    let completion_tokens = reply.len() / 4;
 
     let choice = ChatCompletionChoice {
         index: 0,
@@ -780,22 +754,6 @@ async fn completions_handler(
 ) -> Result<Json<GenerateResponse>, (StatusCode, Json<ErrorResponse>)> {
     log::info!("收到Completions请求: prompt长度={}", req.prompt.len());
 
-    let model = state.llm_model.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: "model_not_available".to_string(),
-            message: "LLM模型未加载，请检查model.mpk文件是否存在".to_string(),
-        }),
-    ))?;
-
-    let tokenizer = state.llm_tokenizer.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: "tokenizer_not_available".to_string(),
-            message: "Tokenizer未加载，请检查tokenizer.json文件是否存在".to_string(),
-        }),
-    ))?;
-
     let formatted_prompt = format!("<user>\n{}\n</user>\n<assistant>", req.prompt);
 
     let options = GenerateOptions {
@@ -815,13 +773,7 @@ async fn completions_handler(
         streaming: false,
     };
 
-    let device = NdArrayDevice::Cpu;
-    let model_guard = model.get_model(&device);
-    let model_guard = model_guard.lock().unwrap();
-    let tokenizer_ref: &Tokenizer = tokenizer;
-
-    let response = sage::inference::generate(&*model_guard, tokenizer_ref, &formatted_prompt, &options, &device);
-    let reply = extract_assistant_reply(&response);
+    let (reply, _, _) = perform_llm_inference(&state, &formatted_prompt, options)?;
 
     Ok(Json(GenerateResponse {
         prompt: req.prompt,
@@ -1199,14 +1151,11 @@ async fn training_start_handler(
         for epoch in 1..=task_num_epochs {
             if cancel_flag.load(Ordering::Relaxed) {
                 let mut tasks = task_state.training_tasks.write().unwrap();
-                if let Some(task) = tasks.get_mut(&task_id_for_handle) {
-                    task.status.status = "cancelled".to_string();
-                    task.status.message = format!("Cancelled at epoch {}", epoch);
-                }
-                let _ = task_state.broadcast_tx.send(ServerEvent::TrainingUpdate {
-                    id: task_id_for_handle.clone(),
-                    progress: (epoch as f32 / task_num_epochs as f32) * 100.0,
+                update_training_task_status(&mut tasks, &task_id_for_handle, |status| {
+                    status.status = "cancelled".to_string();
+                    status.message = format!("Cancelled at epoch {}", epoch);
                 });
+                broadcast_training_update(&task_state.broadcast_tx, task_id_for_handle.clone(), (epoch as f32 / task_num_epochs as f32) * 100.0);
                 return;
             }
 
@@ -1221,34 +1170,27 @@ async fn training_start_handler(
 
             {
                 let mut tasks = task_state.training_tasks.write().unwrap();
-                if let Some(task) = tasks.get_mut(&task_id_for_handle) {
-                    task.status.current_epoch = epoch;
-                    task.status.progress_percent = progress_percent;
-                    task.status.loss = Some(avg_loss);
-                    task.status.message = format!("Epoch {}/{}, loss: {:.4}", epoch, task_num_epochs, avg_loss);
-                }
+                update_training_task_status(&mut tasks, &task_id_for_handle, |status| {
+                    status.current_epoch = epoch;
+                    status.progress_percent = progress_percent;
+                    status.loss = Some(avg_loss);
+                    status.message = format!("Epoch {}/{}, loss: {:.4}", epoch, task_num_epochs, avg_loss);
+                });
             }
 
-            let _ = task_state.broadcast_tx.send(ServerEvent::TrainingUpdate {
-                id: task_id_for_handle.clone(),
-                progress: progress_percent,
-            });
+            broadcast_training_update(&task_state.broadcast_tx, task_id_for_handle.clone(), progress_percent);
 
             log::info!("训练进度: epoch={}/{}, loss={:.4}, progress={:.1}%",
                 epoch, task_num_epochs, avg_loss, progress_percent);
         }
 
         let mut tasks = task_state.training_tasks.write().unwrap();
-        if let Some(task) = tasks.get_mut(&task_id_for_handle) {
-            task.status.status = "completed".to_string();
-            task.status.progress_percent = 100.0;
-            task.status.message = "Training completed successfully".to_string();
-        }
-
-        let _ = task_state.broadcast_tx.send(ServerEvent::TrainingUpdate {
-            id: task_id_for_handle.clone(),
-            progress: 100.0,
+        update_training_task_status(&mut tasks, &task_id_for_handle, |status| {
+            status.status = "completed".to_string();
+            status.progress_percent = 100.0;
+            status.message = "Training completed successfully".to_string();
         });
+        broadcast_training_update(&task_state.broadcast_tx, task_id_for_handle.clone(), 100.0);
 
         log::info!("训练任务完成: {}", task_id_for_handle);
     });
@@ -1590,6 +1532,65 @@ fn format_messages_to_prompt(messages: &[ChatMessage]) -> String {
 
     out.push_str("<assistant>");
     out
+}
+
+fn perform_llm_inference(
+    state: &AppState,
+    formatted_prompt: &str,
+    options: GenerateOptions,
+) -> Result<(String, usize, usize), (StatusCode, Json<ErrorResponse>)> {
+    let model = state.llm_model.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: "model_not_available".to_string(),
+            message: "LLM模型未加载，请检查model.mpk文件是否存在".to_string(),
+        }),
+    ))?;
+
+    let tokenizer = state.llm_tokenizer.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: "tokenizer_not_available".to_string(),
+            message: "Tokenizer未加载，请检查tokenizer.json文件是否存在".to_string(),
+        }),
+    ))?;
+
+    let device = NdArrayDevice::Cpu;
+    let model_guard = model.get_model(&device);
+    let model_guard = model_guard.lock().unwrap();
+    let tokenizer_ref: &Tokenizer = tokenizer;
+
+    let start_time = std::time::Instant::now();
+    let response_text =
+        sage::inference::generate(&*model_guard, tokenizer_ref, formatted_prompt, &options, &device);
+    let reply = extract_assistant_reply(&response_text);
+    let _duration_ms = start_time.elapsed().as_millis() as u64;
+
+    let prompt_tokens = formatted_prompt.len() / 4;
+    let completion_tokens = reply.len() / 4;
+
+    Ok((reply, prompt_tokens, completion_tokens))
+}
+
+fn update_training_task_status(
+    tasks: &mut std::sync::RwLockWriteGuard<'_, std::collections::HashMap<String, TrainingTask>>,
+    task_id: &str,
+    f: impl FnOnce(&mut TrainingStatus),
+) {
+    if let Some(task) = tasks.get_mut(task_id) {
+        f(&mut task.status);
+    }
+}
+
+fn broadcast_training_update(
+    broadcaster: &tokio::sync::broadcast::Sender<ServerEvent>,
+    task_id: String,
+    progress: f32,
+) {
+    let _ = broadcaster.send(ServerEvent::TrainingUpdate {
+        id: task_id,
+        progress,
+    });
 }
 
 fn extract_assistant_reply(full: &str) -> String {

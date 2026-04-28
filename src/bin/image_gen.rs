@@ -66,7 +66,7 @@ fn get_unique_filename(path: &str) -> String {
 }
 
 fn tensor_to_image_simple<B: Backend>(tensor: burn::Tensor<B, 4>) -> RgbImage {
-    let [batch, channels, height, width] = tensor.dims();
+    let [_, channels, height, width] = tensor.dims();
     let data = tensor.into_data();
     let values: Vec<f32> = data.to_vec().unwrap();
 

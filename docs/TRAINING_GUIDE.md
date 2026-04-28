@@ -52,13 +52,13 @@ cargo run --release --bin train -- --quick-dev --sft-sample --backend gpu --forc
 # 使用BPE分词器的正式训练
 cargo run --release --bin train -- `
     --sft-jsonl data/your_corpus.jsonl `
-    --artifact-dir ./models/your_model `
+    --output-dir ./models/your_model `
     --use-bpe `
     --bpe-vocab-size 20000 `
     --num-epochs 50 `
     --batch-size 32 `
     --max-seq-len 256 `
-    --lr 5e-5 `
+    --learning-rate 5e-5 `
     --backend gpu `
     --model-size 30m `
     --force
@@ -66,7 +66,7 @@ cargo run --release --bin train -- `
 
 **关键参数：**
 - `--sft-jsonl`：训练语料文件路径
-- `--artifact-dir`：模型保存目录
+- `--output-dir`：模型保存目录
 - `--use-bpe`：启用BPE分词器
 - `--bpe-vocab-size`：BPE词表大小（建议10000-50000）
 - `--model-size`：模型大小（10m/30m/100m/1b/3b/671b）
@@ -79,7 +79,7 @@ cargo run --release --bin train -- `
 # 继续训练
 cargo run --release --bin train -- `
     --sft-jsonl data/your_corpus.jsonl `
-    --artifact-dir ./models/your_model `
+    --output-dir ./models/your_model `
     --continue `
     --num-epochs 100 `
     --backend gpu
@@ -98,7 +98,7 @@ cargo run --release --bin train -- `
 cargo run --release --bin train -- `
     --dpo `
     --dpo-data data/dpo_data.jsonl `
-    --artifact-dir ./models/dpo_model `
+    --output-dir ./models/dpo_model `
     --dpo-beta 0.1 `
     --num-epochs 30 `
     --batch-size 16 `
@@ -136,7 +136,7 @@ cargo run --release --bin train -- `
     --lora-rank 8 `
     --lora-alpha 16 `
     --sft-jsonl data/your_corpus.jsonl `
-    --artifact-dir ./models/lora_model `
+    --output-dir ./models/lora_model `
     --backend gpu
 ```
 
@@ -465,13 +465,13 @@ Get-Content data/train_corpus.jsonl -Head 3
 # 步骤1：创建BPE分词器并开始训练
 cargo run --release --bin train -- `
     --sft-jsonl data/train_corpus.jsonl `
-    --artifact-dir ./models/large_model `
+    --output-dir ./models/large_model `
     --use-bpe `
     --bpe-vocab-size 30000 `
     --num-epochs 50 `
     --batch-size 32 `
     --max-seq-len 256 `
-    --lr 5e-5 `
+    --learning-rate 5e-5 `
     --backend gpu `
     --model-size 30m `
     --force `
@@ -517,10 +517,10 @@ cargo run --release --bin infer -- `
 **使用示例：**
 ```bash
 # 基础学习率调度器训练
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./models/sft_lr_scheduler --lr-scheduler --lr-max 0.0005 --lr-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --output-dir ./models/sft_lr_scheduler --learning-rate-scheduler --learning-rate-max 0.0005 --learning-rate-min 0.00001 --warmup-steps 500 --total-steps 10000 --use-bpe --num-epochs 50 --backend gpu
 
 # 学习率调度器 + 大模型 + GPU
-cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-dir ./models/sft_lr_scheduler_large --lr-scheduler --lr-max 0.0003 --lr-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu
+cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --output-dir ./models/sft_lr_scheduler_large --learning-rate-scheduler --learning-rate-max 0.0003 --learning-rate-min 0.000005 --warmup-steps 1000 --total-steps 50000 --use-bpe --bpe-vocab-size 10000 --model-size 30m --num-epochs 100 --batch-size 16 --max-seq-len 512 --backend gpu
 ```
 
 #### 1.2 固定学习率（不推荐）
@@ -554,19 +554,78 @@ cargo run --release --bin train -- --sft-jsonl sft_demo_5000.jsonl --artifact-di
 - **较小批量**：训练更快（每次迭代时间短），但梯度噪声大
 - **批量大小选择**：在GPU内存允许的情况下，尽量使用较大的批量
 
-**自动优化：**
-- 默认开启 GPU 显存探测（除非 `--no-auto-vram`）：会尝试一组 (batch, seq_len) 的“一步前向+反向”，自动寻找不 OOM 的配置。
-- 探测成功后可能会**降低**物理 `--batch-size` 或 `--max-seq-len`，并自动设置 `--gradient-accumulation` 以尽量保持等效 batch。
+**自动显存探测：**
+- 默认开启 GPU 显存探测（除非 `--no-auto-vram`）：从最小配置 `(batch=1, seq_len=16)` 开始尝试逐步增大，找到显存不溢出的最佳配置。
+- 探测成功后可能**降低**物理 `--batch-size` 或 `--max-seq-len`，并自动设置 `--gradient-accumulation` 以保持等效 batch。
+- 探测中包含 50% 安全系数（batch 和 seq_len 各减半），为 Adam 优化器留出额外显存。
+- 探测 OOM 后**自动重启进程**以重置 WGPU 状态，然后在全新进程中继续正式训练。
 
 ```bash
-# 调整批量大小
---batch-size 16
+# 启用自动显存探测（默认）
+--backend gpu
 
-# GPU 模式下推荐做法：
-# - 默认开启显存探测：可能把物理 batch/seq_len 调小，并自动设置梯度累积以保持等效 batch
-# - 如需完全手动：加 --no-auto-vram，并自行设置 --gradient-accumulation
---backend gpu --no-auto-vram --batch-size 2 --gradient-accumulation 4  # 等效 batch ≈ 8
+# 完全手动控制
+--no-auto-vram --batch-size 2 --gradient-accumulation 4  # 等效 batch ≈ 8
 ```
+
+### 2.5 混合精度训练（节省显存）
+
+Sage 支持 FP16 和 BF16 混合精度训练，可节省约 50% 显存：
+
+| 精度模式 | 显存节省 | 适用场景 |
+|----------|---------|---------|
+| FP32（默认） | 0% | 训练稳定性要求高 |
+| FP16 | ~50% | NVIDIA GPU（8GB-16GB） |
+| BF16 | ~50% | 支持 BF16 的 GPU（A100/H100） |
+
+**使用方式：**
+
+```bash
+# FP16 混合精度训练
+cargo run --release --bin train -- --use-amp --precision fp16 --backend gpu --corpus-dir ./corpus --output-dir ./models/lm_fp16
+
+# BF16 混合精度训练（需要支持 BF16 的 GPU）
+cargo run --release --bin train -- --use-amp --precision bf16 --backend gpu --corpus-dir ./corpus --output-dir ./models/lm_bf16
+```
+
+### 2.6 QLoRA 轻量化微调（极致显存节省）
+
+QLoRA 将基础模型量化（INT4）后冻结，仅训练 LoRA 适配器，训练显存可降至传统 Full-FT 的 1/5：
+
+| 模式 | 4B 模型显存 | 7B 模型显存 |
+|------|-----------|-----------|
+| Full-FT (FP32) | ~32 GB | ~56 GB |
+| LoRA | ~10 GB | ~18 GB |
+| **QLoRA (INT4)** | **~3 GB** | **~5 GB** |
+
+**使用方式：**
+
+```bash
+# QLoRA 训练：量化基础模型 + LoRA 适配器
+cargo run --release --bin train -- \
+    --use-lora --quantize-base --lora-rank 8 --lora-alpha 16 \
+    --sft-jsonl data/your_data.jsonl \
+    --output-dir ./models/qlora_model \
+    --backend gpu
+```
+
+QLoRA 会将基础模型的 `output_head` 层量化为 INT4 并冻结，训练时仅更新 LoRA 的 A/B 矩阵，大幅降低显存和计算量。
+
+### 2.7 模型规模选择
+
+使用 `--model-size` 参数覆盖配置文件的模型架构：
+
+```bash
+# 模型规模对比
+--model-size 10m    # ~10M 参数，轻量测试
+--model-size 30m    # ~30M 参数，CPU 可用
+--model-size 100m   # ~100M 参数，8GB GPU 推荐
+--model-size 1b     # ~1B 参数，24GB+ GPU
+--model-size 3b     # ~3B 参数，多卡 / 高端 GPU
+--model-size 671b   # ~671B 参数（MoE），存档配置
+```
+
+`--model-size` 会覆盖 JSON 配置文件中的模型结构参数，但保留 `vocab_size` 和 `max_seq_len`。不传则使用配置文件原始规模。
 
 ### 3. 序列长度调整
 
@@ -693,7 +752,7 @@ BLEU（Bilingual Evaluation Understudy）用于评估文本生成质量，比较
 # 使用验证集评估
 cargo run --release --bin train -- `
     --sft-jsonl data/train_corpus.jsonl `
-    --artifact-dir ./models/your_model `
+    --output-dir ./models/your_model `
     --continue `
     --num-epochs 1 `
     --backend gpu

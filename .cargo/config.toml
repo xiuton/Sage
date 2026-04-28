@@ -1,2 +1,6 @@
 [source.crates-io]
 registry = "sparse+https://crates.io/index/"
+
+# 增大 Windows 栈空间，避免加载模型时栈溢出（debug 默认 1MB → 8MB）
+[target.'cfg(windows)']
+rustflags = ["-C", "link-args=/STACK:8388608"]

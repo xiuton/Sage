@@ -180,7 +180,7 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample `
     --backend cpu `
-    --artifact-dir .\tmp\test_model_quick `
+    --output-dir .\tmp\test_model_quick `
     --no-progress
 
 # 验证训练产物
@@ -200,7 +200,7 @@ cargo run --bin train -- `
     --quick-dev `
     --sft-sample `
     --backend cpu `
-    --artifact-dir .\tmp\test_model_fast `
+    --output-dir .\tmp\test_model_fast `
     --model-size default `
     --no-progress
 
@@ -219,7 +219,7 @@ $TargetDir = Join-Path $env:LOCALAPPDATA "cargo-target\sage"
 
 cargo run --release --bin train --target-dir $TargetDir -- `
     --sft-jsonl .\data\sft_small.jsonl `
-    --artifact-dir .\tmp\sft_100m `
+    --output-dir .\tmp\sft_100m `
     --model-size 100m `
     --use-bpe `
     --bpe-vocab-size 10000 `
@@ -273,7 +273,7 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample `
     --backend cpu `
-    --artifact-dir .\tmp\test_10m `
+    --output-dir .\tmp\test_10m `
     --model-size 10m `
     --no-progress
 
@@ -288,10 +288,10 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample `
     --backend cpu `
-    --artifact-dir .\tmp\test_lr_scheduler `
-    --lr-scheduler `
-    --lr-max 0.0002 `
-    --lr-min 0.00005 `
+    --output-dir .\tmp\test_lr_scheduler `
+    --learning-rate-scheduler `
+    --learning-rate-max 0.0002 `
+    --learning-rate-min 0.00005 `
     --warmup-steps 50 `
     --total-steps 500 `
     --no-progress
@@ -318,7 +318,7 @@ New-Item -ItemType Directory -Path data\corpus -Force | Out-Null
 # 训练语言模型
 cargo run --bin train -- `
     --corpus-dir .\data\corpus `
-    --artifact-dir .\tmp\test_lm_pretrain `
+    --output-dir .\tmp\test_lm_pretrain `
     --num-epochs 1 `
     --max-seq-len 64 `
     --max-bytes 10000 `
@@ -335,7 +335,7 @@ Write-Host "✅ 目录语料训练测试完成！"
 
 cargo run --bin train -- `
     --corpus .\data\test_corpus.txt `
-    --artifact-dir .\tmp\test_corpus_train `
+    --output-dir .\tmp\test_corpus_train `
     --num-epochs 1 `
     --max-seq-len 64 `
     --backend cpu `
@@ -351,7 +351,7 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample `
     --backend gpu `
-    --artifact-dir .\tmp\test_gpu_train `
+    --output-dir .\tmp\test_gpu_train `
     --no-progress
 
 Write-Host "✅ GPU 后端训练测试完成！"
@@ -365,7 +365,7 @@ cargo run --bin train -- `
     --sft-sample `
     --fast `
     --backend cpu `
-    --artifact-dir .\tmp\test_fast_train `
+    --output-dir .\tmp\test_fast_train `
     --no-progress
 
 Write-Host "✅ 快速训练模式测试完成！"
@@ -379,7 +379,7 @@ cargo run --bin train -- `
     --sft-sample `
     --training-mode code `
     --backend cpu `
-    --artifact-dir .\tmp\test_code_mode `
+    --output-dir .\tmp\test_code_mode `
     --no-progress
 
 # 数学推理模式训练
@@ -388,7 +388,7 @@ cargo run --bin train -- `
     --sft-sample `
     --training-mode math `
     --backend cpu `
-    --artifact-dir .\tmp\test_math_mode `
+    --output-dir .\tmp\test_math_mode `
     --no-progress
 
 Write-Host "✅ 训练模式测试完成！"
@@ -507,7 +507,7 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample-messages `
     --backend cpu `
-    --artifact-dir .\tmp\test_messages_format `
+    --output-dir .\tmp\test_messages_format `
     --no-progress
 
 Write-Host "✅ 多轮对话格式测试完成！"
@@ -647,7 +647,7 @@ Write-Host "✅ 多模态功能未来测试方向说明完成！"
 #     --distributed `
 #     --devices gpu:0,gpu:1 `
 #     --backend gpu `
-#     --artifact-dir .\tmp\test_distributed `
+#     --output-dir .\tmp\test_distributed `
 #     --no-progress
 
 Write-Host "✅ 分布式训练测试（需要多 GPU 环境）！"
@@ -664,7 +664,7 @@ Write-Host "✅ 分布式训练测试（需要多 GPU 环境）！"
 cargo run --bin train -- `
     --dpo `
     --dpo-data .\data\dpo_demo.jsonl `
-    --artifact-dir .\tmp\test_dpo `
+    --output-dir .\tmp\test_dpo `
     --dpo-beta 0.1 `
     --dpo-kl-weight 0.1 `
     --num-epochs 10 `
@@ -692,7 +692,7 @@ cargo run --bin train -- `
     --use-bpe `
     --bpe-vocab-size 1000 `
     --backend cpu `
-    --artifact-dir .\tmp\test_bpe `
+    --output-dir .\tmp\test_bpe `
     --no-progress
 
 Write-Host "✅ BPE 分词器测试完成！"
@@ -705,7 +705,7 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample `
     --backend cpu `
-    --artifact-dir .\tmp\test_continue `
+    --output-dir .\tmp\test_continue `
     --continue `
     --num-epochs 1 `
     --no-progress
@@ -721,7 +721,7 @@ cargo run --bin train -- `
     --ultra-quick `
     --sft-sample `
     --backend cpu `
-    --artifact-dir .\tmp\test_checkpoint `
+    --output-dir .\tmp\test_checkpoint `
     --resume-epoch 1 `
     --num-epochs 1 `
     --no-progress
@@ -737,7 +737,7 @@ cargo run --bin train -- `
     --sft-sample `
     --stream `
     --backend cpu `
-    --artifact-dir .\tmp\test_stream `
+    --output-dir .\tmp\test_stream `
     --no-progress
 
 Write-Host "✅ 流式训练测试完成！"
@@ -1283,7 +1283,7 @@ cargo build --release -j 1
 ### 问题 4：找不到模型文件
 
 ```powershell
-# 解决方案：检查 artifact-dir 路径是否正确
+# 解决方案：检查 output-dir 路径是否正确
 Get-ChildItem .\tmp\
 ```
 
@@ -1314,7 +1314,7 @@ cargo build --release -j 1
 cargo run --release --bin gen_data -- --count 200 --out sft_quick.jsonl
 
 # 3. 超快速训练（结果自动保存到 tmp 目录）
-cargo run --bin train -- --ultra-quick --sft-sample --backend cpu --artifact-dir .\tmp\test_all_in_one --no-progress
+cargo run --bin train -- --ultra-quick --sft-sample --backend cpu --output-dir .\tmp\test_all_in_one --no-progress
 
 # 4. 推理测试
 cargo run --bin infer -- --model-dir .\tmp\test_all_in_one --use-best --prompt "测试成功了吗？" --num-tokens 50 --backend cpu

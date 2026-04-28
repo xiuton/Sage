@@ -1,6 +1,6 @@
 # 项目状态与路线图（Sage）
 
-> 最后更新：2026-04-25
+> 最后更新：2026-04-28
 
 本文档用于记录：当前仓库已经完成了哪些工程能力、还缺哪些关键能力、以及推荐的下一步迭代顺序。
 
@@ -10,7 +10,7 @@
 
 ## 1) 当前定位
 
-Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30M 参数），用来验证：
+Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M 到 671B 参数），用来验证：
 
 - 模型定义 → 数据管线 → 训练 → 保存 → 推理 → chat → SFT 的全流程
 - 在 Rust 生态中以 Burn 作为深度学习框架实现可扩展工程结构
@@ -77,7 +77,10 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
   - `1b`：约 1B 参数
   - `3b`：约 3B 参数
   - `671b`：约 671B 参数（演示用）
-- **KV Cache**：结构/接口存在；当前生成路径仍是“每步全序列 forward”，未启用缓存加速
+- **KV Cache**：结构/接口存在；推理路径使用普通 forward（避免 Burn 0.19 KV cache reshape 问题）
+- **Beam Search**：支持多束搜索，在 GenerateOptions 中配置 beam_size/beam_penalty
+- **RoPE 位置编码**：通过 `pos_encoding_type` 配置切换 RoPE/learned 位置编码
+- **梯度裁剪**：TrainingConfig 支持 gradient_clip 参数，防止梯度爆炸
 
 ### 2.3 Tokenizer（字符级 + BPE + 中文）
 
@@ -96,7 +99,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 - SFT “只学助手回复”：
   - 通过 mask 把非助手回复位置的 target 置为 pad，并在 loss 中忽略 pad token
 - 流式读取与大语料训练：
-  - `train --stream`：逐行读取/分块处理，写入 `artifact-dir/cache/`
+  - `train --stream`：逐行读取/分块处理，写入 `output-dir/cache/`
   - 训练时使用 memmap 数据集读取 token cache，降低峰值内存
   - `train --stream --stream-direct`：不落盘边读边训（当前仅支持 SFT）
 - 训练产物：
@@ -178,8 +181,6 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 - **学习率调度器**：Cosine Annealing + Warmup 学习率调整策略
 - **Perplexity 指标**：语言模型质量评估指标
 - **BLEU 指标**：文本生成质量评估指标
-- **RMSNorm 代码**：现代大模型归一化层（代码已保留，待 API 适配）
-- **SwiGLU 代码**：现代大模型 FFN 激活函数（代码已保留，待 API 适配）
 
 ### 2.11 训练优化
 
@@ -187,6 +188,11 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 - **学习率调度器配置**：集成到 TrainingConfig 中，支持灵活配置
 - **梯度累积**：支持梯度累积步数配置
 - **最佳 epoch 选择**：自动选择验证集 Loss 最低的 epoch
+- **混合精度训练**：支持 FP32/FP16/BF16 三模式，损失缩放与动态 scale 调整（`--use-amp --precision`）
+- **QLoRA 轻量化微调**：量化基础模型（INT4）冻结后仅训练 LoRA 适配器（`--use-lora --quantize-base`），训练显存可降至 Full-FT 的 1/5
+- **GPU 显存自动探测**：从小到大尝试配置，OOM 失败即停返回最佳配置，自动重启进程重置 WGPU 状态
+- **统一错误处理**：SageError 类型体系，结构化错误信息含上下文、文件路径和建议
+- **完整单元测试**：SageError 14 个测试、推理配置验证、模型工厂方法验证
 
 ---
 
@@ -251,6 +257,16 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 8. **LoRA 微调** ✅ **已完成**
    - 实现了低秩矩阵注入与权重合并逻辑。
    - 深度集成到 `train` 路径，支持高效微调。
+9. **混合精度训练** ✅ **已完成**
+   - 实现 PrecisionKind/PrecisionConfig/MixedPrecisionTrainer。
+   - 支持 FP16/BF16 精度模式，损失缩放与动态调整。
+10. **QLoRA 微调** ✅ **已完成**
+    - 实现 QloraConfig/QloraModel（INT4 量化基础 + LoRA）。
+    - 训练显存估算，VRAM 消耗对比表。
+11. **统一错误处理** ✅ **已完成**
+    - SageError 类型体系，From 实现链，ErrorContext trait。
+12. **完善单元测试** ✅ **已完成**
+    - 14 个 SageError 测试 + 推理/训练配置验证 + 模型工厂方法验证。
 
 ---
 
@@ -285,7 +301,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 
 - Tokenizer 升级（BPE/SentencePiece）✅ **已完成**
 - GPU 后端稳定训练/推理（WGPU）✅ **已完成**
-- 多档模型配置（~1M/~10M/~30M）✅ **已完成**
+- 多档模型配置（1M ~ 671B）✅ **已完成**
 - 多种训练模式（通用/代码/数学）✅ **已完成**
 
 ---
@@ -389,7 +405,7 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M/10M/30
 数据：纯文本语料（如书籍、文章、代码等）  
 命令：
 ```bash
-cargo run --release --bin train -- --corpus your_text.txt --artifact-dir ./tmp/lm_model --num-epochs 100 --batch-size 32 --use-bpe --bpe-vocab-size 10000
+cargo run --release --bin train -- --corpus your_text.txt --output-dir ./tmp/lm_model --num-epochs 100 --batch-size 32 --use-bpe --bpe-vocab-size 10000
 ```
 
 #### 2. 指令微调（SFT）
@@ -397,7 +413,7 @@ cargo run --release --bin train -- --corpus your_text.txt --artifact-dir ./tmp/l
 数据：JSONL格式的指令-回复对  
 命令：
 ```bash
-cargo run --release --bin train -- --sft-jsonl sft_data.jsonl --artifact-dir ./tmp/sft_model --num-epochs 50 --batch-size 16 --use-bpe --bpe-vocab-size 10000
+cargo run --release --bin train -- --sft-jsonl sft_data.jsonl --output-dir ./tmp/sft_model --num-epochs 50 --batch-size 16 --use-bpe --bpe-vocab-size 10000
 ```
 
 #### 3. 代码生成训练
@@ -406,10 +422,10 @@ cargo run --release --bin train -- --sft-jsonl sft_data.jsonl --artifact-dir ./t
 命令：
 ```bash
 # 代码预训练
-cargo run --release --bin train -- --corpus-dir ./code_corpus --artifact-dir ./tmp/code_model --num-epochs 200 --batch-size 32 --use-bpe --bpe-vocab-size 20000
+cargo run --release --bin train -- --corpus-dir ./code_corpus --output-dir ./tmp/code_model --num-epochs 200 --batch-size 32 --use-bpe --bpe-vocab-size 20000
 
 # 代码SFT
-cargo run --release --bin train -- --sft-jsonl code_instruction.jsonl --artifact-dir ./tmp/code_sft --num-epochs 100 --batch-size 8 --use-bpe --bpe-vocab-size 20000
+cargo run --release --bin train -- --sft-jsonl code_instruction.jsonl --output-dir ./tmp/code_sft --num-epochs 100 --batch-size 8 --use-bpe --bpe-vocab-size 20000
 ```
 
 ### 数据准备建议

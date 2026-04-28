@@ -442,7 +442,7 @@ API 服务器在启动时会加载 LLM 模型，同时提供 LLM 对话和多模
 
 ```bash
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 ```
@@ -485,7 +485,7 @@ curl -X POST http://localhost:8000/api/v1/images/generate `
 ```bash
 # 1. 启动 API 服务器（需要 LLM 模型文件）
 cargo run --release --features="api" --bin api_server -- `
-    --model-dir ./models/sage_model_formal `
+    --model-dir ./models/lm_100m `
     --backend gpu `
     --port 8000
 
