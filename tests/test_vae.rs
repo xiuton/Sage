@@ -1,8 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use burn::nn::{Conv2d, Conv2dConfig, BatchNorm, BatchNormConfig};
+    use burn::nn::conv::{Conv2d, Conv2dConfig};
+    use burn::nn::{BatchNorm, BatchNormConfig};
     use burn::prelude::*;
     use burn::nn::activation::Gelu;
+    use burn::backend::ndarray::NdArray;
 
     #[derive(Config, Debug)]
     pub struct VAEConfig {
@@ -95,7 +97,8 @@ mod tests {
 
     #[test]
     fn test_vae_encoder_output_shape() {
-        let device = Default::default();
+        use burn::backend::ndarray::NdArrayDevice;
+        let device = NdArrayDevice::Cpu;
         let config = VAEConfig {
             image_channels: 3,
             hidden_channels: 128,
@@ -103,18 +106,19 @@ mod tests {
             image_size: 64,
         };
 
-        let encoder = VAEEncoder::new(&config, &device);
+        let encoder: VAEEncoder<NdArray> = VAEEncoder::new(&config, &device);
         let input = Tensor::ones([1, 3, 64, 64], &device);
 
         let (mu, log_var) = encoder.forward(input);
 
-        assert_eq!(mu.dims(), &[1, 128, 4, 4]);
-        assert_eq!(log_var.dims(), &[1, 128, 4, 4]);
+        assert_eq!(mu.dims(), [1, 128, 4, 4]);
+        assert_eq!(log_var.dims(), [1, 128, 4, 4]);
     }
 
     #[test]
     fn test_vae_encoder_latent_dim_64() {
-        let device = Default::default();
+        use burn::backend::ndarray::NdArrayDevice;
+        let device = NdArrayDevice::Cpu;
         let config = VAEConfig {
             image_channels: 3,
             hidden_channels: 64,
@@ -122,12 +126,12 @@ mod tests {
             image_size: 64,
         };
 
-        let encoder = VAEEncoder::new(&config, &device);
+        let encoder: VAEEncoder<NdArray> = VAEEncoder::new(&config, &device);
         let input = Tensor::ones([2, 3, 64, 64], &device);
 
         let (mu, log_var) = encoder.forward(input);
 
-        assert_eq!(mu.dims(), &[2, 64, 4, 4]);
-        assert_eq!(log_var.dims(), &[2, 64, 4, 4]);
+        assert_eq!(mu.dims(), [2, 64, 4, 4]);
+        assert_eq!(log_var.dims(), [2, 64, 4, 4]);
     }
 }

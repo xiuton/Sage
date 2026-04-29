@@ -18,6 +18,7 @@ fn test_dpo_loss_calculator() {
         dropout: 0.1,
         quantized: false,
         multimodal: None,
+        ..Default::default()
     };
     
     let model = config.init::<Autodiff<NdArray>>(&device);
@@ -76,6 +77,7 @@ fn test_dpo_trainer() {
         dropout: 0.1,
         quantized: false,
         multimodal: None,
+        ..Default::default()
     };
     
     let model = config.init::<Autodiff<NdArray>>(&device);

@@ -605,9 +605,9 @@ impl<B: Backend> CrossAttention<B> {
     }
     
     fn combine_heads(&self, x: Tensor<B, 4>, batch_size: usize, seq_len: usize) -> Tensor<B, 3> {
-        let last_dim = x.dims()[2] * x.dims()[3];
+        let head_dim = x.dims()[1] * x.dims()[3];
         x.permute([0, 2, 1, 3])
-            .reshape([batch_size, seq_len, last_dim])
+            .reshape([batch_size, seq_len, head_dim])
     }
     
     fn softmax_last_dim(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {

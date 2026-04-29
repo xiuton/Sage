@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_precision_kind_parsing() {
-        use super::precision::PrecisionKind;
+        use crate::training::precision::PrecisionKind;
         assert_eq!(PrecisionKind::from_str("fp32"), PrecisionKind::FP32);
         assert_eq!(PrecisionKind::from_str("fp16"), PrecisionKind::FP16);
         assert_eq!(PrecisionKind::from_str("bf16"), PrecisionKind::BF16);
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_mixed_precision_trainer() {
-        use super::precision::{MixedPrecisionTrainer, PrecisionConfig, PrecisionKind};
+        use crate::training::precision::{MixedPrecisionTrainer, PrecisionConfig, PrecisionKind};
         let trainer = MixedPrecisionTrainer::new(PrecisionConfig::new(PrecisionKind::FP16));
         assert!(trainer.config.enabled);
         assert_eq!(trainer.loss_scale, 65536.0);
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_loss_scale_update() {
-        use super::precision::{MixedPrecisionTrainer, PrecisionConfig, PrecisionKind};
+        use crate::training::precision::{MixedPrecisionTrainer, PrecisionConfig, PrecisionKind};
         let mut trainer = MixedPrecisionTrainer::new(PrecisionConfig::new(PrecisionKind::FP16));
         let initial = trainer.loss_scale;
         trainer.update_loss_scale(true);

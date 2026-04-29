@@ -63,7 +63,7 @@ mod sage_placeholder {
         }
         
         pub fn preprocess_single(&self, _image: Tensor<B, 3>) -> Tensor<B, 4> {
-            Tensor::ones([1, 3, 224, 224], &_device)
+            Tensor::ones([1, 3, 224, 224], &self._device)
         }
     }
 }
@@ -72,14 +72,16 @@ mod sage_placeholder {
 // use sage::core::{VisionEncoder, VisionEncoderConfig, MultimodalFusion, MultimodalConfig, ImagePreprocessor};
 use sage_placeholder::*;
 
-type Backend = burn::tensor::backend::NdArray;
+use burn::backend::ndarray::NdArrayDevice;
+
+type Backend = burn::backend::ndarray::NdArray;
 
 fn main() {
     println!("=");
     println!("  Sage 多模态功能 - 快速开始");
     println!("=");
     
-    let device = burn::tensor::backend::NdArrayDevice::Cpu;
+    let device = NdArrayDevice::Cpu;
     
     // 示例 1：基础多模态初始化
     println!("\n📦 示例 1：基础多模态初始化");
@@ -101,7 +103,7 @@ fn main() {
     println!("\n📖 更多详细使用方法请查看：docs/MULTIMODAL_USAGE.md");
 }
 
-fn example_basic_setup(device: &Backend::Device) {
+fn example_basic_setup(device: &NdArrayDevice) {
     // 创建视觉编码器配置
     let vision_config = VisionEncoderConfig {
         encoder_type: "resnet".to_string(),
@@ -125,7 +127,7 @@ fn example_basic_setup(device: &Backend::Device) {
     println!("   ✅ 基础多模态模块初始化成功");
 }
 
-fn example_vision_encoder(device: &Backend::Device) {
+fn example_vision_encoder(device: &NdArrayDevice) {
     // ResNet 配置
     let resnet_config = VisionEncoderConfig {
         encoder_type: "resnet".to_string(),
@@ -145,7 +147,7 @@ fn example_vision_encoder(device: &Backend::Device) {
     println!("   ✅ 视觉编码器运行成功");
 }
 
-fn example_multimodal_fusion(device: &Backend::Device) {
+fn example_multimodal_fusion(device: &NdArrayDevice) {
     // 创建配置
     let config = MultimodalConfig {
         vision_dim: 512,
@@ -166,7 +168,7 @@ fn example_multimodal_fusion(device: &Backend::Device) {
     println!("   ✅ 多模态融合运行成功");
 }
 
-fn example_full_inference(device: &Backend::Device) {
+fn example_full_inference(device: &NdArrayDevice) {
     // 1. 初始化所有模块
     let vision_config = VisionEncoderConfig {
         encoder_type: "resnet".to_string(),

@@ -45,9 +45,12 @@ pub struct QuantizedLinear<B: Backend> {
 
 impl<B: Backend> QuantizedLinear<B> {
     pub fn from_linear(linear: burn::nn::Linear<B>, mode: QuantizationMode) -> Self {
-        let weight = linear.weight.val();
+        let weight_raw = linear.weight.val();
         let bias = linear.bias.map(|b| b.val());
-        let device = weight.device();
+        let device = weight_raw.device();
+
+        // 将 weight 从 [out, in] 转置为 [in, out]，forward 中无需再次转置
+        let weight = weight_raw.clone().transpose();
 
         // 简单的对称 Min-Max 量化 (INT8)
         let (q_weight, scale) = match mode {
@@ -76,17 +79,18 @@ impl<B: Backend> QuantizedLinear<B> {
 
     pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         let [batch_size, seq_len, d_model] = input.dims();
-        let [out_features, _in_features] = self.weight.dims();
+        let [_in_features, out_features] = self.weight.dims();
         
         // 模拟量化推理：使用已量化（并恢复）的权重
+        // weight 已预先转置为 [in, out] 格式
         let input_2d = input.reshape([batch_size * seq_len, d_model]);
-        let mut output = input_2d.matmul(self.weight.clone().transpose());
+        let output = input_2d.matmul(self.weight.clone());
         
         if let Some(bias) = &self.bias {
-            output = output + bias.clone().unsqueeze();
-        }
-        
-        output.reshape([batch_size, seq_len, out_features])
+            output + bias.clone().unsqueeze()
+        } else {
+            output
+        }.reshape([batch_size, seq_len, out_features])
     }
 }
 

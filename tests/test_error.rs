@@ -1,4 +1,4 @@
-use sage::error::{SageError, Result};
+use sage::utils::error::{SageError, Result};
 
 #[test]
 fn test_io_error_conversion() {
@@ -119,7 +119,7 @@ fn test_result_type_alias() {
 
 #[test]
 fn test_error_context_trait() {
-    use sage::error::ErrorContext;
+    use sage::utils::error::ErrorContext;
 
     let result: Result<()> = Err(SageError::configuration("原始错误", Some("config.json".to_string())));
     let with_context = result.context("加载训练参数时");

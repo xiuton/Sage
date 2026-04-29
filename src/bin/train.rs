@@ -1670,6 +1670,17 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
                     println!("  物理 batch = {}", micro);
                     println!("  序列长度 = {}", sl);
                     println!("  梯度累积 = {}", accum);
+
+                    let num_params = model_config.num_params();
+                    let model_mb = num_params as f64 * 4.0 / 1_048_576.0;
+                    let adam_mb = num_params as f64 * 8.0 / 1_048_576.0;
+                    let total_gb = (num_params as f64 * 12.0 / 1_073_741_824.0) + 0.5;
+                    println!(
+                        "  模型大小: {:.0}MB | Adam 额外: ~{:.0}MB | 预估显存需求: >{:.1}GB",
+                        model_mb, adam_mb, total_gb
+                    );
+                    println!("");
+                    println!("💡 如果仍然 OOM，请尝试: --no-auto-vram --model-size 30m --backend cpu");
                     println!("");
                 }
             } else {
@@ -1740,16 +1751,28 @@ fn train_with_backend<B: Backend>(args: Args, tokenizer: Tokenizer, model_config
 
                 match found {
                     Some((micro, sl)) => {
-                        // 应用安全系数：探测只跑前向+反向，正式训练还有 Adam 优化器
-                        // （额外 ~2x 参数量的动量/速度状态），因此同时收缩 batch 和 seq_len
-                        let safe_micro = (micro / 2).max(1);
-                        let safe_sl = (sl / 2).max(16);
+                        let num_params = training_config.model.num_params();
+
+                        // 应用安全系数：
+                        // 探测只跑前向+反向，正式训练还需要 Adam 优化器状态
+                        // （额外 ~2x 参数量的动量/速度），此外还有 DataLoader 缓冲、激活值缓存等。
+                        // 对大模型（>100M）采用更激进的收缩比例。
+                        let divisor: usize = if num_params > 100_000_000 { 4 } else { 2 };
+                        let safe_micro = (micro / divisor).max(1);
+                        let safe_sl = (sl / divisor).max(16);
                         let safe_accum =
                             effective_batch.saturating_add(safe_micro - 1) / safe_micro.max(1);
                         let safe_accum = safe_accum.max(1);
                         let safe_effective = safe_micro.saturating_mul(safe_accum);
 
-                        println!("");
+                        if safe_micro < micro || safe_sl < sl {
+                            println!(
+                                "   （模型参数量 {:.1}M，Adam 优化器额外需要 ~{:.1}MB，batch={}→{}, seq_len={}→{}）",
+                                num_params as f64 / 1_000_000.0,
+                                (num_params as f64 * 8.0 / 1_048_576.0),
+                                micro, safe_micro, sl, safe_sl
+                            );
+                        }
                         println!("==========================================");
                         println!(
                             "🎯 探测到最佳配置: batch={}, seq_len={}",

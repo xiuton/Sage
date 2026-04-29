@@ -16,6 +16,7 @@ fn test_model_initialization() {
         dropout: 0.1,
         quantized: false,
         multimodal: None,
+        ..Default::default()
     };
     
     let model = config.init::<NdArray>(&device);

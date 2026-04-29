@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-api = ["axum", "hyper", "tokio", "uuid", "tower", "async-stream", "tokio-stream", "tower-http", "futures-util"]
+api = ["axum", "hyper", "tokio", "uuid", "tower", "async-stream", "tokio-stream", "tower-http", "futures-util", "reqwest"]
 tools = []
 web = ["reqwest"]
 full = ["api", "tools", "web"]
@@ -42,9 +42,6 @@ log = "0.4"
 
 [dev-dependencies]
 tempfile = "3.8"
-reqwest = { version = "0.11", features = ["json"] }
-axum = { version = "0.7" }
-tokio = { version = "1", features = ["full"] }
 serde_json = "1.0"
 
 [[bin]]
@@ -91,3 +88,44 @@ path = "src/bin/image_gen.rs"
 [[example]]
 name = "multimodal_quickstart"
 path = "examples/multimodal_quickstart.rs"
+
+[[test]]
+name = "test_basic"
+path = "tests/test_basic.rs"
+
+[[test]]
+name = "test_dpo"
+path = "tests/test_dpo.rs"
+
+[[test]]
+name = "test_error"
+path = "tests/test_error.rs"
+
+[[test]]
+name = "test_integration"
+path = "tests/test_integration.rs"
+
+[[test]]
+name = "test_kv_cache"
+path = "tests/test_kv_cache.rs"
+
+[[test]]
+name = "test_model"
+path = "tests/test_model.rs"
+
+[[test]]
+name = "test_performance"
+path = "tests/test_performance.rs"
+
+[[test]]
+name = "test_tokenizer"
+path = "tests/test_tokenizer.rs"
+
+[[test]]
+name = "test_vae"
+path = "tests/test_vae.rs"
+
+[[test]]
+name = "test_api_server"
+path = "tests/test_api_server.rs"
+required-features = ["api"]

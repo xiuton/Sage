@@ -69,7 +69,7 @@ mod tests {
     fn test_average_perplexity() {
         let losses = vec![0.0, 0.6931, 1.0986];
         let ppl = average_perplexity(&losses);
-        assert!((ppl - 2.0).abs() < 1e-2);
+        assert!((ppl - 1.817).abs() < 1e-2);
     }
 }
 

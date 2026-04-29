@@ -73,7 +73,7 @@ impl<B: Backend> DPOLossCalculator<B> {
         let mean_2d = logits_for_response
             .reshape([batch_size, response_len * vocab_size])
             .mean_dim(1);
-        mean_2d.slice([0..batch_size, 0..1]).squeeze::<1>()
+        mean_2d.slice([0..batch_size, 0..1]).reshape([batch_size])
     }
 
     /// 计算真实的 DPO 损失

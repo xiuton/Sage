@@ -5,60 +5,74 @@ use sage::kv_cache::KVCache;
 #[test]
 fn test_kv_cache_new() {
     let cache = KVCache::<NdArray>::new();
-    
-    assert!(cache.key_cache.is_empty());
-    assert!(cache.value_cache.is_empty());
+    assert!(cache.is_empty());
+    assert_eq!(cache.get_cached_seq_len(), 0);
 }
 
 #[test]
-fn test_kv_cache_update() {
+fn test_kv_cache_with_capacity() {
+    let cache = KVCache::<NdArray>::with_capacity(4);
+    assert!(cache.is_empty());
+    assert_eq!(cache.get_cached_seq_len(), 0);
+}
+
+#[test]
+fn test_layer_cache_update() {
     let device = NdArrayDevice::Cpu;
     let mut cache = KVCache::<NdArray>::new();
-    
-    // 创建测试张量 [batch_size, num_heads, seq_len, head_dim]
+
     let key = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
     let value = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
-    
-    cache.update(key, value);
-    
-    assert_eq!(cache.key_cache.len(), 1);
-    assert_eq!(cache.value_cache.len(), 1);
-    assert_eq!(cache.key_cache[0].dims(), [1, 2, 1, 32]);
-}
 
-#[test]
-fn test_kv_cache_get_combined_keys() {
-    let device = NdArrayDevice::Cpu;
-    let mut cache = KVCache::<NdArray>::new();
-    
-    // 添加第一个键值对
-    let key1 = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
-    let value1 = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
-    cache.update(key1, value1);
-    
-    // 添加第二个键值对
-    let key2 = Tensor::<NdArray, 4>::ones([1, 2, 1, 32], &device);
-    let value2 = Tensor::<NdArray, 4>::ones([1, 2, 1, 32], &device);
-    cache.update(key2, value2);
-    
-    // 获取合并后的键
-    let combined_keys = cache.get_combined_keys().unwrap();
-    assert_eq!(combined_keys.dims(), [1, 2, 2, 32]);
+    let layer_cache = cache.get_layer_cache(0);
+    let (out_key, out_value) = layer_cache.update(key.clone(), value.clone());
+
+    assert_eq!(out_key.dims(), [1, 2, 1, 32]);
+    assert_eq!(out_value.dims(), [1, 2, 1, 32]);
+    assert!(!layer_cache.is_empty());
 }
 
 #[test]
 fn test_kv_cache_clear() {
     let device = NdArrayDevice::Cpu;
     let mut cache = KVCache::<NdArray>::new();
-    
+
     let key = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
     let value = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
-    cache.update(key, value);
-    
-    assert!(!cache.key_cache.is_empty());
-    
+
+    let layer_cache = cache.get_layer_cache(0);
+    layer_cache.update(key, value);
+    assert!(!layer_cache.is_empty());
+
     cache.clear();
-    
-    assert!(cache.key_cache.is_empty());
-    assert!(cache.value_cache.is_empty());
+    assert!(cache.is_empty());
+}
+
+#[test]
+fn test_kv_cache_multi_layer() {
+    let device = NdArrayDevice::Cpu;
+    let mut cache = KVCache::<NdArray>::new();
+
+    let key = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
+    let value = Tensor::<NdArray, 4>::zeros([1, 2, 1, 32], &device);
+
+    cache.get_layer_cache(0).update(key.clone(), value.clone());
+    cache.get_layer_cache(1).update(key.clone(), value.clone());
+
+    assert!(!cache.is_empty());
+
+    let layer0 = cache.get_layer_cache(0);
+    assert!(!layer0.is_empty());
+
+    let layer1 = cache.get_layer_cache(1);
+    assert!(!layer1.is_empty());
+}
+
+#[test]
+fn test_kv_cache_seq_len() {
+    let mut cache = KVCache::<NdArray>::new();
+    assert_eq!(cache.get_cached_seq_len(), 0);
+
+    cache.set_cached_seq_len(42);
+    assert_eq!(cache.get_cached_seq_len(), 42);
 }

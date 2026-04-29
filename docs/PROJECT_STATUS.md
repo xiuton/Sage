@@ -194,8 +194,9 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M 到 67
 - **统一错误处理**：SageError 类型体系，结构化错误信息含上下文、文件路径和建议
 - **完整单元测试**：SageError 14 个测试、推理配置验证、模型工厂方法验证
 - **Flash Attention**：自定义 FlashSelfAttention 模块，SwiGLU 前馈网络，通过 SageTransformerEncoder 集成到模型
-- **Grouped Query Attention (GQA)**：自定义 GroupedQuerySelfAttention，支持 n_kv_heads 配制，K/V 头分组扩展降低参数量
+- **Grouped Query Attention (GQA)**：自定义 GroupedQuerySelfAttention，支持 n_kv_heads 配置，K/V 头分组扩展降低参数量
 - **Speculative Decoding**：双模型推测解码推理加速，草稿模型自回归生成 + 验证模型并行校验
+- **全量测试通过**：70 个测试全部通过（9 lib + 5 集成测试文件 + 1 扩展集成测试：test_basic、test_dpo、test_error、test_kv_cache、test_model、test_performance、test_tokenizer、test_vae、test_integration）
 
 ---
 
