@@ -8,11 +8,11 @@
 
 | 域 | 主要内容 | 合理性简评 |
 |----|----------|------------|
-| **核心模型** | `core/model.rs`：TransformerEncoder + LM head；多档 `ModelConfig`；`core/kv_cache.rs`：推理加速 KV 缓存；`core/multimodal.rs`：CNN 视觉编码器与门控融合层 | CNN 编码器比简单投影更具特征提取能力；门控融合支持动态权衡图文权重。 |
+| **核心模型** | `core/model.rs`：TransformerEncoder + LM head；多档 `ModelConfig`；`core/attention.rs`：Flash Attention、GQA 自定义注意力模块 + SwiGLU MLP；`core/kv_cache.rs`：推理加速 KV 缓存；`core/multimodal.rs`：CNN 视觉编码器与门控融合层 | CNN 编码器比简单投影更具特征提取能力；门控融合支持动态权衡图文权重；Flash/GQA 通过 SageTransformerEncoder 灵活切换注意力类型。 |
 | **分词** | `core/tokenizer.rs`：字符级 + BPE | 符合小模型与大一点实验需求；BPE 对中文更实用。 |
 | **数据** | `data/data.rs`：LM/SFT 数据集、mask、Batcher、**自动化图像加载流水线** | 自动处理 `image_path` 字段，实现端到端多模态训练。 |
 | **训练** | `training/training.rs`：自实现训练循环；`streaming.rs` 大语料；`vram_probe.rs` GPU 预检（从小到大探测 + OOM 自动重启）；`distributed.rs` 分布式权重同步；`dpo.rs` DPO偏好对齐；`precision.rs` 混合精度训练 (FP16/BF16)；`qlora.rs` QLoRA (INT4 + LoRA) | 实现了完整的混合精度基础设施（损失缩放、动态 scale 调整）和 QLoRA 训练显存估算。 |
-| **推理** | `inference/generation.rs`、`bin/infer.rs` | 包含高级终端交互模式 (`--terminal`) 与多模态推理。 |
+| **推理** | `inference/generation.rs`、`bin/infer.rs`：Beam Search、Speculative Decoding 推测解码 | 包含高级终端交互模式 (`--terminal`) 与多模态推理；Speculative Decoding 草稿+验证双模型加速。 |
 | **量化** | `quantization/`：支持 INT8/INT4 模拟量化推理 | 可在不改变硬件的前提下评估量化对精度和模型体积的影响。 |
 | **LoRA** | `training/lora.rs` | **已深度集成到训练路径**；支持仅微调低秩矩阵，大幅节省资源。 |
 | **API** | `api/`、`bin/api_server.rs` | 工程化完整闭环；支持 OpenAI 标准格式。 |
@@ -80,7 +80,7 @@
 ```text
 src/
   lib.rs
-  core/          # 核心层：模型定义、Tokenizer、KV Cache、多模态实现
+  core/          # 核心层：模型定义、自定义注意力(Flash/GQA)、Tokenizer、KV Cache、多模态实现
   data/          # 数据层：Dataset、Batcher、数据预处理
   inference/     # 推理层：生成策略、采样、懒加载、推理内核
   training/      # 训练层：训练循环、DPO、调度器、流式、显存探测、LoRA

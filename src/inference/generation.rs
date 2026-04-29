@@ -819,6 +819,174 @@ pub fn batch_generate<B: Backend>(
     states.into_iter().map(|s| s.get_full_text()).collect()
 }
 
+pub fn generate_speculative<B: Backend>(
+    draft_model: &Model<B>,
+    target_model: &Model<B>,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    options: &GenerateOptions,
+    device: &B::Device,
+) -> String {
+    let mut tokens = tokenizer.encode(prompt);
+    if tokens.is_empty() {
+        tokens.push(tokenizer.bos_id);
+    }
+
+    let spec_k = options.beam_size.max(2).min(8);
+    let max_new_tokens = options.max_new_tokens;
+    let mut generated = 0;
+
+    let user_token_ids: Vec<usize> = if options.stop_on_user {
+        tokenizer.encode("<user>")
+    } else {
+        Vec::new()
+    };
+
+    let stop_sequence_ids: Vec<Vec<usize>> = options
+        .stop_sequences
+        .iter()
+        .map(|seq| tokenizer.encode(seq))
+        .collect();
+
+    while generated < max_new_tokens {
+        let current_len = tokens.len();
+        let remaining = max_new_tokens - generated;
+        let draft_len = spec_k.min(remaining);
+
+        let mut draft_tokens: Vec<usize> = Vec::new();
+
+        for _ in 0..draft_len {
+            let window_start = current_len.saturating_sub(options.context_len.max(1));
+            let input_tokens = if draft_tokens.is_empty() {
+                &tokens[window_start..]
+            } else {
+                &tokens[tokens.len().saturating_sub(1)..]
+            };
+
+            let input = Tensor::<B, 1, Int>::from_ints(
+                input_tokens.iter().map(|&t| t as i32).collect::<Vec<_>>().as_slice(),
+                device,
+            )
+            .unsqueeze::<2>();
+
+            let output = draft_model.forward(input);
+            let [_, seq_len, _] = output.dims();
+            let last_logits = output.slice([0..1, (seq_len - 1)..seq_len, 0..tokenizer.vocab_size]);
+
+            let logits_vec: Vec<f32> = last_logits
+                .to_data()
+                .as_slice::<f32>()
+                .unwrap()
+                .to_vec();
+
+            let temperature = options.temperature.max(1e-5);
+            let mut adjusted: Vec<(usize, f32)> = logits_vec
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| (i, v / temperature))
+                .collect();
+
+            adjusted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let draft_token = adjusted[0].0;
+
+            if draft_token == tokenizer.eos_id {
+                break;
+            }
+            draft_tokens.push(draft_token);
+            tokens.push(draft_token);
+        }
+
+        if draft_tokens.is_empty() {
+            break;
+        }
+
+        let verify_input = Tensor::<B, 1, Int>::from_ints(
+            tokens.iter().map(|&t| t as i32).collect::<Vec<_>>().as_slice(),
+            device,
+        )
+        .unsqueeze::<2>();
+
+        let verify_output = target_model.forward(verify_input);
+        let [_, verify_seq_len, _] = verify_output.dims();
+        let verify_len = draft_tokens.len();
+        let verify_start = verify_seq_len - verify_len - 1;
+
+        let mut accepted = 0;
+
+        for i in 0..verify_len {
+            let pos = verify_start + i;
+            let logits = verify_output.clone().slice([0..1, pos..pos + 1, 0..tokenizer.vocab_size]);
+
+            let logits_vec: Vec<f32> = logits
+                .to_data()
+                .as_slice::<f32>()
+                .unwrap()
+                .to_vec();
+
+            let mut indexed: Vec<(usize, f32)> = logits_vec.into_iter().enumerate().collect();
+            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let predicted = indexed[0].0;
+
+            if predicted == draft_tokens[i] {
+                accepted += 1;
+            } else {
+                tokens.truncate(current_len + i);
+                tokens.push(predicted);
+                accepted += 1;
+                break;
+            }
+        }
+
+        if accepted < draft_tokens.len() {
+            tokens.truncate(current_len + accepted);
+        } else {
+            tokens.truncate(current_len + draft_tokens.len());
+        }
+
+        generated = tokens.len() - current_len;
+
+        let check_tokens = &tokens[current_len..];
+        if check_tokens.contains(&tokenizer.eos_id) {
+            break;
+        }
+
+        if !user_token_ids.is_empty() && tokens.len() >= user_token_ids.len() {
+            let end = tokens.len();
+            let start = end - user_token_ids.len();
+            if tokens[start..end] == user_token_ids {
+                break;
+            }
+        }
+
+        let tokens_len = tokens.len();
+        let mut should_stop = false;
+        for stop_seq_ids in &stop_sequence_ids {
+            if tokens_len >= stop_seq_ids.len() {
+                let end = tokens_len;
+                let start = end - stop_seq_ids.len();
+                if tokens[start..end] == *stop_seq_ids {
+                    should_stop = true;
+                    break;
+                }
+            }
+        }
+        if should_stop {
+            break;
+        }
+
+        if accepted < draft_tokens.len() {
+            continue;
+        }
+
+        if generated >= max_new_tokens {
+            break;
+        }
+    }
+
+    tokenizer.decode(&tokens)
+}
+
 // 批处理流式生成
 pub fn batch_generate_stream<B: Backend, F>(
     model: &Model<B>,

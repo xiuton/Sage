@@ -25,11 +25,15 @@ pub use multimodal::{
 
 use crate::training::lora::{LoRALinear, LoRAConfig};
 
+use super::attention::{AttentionType, SageTransformerEncoder};
+
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
     embedding: Embedding<B>,
     pos_embedding: Embedding<B>,
     transformer_encoder: TransformerEncoder<B>,
+    #[module(ignore)]
+    sage_encoder: Option<SageTransformerEncoder<B>>,
     output_head: LoRALinear<B>,
     vocab_size: usize,
     max_seq_len: usize,
@@ -39,6 +43,9 @@ pub struct Model<B: Backend> {
     n_heads: usize,
     pos_encoding_type: String,
     rope_theta: f64,
+    attention_type: String,
+    #[module(ignore)]
+    n_kv_heads: Option<usize>,
     /// 多模态组件
     multimodal_module: Option<MultimodalModule<B>>,
 }
@@ -78,6 +85,12 @@ pub struct ModelConfig {
     /// RoPE 配置
     #[serde(rename = "rope_theta", default = "default_rope_theta")]
     pub rope_theta: f64,
+    /// 注意力类型
+    #[serde(rename = "attention_type", default = "default_attention_type")]
+    pub attention_type: String,
+    /// GQA 的 KV 头数
+    #[serde(rename = "n_kv_heads")]
+    pub n_kv_heads: Option<usize>,
 }
 
 // 默认值函数
@@ -94,6 +107,7 @@ fn default_num_experts() -> usize { 8 }
 fn default_top_k_experts() -> usize { 2 }
 fn default_pos_encoding_type() -> String { "learned".to_string() }
 fn default_rope_theta() -> f64 { 10000.0 }
+fn default_attention_type() -> String { "standard".to_string() }
 
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -113,6 +127,8 @@ impl Default for ModelConfig {
             top_k_experts: 2,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 }
@@ -166,10 +182,31 @@ impl ModelConfig {
             None
         };
 
+        let sage_encoder = if self.attention_type != "standard" {
+            let attn_type = match self.attention_type.as_str() {
+                "flash_attention" => AttentionType::FlashAttention,
+                "grouped_query_attention" => AttentionType::GroupedQueryAttention,
+                _ => AttentionType::Standard,
+            };
+            Some(SageTransformerEncoder::new(
+                self.d_model,
+                self.d_ff,
+                self.n_heads,
+                self.n_layers,
+                attn_type,
+                self.n_kv_heads,
+                self.dropout,
+                device,
+            ))
+        } else {
+            None
+        };
+
         Model {
             embedding,
             pos_embedding,
             transformer_encoder,
+            sage_encoder,
             output_head,
             vocab_size: self.vocab_size,
             max_seq_len: self.max_seq_len,
@@ -179,6 +216,8 @@ impl ModelConfig {
             n_heads: self.n_heads,
             pos_encoding_type: self.pos_encoding_type.clone(),
             rope_theta: self.rope_theta,
+            attention_type: self.attention_type.clone(),
+            n_kv_heads: self.n_kv_heads,
             multimodal_module,
         }
     }
@@ -201,6 +240,8 @@ impl ModelConfig {
             top_k_experts: 2,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 
@@ -222,6 +263,8 @@ impl ModelConfig {
             top_k_experts: 2,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 
@@ -243,6 +286,8 @@ impl ModelConfig {
             top_k_experts: 2,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 
@@ -264,6 +309,8 @@ impl ModelConfig {
             top_k_experts: 2,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 
@@ -285,6 +332,8 @@ impl ModelConfig {
             top_k_experts: 2,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 
@@ -306,6 +355,8 @@ impl ModelConfig {
             top_k_experts: 8,
             pos_encoding_type: "learned".to_string(),
             rope_theta: 10000.0,
+            attention_type: "standard".to_string(),
+            n_kv_heads: None,
         }
     }
 
@@ -321,12 +372,27 @@ impl ModelConfig {
 
         // Transformer Encoder
         // Each layer:
-        //   Attention: 4 * (d_model * d_model + d_model)
-        //   MLP: (d_model * d_ff + d_ff) + (d_ff * d_model + d_model)
-        //   LayerNorms: 2 * (d_model * 2)
-        let attention_params = 4 * (self.d_model * self.d_model + self.d_model);
-        let mlp_params =
-            (self.d_model * self.d_ff + self.d_ff) + (self.d_ff * self.d_model + self.d_model);
+        //   Attention: QKV projections + output projection
+        //   MLP: SwiGLU (gate + up + down) or standard (2 layers)
+        //   LayerNorms: 2 * d_model (scale + bias)
+        let n_kv = self.n_kv_heads.unwrap_or(self.n_heads);
+        let head_dim = self.d_model / self.n_heads;
+        let q_params = self.d_model * self.d_model + self.d_model;
+        let k_params = self.d_model * (n_kv * head_dim) + (n_kv * head_dim);
+        let v_params = self.d_model * (n_kv * head_dim) + (n_kv * head_dim);
+        let o_params = self.d_model * self.d_model + self.d_model;
+
+        let attention_params = q_params + k_params + v_params + o_params;
+
+        let is_custom_attn = self.attention_type != "standard";
+        let mlp_params = if is_custom_attn {
+            let gate_params = self.d_model * self.d_ff + self.d_ff;
+            let up_params = self.d_model * self.d_ff + self.d_ff;
+            let down_params = self.d_ff * self.d_model + self.d_model;
+            gate_params + up_params + down_params
+        } else {
+            (self.d_model * self.d_ff + self.d_ff) + (self.d_ff * self.d_model + self.d_model)
+        };
         let layernorm_params = 2 * (self.d_model * 2);
 
         // Since we are estimating based on standard transformer architecture in burn
@@ -377,10 +443,13 @@ impl<B: Backend> Model<B> {
             token_embeddings + pos_embeddings
         };
 
-        // 使用 TransformerEncoder 进行前向传播
-        x = self
-            .transformer_encoder
-            .forward(TransformerEncoderInput::new(x));
+        // 使用 Transformer Encoder 进行前向传播
+        x = if let Some(ref sage_encoder) = self.sage_encoder {
+            sage_encoder.forward(x)
+        } else {
+            self.transformer_encoder
+                .forward(TransformerEncoderInput::new(x))
+        };
 
         // Final head for language modeling
         self.output_head.forward(x)
@@ -471,10 +540,13 @@ impl<B: Backend> Model<B> {
         // 使用 multimodal_module 处理
         text_features = self.multimodal_module.as_ref().unwrap().forward(text_features, input.image);
         
-        // 使用 TransformerEncoder 进行前向传播
-        let text_features = self
-            .transformer_encoder
-            .forward(TransformerEncoderInput::new(text_features));
+        // 使用 Transformer Encoder 进行前向传播
+        let text_features = if let Some(ref sage_encoder) = self.sage_encoder {
+            sage_encoder.forward(text_features)
+        } else {
+            self.transformer_encoder
+                .forward(TransformerEncoderInput::new(text_features))
+        };
         
         // Final head for language modeling
         self.output_head.forward(text_features)

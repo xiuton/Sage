@@ -1,5 +1,6 @@
 //! Canonical core layer for model, tokenizer, generation, KV cache, and multimodal.
 
+pub mod attention;
 pub mod kv_cache;
 pub mod model;
 pub mod multimodal;

@@ -1,6 +1,6 @@
 # 项目状态与路线图（Sage）
 
-> 最后更新：2026-04-28
+> 最后更新：2026-04-29
 
 本文档用于记录：当前仓库已经完成了哪些工程能力、还缺哪些关键能力、以及推荐的下一步迭代顺序。
 
@@ -193,6 +193,9 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M 到 67
 - **GPU 显存自动探测**：从小到大尝试配置，OOM 失败即停返回最佳配置，自动重启进程重置 WGPU 状态
 - **统一错误处理**：SageError 类型体系，结构化错误信息含上下文、文件路径和建议
 - **完整单元测试**：SageError 14 个测试、推理配置验证、模型工厂方法验证
+- **Flash Attention**：自定义 FlashSelfAttention 模块，SwiGLU 前馈网络，通过 SageTransformerEncoder 集成到模型
+- **Grouped Query Attention (GQA)**：自定义 GroupedQuerySelfAttention，支持 n_kv_heads 配制，K/V 头分组扩展降低参数量
+- **Speculative Decoding**：双模型推测解码推理加速，草稿模型自回归生成 + 验证模型并行校验
 
 ---
 
@@ -276,8 +279,9 @@ Sage 是一个 Rust 小模型训练工程，支持多种模型规模（1M 到 67
 
 ### M0：当前版本（已具备）
 
-- 可训练：LM / SFT（JSONL）均能跑通
-- 可推理：续写 / chat / 交互
+- 可训练：LM / SFT / DPO / LoRA / QLoRA（JSONL）均能跑通
+- 可推理：续写 / chat / 交互 / Speculative Decoding
+- 高级注意力：Flash Attention / Grouped Query Attention
 - 可复现：支持 seed、可持久化产物（模型/词表/配置/checkpoint）
 
 ### M1：助手可用性增强（P0）

@@ -1,10 +1,10 @@
-﻿# Sage 大模型项目 - 任务追踪清单
+# Sage 大模型项目 - 任务追踪清单
 
 ## 项目基本信息
 - **框架**: Rust + Burn 0.19
 - **架构**: Burn 内置 TransformerEncoder
-- **上次更新**: 2026-04-28
-- **当前状态**: 25/28 完成 (P0=4/4, P1=10/10, P2=11/11 含 3 项 Burn 限制)
+- **上次更新**: 2026-04-29
+- **当前状态**: 28/28 完成 (P0=4/4, P1=10/10, P2=14/14)
 
 ---
 
@@ -84,8 +84,8 @@
 | ID | 任务 | 描述 | 涉及文件 | 状态 | 优先级 |
 |----|------|------|---------|------|--------|
 | P2-001 | 实现 RoPE 位置编码 | 实现旋转位置编码，支持通过配置切换 RoPE/learned 位置编码 | src/core/model.rs | 🟩 已完成 | 🟢 中 |
-| P2-002 | 实现 Flash Attention | 需自定义 CUDA/WGPU kernel，Burn 0.19 无原生支持 | src/core/model.rs | 🟥 待实现 | 🟢 低 |
-| P2-003 | 实现 Grouped Query Attention | Burn 内置 TransformerEncoder 不支持 GQA 配置 | src/core/model.rs | 🟥 待实现 | 🟢 低 |
+| P2-002 | 实现 Flash Attention | 自定义 FlashSelfAttention + SageTransformerEncoder 集成，使用 SwiGLU MLP，支持通过 attention_type 配置切换 | src/core/attention.rs, src/core/model.rs | 🟩 已完成 | 🟢 低 |
+| P2-003 | 实现 Grouped Query Attention | 自定义 GroupedQuerySelfAttention，支持 n_kv_heads 配置，K/V 头分组扩展 | src/core/attention.rs, src/core/model.rs | 🟩 已完成 | 🟢 低 |
 
 ### 3.2 训练功能
 
@@ -100,7 +100,7 @@
 | ID | 任务 | 描述 | 涉及文件 | 状态 | 优先级 |
 |----|------|------|---------|------|--------|
 | P2-007 | 实现 Beam Search | 在 GenerateOptions 中添加 beam_size/beam_penalty，实现 BeamState 束搜索 | src/inference/generation.rs | 🟩 已完成 | 🟢 中 |
-| P2-008 | 实现 Speculative Decoding | 复杂推理优化，需草稿模型 + 验证模型双路推理 | src/core/generation.rs | 🟥 待实现 | 🟢 低 |
+| P2-008 | 实现 Speculative Decoding | 双模型推理加速：草稿模型自回归生成 + 验证模型并行校验，通过 generate_speculative 接口调用 | src/inference/generation.rs | 🟩 已完成 | 🟢 低 |
 
 ### 3.4 代码质量
 
@@ -118,7 +118,8 @@
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| model.rs | 🟩 已完成 | Burn 内置 TransformerEncoder + KV Cache |
+| model.rs | 🟩 已完成 | Burn 内置 TransformerEncoder + KV Cache + SageTransformerEncoder(Flash/GQA) |
+| attention.rs | 🟩 已完成 | 自定义注意力模块：MultiHeadSelfAttention、FlashSelfAttention、GroupedQuerySelfAttention、SwiGLUMLP |
 | tokenizer.rs | ✅ 完整 | 字符级和 BPE 分词器完整 |
 | multimodal.rs | ✅ 完整 | CNN 编码器与门控融合，端到端图文训练推理 |
 | multimodal_metrics.rs | ✅ 完整 | 多模态评估指标完整 |
@@ -144,7 +145,7 @@
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | quantization/ | ✅ 完整 | INT8/INT4 模拟量化与体积估算 |
-| inference/ | ✅ 完整 | 懒加载、Beam Search、流式输出、批量生成 |
+| inference/ | ✅ 完整 | 懒加载、Beam Search、Speculative Decoding、流式输出、批量生成 |
 | data/ | ✅ 完整 | 数据处理完整 |
 | api/ | ⚠️ 占位 | 仅 mod.rs |
 | tools/ | ✅ 完整 | 导出工具完整 |
@@ -266,6 +267,9 @@
 | 2026-04-28 | P2-006 | QLoRA 实现 | Trae |
 | 2026-04-28 | 修复 | gen_data/image_gen 警告修复 | Trae |
 | 2026-04-28 | 文档 | 全文档更新 | Trae |
+| 2026-04-29 | P2-002 | Flash Attention 自定义实现 | Trae |
+| 2026-04-29 | P2-003 | Grouped Query Attention 自定义实现 | Trae |
+| 2026-04-29 | P2-008 | Speculative Decoding 推测解码 | Trae |
 
 ---
 
@@ -285,12 +289,15 @@
 4. **量化工具落地** - 模拟推理与体积评估
 5. **数据流水线优化** - gen_data 整合工具
 6. **P2 任务全面收尾** - 错误处理、单元测试、代码文档、混合精度、QLoRA 全部完成
+7. **高级注意力机制** - Flash Attention、Grouped Query Attention 自定义实现，集成到 SageTransformerEncoder
+8. **推测解码** - Speculative Decoding 双模型推理加速
+9. **全任务闭环** - 28/28 全部完成
 
-### P2 剩余任务（Burn 0.19 框架限制）
-- **P2-002 Flash Attention**: 需自定义 GPU kernel
-- **P2-003 GQA**: Burn 内置不支持分组查询注意力
-- **P2-008 Speculative Decoding**: 需草稿模型 + 验证模型双路推理
+### 全部完成
+- **P0 严重问题**: 4/4 完成
+- **P1 高优先级**: 10/10 完成
+- **P2 中优先级**: 14/14 完成
 
 ---
 
-*最后更新: 2026-04-28 - 25/28 可实施任务完成，3 项标注 Burn 限制*
+*最后更新: 2026-04-29 - 28/28 全部完成*
