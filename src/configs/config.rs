@@ -87,7 +87,7 @@ impl TrainingConfig {
             devices: Vec::new(),
             use_wandb: false,
             wandb_project: "sage".to_string(),
-            wandb_run_name: format!("run-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()),
+            wandb_run_name: format!("run-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)),
             num_workers: 4,
             seed: 42,
             no_progress: false,
@@ -180,45 +180,30 @@ impl TrainingConfig {
     
     /// 合并两个配置，当前配置优先
     pub fn merge(&mut self, other: &Self) {
-        if self.batch_size == 0 {
-            self.batch_size = other.batch_size;
+        macro_rules! merge_if_default {
+            ($field:ident, $default:expr) => {
+                if self.$field == $default { self.$field = other.$field.clone(); }
+            };
         }
-        if self.num_epochs == 0 {
-            self.num_epochs = other.num_epochs;
+        macro_rules! merge_if_none {
+            ($field:ident) => {
+                if self.$field.is_none() { self.$field = other.$field.clone(); }
+            };
         }
-        if self.lr == 0.0 {
-            self.lr = other.lr;
-        }
-        if self.max_seq_len == 0 {
-            self.max_seq_len = other.max_seq_len;
-        }
-        if self.save_dir.is_empty() {
-            self.save_dir = other.save_dir.clone();
-        }
-        if self.save_interval == 0 {
-            self.save_interval = other.save_interval;
-        }
-        if self.log_interval == 0 {
-            self.log_interval = other.log_interval;
-        }
-        if self.eval_interval == 0 {
-            self.eval_interval = other.eval_interval;
-        }
-        if self.eval_steps == 0 {
-            self.eval_steps = other.eval_steps;
-        }
-        if self.num_workers == 0 {
-            self.num_workers = other.num_workers;
-        }
-        if self.gradient_accumulation_steps == 0 {
-            self.gradient_accumulation_steps = other.gradient_accumulation_steps;
-        }
-        if self.dpo_config.is_none() {
-            self.dpo_config = other.dpo_config.clone();
-        }
-        if self.lr_scheduler.is_none() {
-            self.lr_scheduler = other.lr_scheduler.clone();
-        }
+
+        merge_if_default!(batch_size, 0);
+        merge_if_default!(num_epochs, 0);
+        merge_if_default!(lr, 0.0);
+        merge_if_default!(max_seq_len, 0);
+        merge_if_default!(save_dir, String::new());
+        merge_if_default!(save_interval, 0);
+        merge_if_default!(log_interval, 0);
+        merge_if_default!(eval_interval, 0);
+        merge_if_default!(eval_steps, 0);
+        merge_if_default!(num_workers, 0);
+        merge_if_default!(gradient_accumulation_steps, 0);
+        merge_if_none!(dpo_config);
+        merge_if_none!(lr_scheduler);
     }
     
     /// 从HashMap创建配置

@@ -55,13 +55,13 @@ impl<B: Backend> QuantizedLinear<B> {
         // 简单的对称 Min-Max 量化 (INT8)
         let (q_weight, scale) = match mode {
             QuantizationMode::Int8 | QuantizationMode::Dynamic => {
-                let max_val = weight.clone().abs().max().into_data().as_slice::<f32>().unwrap()[0];
+                let max_val = weight.clone().abs().max().into_data().as_slice::<f32>().expect("quantization weight must be f32")[0];
                 let scale = max_val / 127.0;
                 let q_weight = (weight / scale).round().clamp(-128.0, 127.0) * scale;
                 (q_weight, Tensor::<B, 1>::from_data([scale], &device))
             }
             QuantizationMode::Int4 => {
-                let max_val = weight.clone().abs().max().into_data().as_slice::<f32>().unwrap()[0];
+                let max_val = weight.clone().abs().max().into_data().as_slice::<f32>().expect("quantization weight must be f32")[0];
                 let scale = max_val / 7.0;
                 let q_weight = (weight / scale).round().clamp(-8.0, 7.0) * scale;
                 (q_weight, Tensor::<B, 1>::from_data([scale], &device))

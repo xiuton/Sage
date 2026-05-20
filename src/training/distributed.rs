@@ -78,7 +78,8 @@ impl<B: AutodiffBackend, O: Optimizer<crate::core::model::Model<B>, B> + Clone> 
         
         // 前向传播
         let output = model.forward_step(batch_device);
-        let loss_val = output.loss.clone().into_data().as_slice::<f32>().unwrap()[0] as f64;
+        let loss_val = output.loss.clone().into_data().as_slice::<f32>()
+            .expect("Loss tensor should be convertible to f32 slice")[0] as f64;
         
         // 反向传播与优化
         let grads = output.loss.backward();
@@ -157,7 +158,7 @@ pub fn train_parallel<B: AutodiffBackend, D: Dataset<TextItem> + Send + Sync + '
     }
     
     for handle in handles {
-        handle.join().unwrap();
+        handle.join().expect("A distributed training thread panicked");
     }
 }
 

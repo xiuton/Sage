@@ -171,7 +171,8 @@ impl<B: AutodiffBackend, O: Optimizer<crate::core::model::Model<B>, B>> DPOTrain
     pub fn train_batch(&mut self, batch: DPOBatch<B>, lr: f64) -> f32 {
         let batch_device = batch.to_device(&self.device);
         let loss = self.loss_calculator.calculate_loss(&self.model, &batch_device);
-        let loss_value: f32 = loss.clone().to_data().to_vec().unwrap()[0];
+        let loss_tensor = loss.clone().to_data().to_vec::<f32>().expect("DPO loss tensor must be f32");
+        let loss_value = *loss_tensor.first().expect("DPO loss tensor must have at least one element");
         let grads = loss.backward();
         let grads_params = burn::optim::GradientsParams::from_grads(grads, &self.model);
         self.model = self.optimizer.step(lr, self.model.clone(), grads_params);

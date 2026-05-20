@@ -40,34 +40,6 @@ pub fn init_logger_with_level(log_level: Option<&str>) {
     });
 }
 
-#[macro_export]
-macro_rules! log_debug {
-    ($($arg:tt)*) => {
-        log::debug!($($arg)*);
-    };
-}
-
-#[macro_export]
-macro_rules! log_info {
-    ($($arg:tt)*) => {
-        log::info!($($arg)*);
-    };
-}
-
-#[macro_export]
-macro_rules! log_warn {
-    ($($arg:tt)*) => {
-        log::warn!($($arg)*);
-    };
-}
-
-#[macro_export]
-macro_rules! log_error {
-    ($($arg:tt)*) => {
-        log::error!($($arg)*);
-    };
-}
-
 pub fn log_performance(endpoint: &str, time_ms: f64, tokens_per_second: f64) {
     info!(
         "[PERFORMANCE] {} - 耗时: {:.2}ms, 速度: {:.2} tokens/s",

@@ -7,7 +7,7 @@ use burn::{
         activation,
     },
     prelude::*,
-    tensor::backend::Backend,
+    tensor::{self, backend::Backend},
 };
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
@@ -328,27 +328,8 @@ impl<B: Backend> MultiHeadAttention<B> {
         let k = self.reshape_to_heads(k);
         let v = self.reshape_to_heads(v);
 
-        let mut attn_weights = q.matmul(k.permute([0, 1, 3, 2])) * self.scale;
-        let dims = attn_weights.dims();
-        let batch_sz = dims[0];
-        let heads = dims[1];
-        let seq1 = dims[2];
-        let seq2 = dims[3];
-
-        for i in 0..batch_sz {
-            for j in 0..heads {
-                for k in 0..seq1 {
-                    let slice = attn_weights.clone().slice([i..i+1, j..j+1, k..k+1, 0..seq2]);
-                    let max_val = slice.clone().reshape([1, 1, seq2]).max_dim(2);
-                    let shifted = slice.clone() - max_val.clone().unsqueeze_dim(3);
-                    let exp_val = shifted.exp();
-                    let sum_exp = exp_val.clone().reshape([1, 1, seq2]).sum_dim(2);
-                    let softmax = exp_val / sum_exp.unsqueeze_dim(3);
-                    attn_weights = attn_weights.slice_assign([i..i+1, j..j+1, k..k+1, 0..seq2], softmax);
-                }
-            }
-        }
-
+        let attn_weights = q.matmul(k.permute([0, 1, 3, 2])) * self.scale;
+        let attn_weights = tensor::activation::softmax(attn_weights, 3);
         let attn_output = attn_weights.matmul(v);
         let attn_output = self.reshape_from_heads(attn_output);
 
@@ -502,17 +483,13 @@ impl<B: Backend> VisionEncoder<B> {
     }
     
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
-        match self.encoder_type.as_str() {
-            "resnet" => {
-                self.resnet.as_ref().unwrap().forward(x)
-            },
-            "vit" => {
-                self.vit.as_ref().unwrap().forward(x)
-            },
-            _ => {
-                self.resnet.as_ref().unwrap().forward(x)
-            }
+        if let Some(encoder) = &self.resnet {
+            return encoder.forward(x);
         }
+        if let Some(encoder) = &self.vit {
+            return encoder.forward(x);
+        }
+        panic!("VisionEncoder: no vision encoder initialized (encoder_type={})", self.encoder_type);
     }
 }
 
@@ -586,7 +563,7 @@ impl<B: Backend> CrossAttention<B> {
         let attention = q.matmul(k.permute([0, 1, 3, 2])) * self.scale;
         
         // 4. Softmax
-        let attention = self.softmax_last_dim(attention);
+        let attention = tensor::activation::softmax(attention, 3);
         
         // 5. 应用注意力到 value
         let out = attention.matmul(v);
@@ -608,30 +585,6 @@ impl<B: Backend> CrossAttention<B> {
         let head_dim = x.dims()[1] * x.dims()[3];
         x.permute([0, 2, 1, 3])
             .reshape([batch_size, seq_len, head_dim])
-    }
-    
-    fn softmax_last_dim(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
-        let mut result = x.clone();
-        let dims = x.dims();
-        let batch = dims[0];
-        let heads = dims[1];
-        let seq1 = dims[2];
-        let seq2 = dims[3];
-        
-        for i in 0..batch {
-            for j in 0..heads {
-                for k in 0..seq1 {
-                    let slice = x.clone().slice([i..i+1, j..j+1, k..k+1, 0..seq2]);
-                    let max_val = slice.clone().reshape([1, 1, seq2]).max_dim(2);
-                    let shifted = slice.clone() - max_val.clone().unsqueeze_dim(3);
-                    let exp_val = shifted.exp();
-                    let sum_exp = exp_val.clone().reshape([1, 1, seq2]).sum_dim(2);
-                    let softmax = exp_val / sum_exp.unsqueeze_dim(3);
-                    result = result.slice_assign([i..i+1, j..j+1, k..k+1, 0..seq2], softmax);
-                }
-            }
-        }
-        result
     }
 }
 
@@ -923,7 +876,7 @@ impl<B: Backend> WeightLoader<B> {
         
         for key in expected_keys {
             if weights.contains_key(*key) {
-                filtered.insert(key.to_string(), weights.get(*key).unwrap().clone());
+                filtered.insert(key.to_string(), weights.get(*key).expect("weight key verified by contains_key").clone());
             } else if !self.ignore_missing_keys.contains(&key.to_string()) {
                 if self.strict_loading {
                     panic!("缺少必需权重: {}", key);

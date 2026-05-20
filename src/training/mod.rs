@@ -14,6 +14,11 @@ pub use dpo::{load_dpo_jsonl, DPOBatcher, DPOConfig, DPOItem, DPOTrainer};
 pub use lr_scheduler::LRScheduler;
 pub use precision::{MixedPrecisionTrainer, PrecisionConfig, PrecisionKind};
 pub use qlora::{QloraConfig, QloraModel};
-pub use streaming::{SftInput, StreamingSftDataLoader};
+pub use streaming::{
+    SftInput, SftMessage, SftRecord,
+    sft_template, sft_messages_template, code_template, math_template, create_template,
+    sft_sample_from_json_line, load_sft_sample, load_sft_messages_sample,
+    StreamingSftDataLoader,
+};
 pub use training::{train, train_dpo, train_from_cache, train_with_loaders};
 pub use vram_probe::{probe_first_fitting_config, probe_training_step_fits};

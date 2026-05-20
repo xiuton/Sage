@@ -1,3 +1,1 @@
-pub mod kv_cache;
-
-pub use kv_cache::KVCache;
+// Transformer module - components re-exported via core::kv_cache

@@ -10,7 +10,7 @@ use burn::{
 use serde::{Deserialize, Serialize};
 
 use crate::TextBatch;
-use crate::transformer::kv_cache::KVCache;
+use crate::core::kv_cache::KVCache;
 use crate::quantization::quantization::QuantizationMode;
 
 use super::multimodal;
@@ -197,6 +197,8 @@ impl ModelConfig {
                 self.n_kv_heads,
                 self.dropout,
                 device,
+                &self.pos_encoding_type,
+                self.rope_theta,
             ))
         } else {
             None
@@ -430,25 +432,21 @@ impl<B: Backend> Model<B> {
         // Token embeddings
         let token_embeddings = self.embedding.forward(input);
 
-        // Position embeddings
-        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
-        let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
-
         let mut x = if self.pos_encoding_type == "rope" {
-            // 使用 RoPE 位置编码
-            self.apply_rope(token_embeddings, positions)
+            // RoPE 在注意力层内部处理，这里不需要位置编码
+            token_embeddings
         } else {
             // 使用传统的学习型位置编码
+            let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+            let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
             let pos_embeddings = self.pos_embedding.forward(positions);
             token_embeddings + pos_embeddings
         };
 
-        // 使用 Transformer Encoder 进行前向传播
-        x = if let Some(ref sage_encoder) = self.sage_encoder {
-            sage_encoder.forward(x)
-        } else {
-            self.transformer_encoder
-                .forward(TransformerEncoderInput::new(x))
+        // 使用 Sage Transformer Encoder 进行前向传播
+        x = match self.sage_encoder.as_ref() {
+            Some(sage) => sage.forward(x),
+            None => self.transformer_encoder.forward(TransformerEncoderInput::new(x)),
         };
 
         // Final head for language modeling
@@ -459,50 +457,32 @@ impl<B: Backend> Model<B> {
         self.transformer_encoder.new_autoregressive_cache()
     }
 
-    #[allow(dead_code)]
-    fn rope_encoding(&self, positions: Tensor<B, 2, Int>, dim: usize) -> Tensor<B, 3> {
-        let device = positions.device();
-        let seq_len = positions.dims()[1];
-        
-        // 构建位置编码张量
-        let rope = Tensor::<B, 3, Float>::zeros([1, seq_len, dim], &device);
-        
-        rope
-    }
-
-    /// 应用 RoPE 到嵌入
-    fn apply_rope(&self, embeddings: Tensor<B, 3>, _positions: Tensor<B, 2, Int>) -> Tensor<B, 3> {
-        // 暂时返回原始嵌入，跳过 RoPE 计算
-        embeddings
-    }
-
     pub fn forward_autoregressive_inference(
         &self,
         input: Tensor<B, 2, Int>,
-        cache: &mut TransformerEncoderAutoregressiveCache<B>,
+        _cache: &mut TransformerEncoderAutoregressiveCache<B>,
     ) -> Tensor<B, 3> {
+        // 如果没有 Sage Encoder（标准注意力），退回到普通前向传播（不使用 KV Cache）
+        if self.sage_encoder.is_none() {
+            return self.forward(input);
+        }
+
         let [batch_size, seq_len] = input.dims();
         let device = input.device();
 
-        // Token embeddings
         let token_embeddings = self.embedding.forward(input);
 
-        // Position embeddings
-        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
-        let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
-
         let x = if self.pos_encoding_type == "rope" {
-            self.apply_rope(token_embeddings, positions)
+            token_embeddings
         } else {
+            let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+            let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
             let pos_embeddings = self.pos_embedding.forward(positions);
             token_embeddings + pos_embeddings
         };
 
-        let x = self
-            .transformer_encoder
-            .forward_autoregressive_inference(TransformerEncoderInput::new(x), cache);
+        let x = self.sage_encoder.as_ref().unwrap().forward(x);
 
-        // Final head for language modeling
         self.output_head.forward(x)
     }
     
@@ -524,28 +504,28 @@ impl<B: Backend> Model<B> {
         // Token embeddings
         let token_embeddings = self.embedding.forward(input.text);
         
-        // Position embeddings
-        let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
-        let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
-
         let mut text_features = if self.pos_encoding_type == "rope" {
-            // 使用 RoPE 位置编码
-            self.apply_rope(token_embeddings, positions)
+            token_embeddings
         } else {
-            // 使用传统的学习型位置编码
+            let pos_ids = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device);
+            let positions = pos_ids.reshape([1, seq_len]).repeat(&[batch_size, 1]);
             let pos_embeddings = self.pos_embedding.forward(positions);
             token_embeddings + pos_embeddings
         };
         
         // 使用 multimodal_module 处理
-        text_features = self.multimodal_module.as_ref().unwrap().forward(text_features, input.image);
+        text_features = match self.multimodal_module.as_ref() {
+            Some(module) => module.forward(text_features, input.image),
+            None => {
+                eprintln!("Warning: multimodal_module not initialized but forward_multimodal called, skipping multimodal fusion");
+                text_features
+            }
+        };
         
-        // 使用 Transformer Encoder 进行前向传播
-        let text_features = if let Some(ref sage_encoder) = self.sage_encoder {
-            sage_encoder.forward(text_features)
-        } else {
-            self.transformer_encoder
-                .forward(TransformerEncoderInput::new(text_features))
+        // 使用 Sage Transformer Encoder 进行前向传播
+        let text_features = match self.sage_encoder.as_ref() {
+            Some(sage) => sage.forward(text_features),
+            None => self.transformer_encoder.forward(TransformerEncoderInput::new(text_features)),
         };
         
         // Final head for language modeling

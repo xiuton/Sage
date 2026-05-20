@@ -326,7 +326,8 @@ impl Tokenizer {
                 let vocab_size_str = self.vocab_size.to_string();
                 meta.insert("vocab_size", &vocab_size_str);
                 let meta_path = format!("{}.meta", path);
-                std::fs::write(meta_path, serde_json::to_string(&meta).unwrap())
+                let meta_json = serde_json::to_string(&meta).expect("Failed to serialize tokenizer meta");
+                std::fs::write(meta_path, meta_json)
             }
         }
     }

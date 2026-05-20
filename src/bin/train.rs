@@ -14,9 +14,15 @@ use sage::{
     train, train_from_cache, train_with_loaders, train_dpo,
     TrainingConfig,
 };
-use sage::training::{DPOConfig, load_dpo_jsonl};
+use sage::training::{
+    DPOConfig, load_dpo_jsonl,
+    streaming::{
+        SftRecord, SftMessage,
+        sft_template, code_template, math_template, sft_messages_template,
+        load_sft_messages_sample,
+    },
+};
 use sage::core::image_generation::{DiffusionModel, DiffusionConfig};
-use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     fs,
@@ -242,18 +248,6 @@ impl Args {
     }
 }
 
-#[derive(Deserialize, Debug)]
-struct SftRecord {
-    prompt: String,
-    response: String,
-}
-
-#[derive(Deserialize)]
-struct SftMessage {
-    role: String,
-    content: String,
-}
-
 fn collect_txt_files(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -321,82 +315,6 @@ fn load_corpus(args: &Args) -> io::Result<String> {
     let path: &str = if args.corpus.is_empty() { "corpus_cn.txt" } else { &args.corpus };
     let bytes = read_file_limited(Path::new(path), max_bytes)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
-}
-
-fn create_template(system: Option<&str>, prompt: &str, response: &str) -> String {
-    let mut out = String::with_capacity(512); // 预分配合理容量
-    out.push('\u{0002}');
-    out.push_str("<s>");
-    
-    if let Some(system_msg) = system {
-        out.push('\n');
-        out.push_str("<system>");
-        out.push_str(system_msg);
-        out.push_str("</system>");
-    }
-    
-    out.push('\n');
-    out.push_str("<user>");
-    out.push_str(prompt);
-    out.push_str("</user>");
-    out.push('\n');
-    out.push_str("<assistant>");
-    out.push_str(response);
-    out.push_str("</assistant>");
-    out.push('\u{0003}');
-    out.push('\n');
-    out
-}
-
-fn sft_template(prompt: &str, response: &str) -> String {
-    create_template(None, prompt, response)
-}
-
-/// 代码生成训练模板 - 优化代码生成场景
-fn code_template(prompt: &str, response: &str) -> String {
-    create_template(Some("你是一个专业的代码助手，擅长编写高质量、可读性强的代码。"), prompt, response)
-}
-
-/// 数学推理训练模板 - 优化数学问题解决场景
-fn math_template(prompt: &str, response: &str) -> String {
-    create_template(Some("你是一个数学专家，擅长解决各类数学问题并提供详细的解题步骤。"), prompt, response)
-}
-
-fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
-    let mut out = String::with_capacity(1024); // 预分配合理容量
-    out.push('\u{0002}');
-    out.push_str("<s>");
-
-    let mut has_assistant = false;
-    for m in messages {
-        match m.role.as_str() {
-            "system" => {
-                out.push('\n');
-                out.push_str("<system>");
-                out.push_str(&m.content);
-                out.push_str("</system>");
-            }
-            "user" => {
-                out.push('\n');
-                out.push_str("<user>");
-                out.push_str(&m.content);
-                out.push_str("</user>");
-            }
-            "assistant" => {
-                has_assistant = true;
-                out.push('\n');
-                out.push_str("<assistant>");
-                out.push_str(&m.content);
-                out.push_str("</assistant>");
-                out.push('\u{0003}');
-            }
-            _ => {}
-        }
-    }
-
-    out.push('\n');
-
-    if has_assistant { Some(out) } else { None }
 }
 
 fn load_sft_jsonl(args: &Args, path: &str) -> io::Result<String> {
@@ -492,49 +410,6 @@ fn load_sft_sample(args: &Args) -> String {
             _ => sft_template(&rec.prompt, &rec.response),
         };
         out.push_str(&template);
-    }
-    out
-}
-
-fn load_sft_messages_sample() -> String {
-    let samples = [
-        vec![
-            SftMessage {
-                role: "user".to_string(),
-                content: "你是谁？".to_string(),
-            },
-            SftMessage {
-                role: "assistant".to_string(),
-                content: "我是一个用 Rust 训练出来的小模型。".to_string(),
-            },
-        ],
-        vec![
-            SftMessage {
-                role: "user".to_string(),
-                content: "用一句话解释千字文是什么。".to_string(),
-            },
-            SftMessage {
-                role: "assistant".to_string(),
-                content: "《千字文》是由一千个不重复汉字组成的启蒙文章。".to_string(),
-            },
-        ],
-        vec![
-            SftMessage {
-                role: "user".to_string(),
-                content: "给我一个学习 Rust 的建议。".to_string(),
-            },
-            SftMessage {
-                role: "assistant".to_string(),
-                content: "从所有权和借用入手，多写小项目并配合 clippy 修正。".to_string(),
-            },
-        ],
-    ];
-
-    let mut out = String::new();
-    for messages in samples {
-        if let Some(sample) = sft_messages_template(&messages) {
-            out.push_str(&sample);
-        }
     }
     out
 }

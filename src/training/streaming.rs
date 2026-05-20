@@ -24,24 +24,36 @@ pub enum SftInput {
 }
 
 #[derive(Deserialize)]
-struct SftRecord {
-    prompt: String,
-    response: String,
+pub struct SftRecord {
+    pub prompt: String,
+    pub response: String,
 }
 
 #[derive(Deserialize)]
-struct SftMessage {
-    role: String,
-    content: String,
+pub struct SftMessage {
+    pub role: String,
+    pub content: String,
 }
 
-fn sft_template(prompt: &str, response: &str) -> String {
-    let estimated_len = 4 + "<user>".len() + prompt.len() + "</user>".len() + "<assistant>".len() + response.len() + "</assistant>".len() + 6;
+pub fn create_template(system: Option<&str>, prompt: &str, response: &str) -> String {
+    let estimated_len = 512;
     let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
-    out.push_str("<s>\n<user>");
+    out.push_str("<s>");
+
+    if let Some(system_msg) = system {
+        out.push('\n');
+        out.push_str("<system>");
+        out.push_str(system_msg);
+        out.push_str("</system>");
+    }
+
+    out.push('\n');
+    out.push_str("<user>");
     out.push_str(prompt);
-    out.push_str("</user>\n<assistant>");
+    out.push_str("</user>");
+    out.push('\n');
+    out.push_str("<assistant>");
     out.push_str(response);
     out.push_str("</assistant>");
     out.push('\u{0003}');
@@ -49,7 +61,21 @@ fn sft_template(prompt: &str, response: &str) -> String {
     out
 }
 
-fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
+pub fn sft_template(prompt: &str, response: &str) -> String {
+    create_template(None, prompt, response)
+}
+
+/// 代码生成训练模板
+pub fn code_template(prompt: &str, response: &str) -> String {
+    create_template(Some("你是一个专业的代码助手，擅长编写高质量、可读性强的代码。"), prompt, response)
+}
+
+/// 数学推理训练模板
+pub fn math_template(prompt: &str, response: &str) -> String {
+    create_template(Some("你是一个数学专家，擅长解决各类数学问题并提供详细的解题步骤。"), prompt, response)
+}
+
+pub fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
     let estimated_len: usize = messages.iter().map(|m| m.content.len() + 20).sum();
     let mut out = String::with_capacity(estimated_len);
     out.push('\u{0002}');
@@ -58,27 +84,36 @@ fn sft_messages_template(messages: &[SftMessage]) -> Option<String> {
     let mut has_assistant = false;
     for m in messages {
         match m.role.as_str() {
+            "system" => {
+                out.push('\n');
+                out.push_str("<system>");
+                out.push_str(&m.content);
+                out.push_str("</system>");
+            }
             "user" => {
+                out.push('\n');
                 out.push_str("<user>");
                 out.push_str(&m.content);
-                out.push_str("</user>\n");
+                out.push_str("</user>");
             }
             "assistant" => {
                 has_assistant = true;
+                out.push('\n');
                 out.push_str("<assistant>");
                 out.push_str(&m.content);
                 out.push_str("</assistant>");
                 out.push('\u{0003}');
-                out.push('\n');
             }
             _ => {}
         }
     }
 
+    out.push('\n');
+
     if has_assistant { Some(out) } else { None }
 }
 
-fn sft_sample_from_json_line(line: &str) -> Option<String> {
+pub fn sft_sample_from_json_line(line: &str) -> Option<String> {
     if let Ok(rec) = serde_json::from_str::<SftRecord>(line) {
         return Some(sft_template(&rec.prompt, &rec.response));
     }
@@ -89,7 +124,7 @@ fn sft_sample_from_json_line(line: &str) -> Option<String> {
     sft_messages_template(&messages)
 }
 
-fn load_sft_sample() -> String {
+pub fn load_sft_sample() -> String {
     let samples = [
         SftRecord {
             prompt: "你是谁？".to_string(),
@@ -115,7 +150,7 @@ fn load_sft_sample() -> String {
     out
 }
 
-fn load_sft_messages_sample() -> String {
+pub fn load_sft_messages_sample() -> String {
     let samples = [
         vec![
             SftMessage {

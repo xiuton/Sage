@@ -10,6 +10,7 @@ pub use generation::{
     generate_multimodal,
     generate_quantized,
     generate_speculative,
+    generate_stream,
     GenerateOptions,
     GenerationState,
     ModelType,

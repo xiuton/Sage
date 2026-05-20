@@ -26,6 +26,7 @@ use std::{
 use tokio::sync::Semaphore;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -389,6 +390,10 @@ async fn main() {
         use_moe: false,
         num_experts: 0,
         top_k_experts: 0,
+        pos_encoding_type: "rope".to_string(),
+        attention_type: "standard".to_string(),
+        n_kv_heads: None,
+        rope_theta: 10000.0,
     };
 
     let optimizer_config = AdamConfig::new();
@@ -601,27 +606,42 @@ async fn chat_completions_handler(
         stop_sequences: req.stop.unwrap_or(Vec::new()),
         use_kv_cache: true,
         streaming: false,
+        beam_size: 1,
+        beam_penalty: 1.0,
     };
 
     let start_time = std::time::Instant::now();
 
-    // 暂时禁用流式输出，以确保编译通过
-    // if req.stream.unwrap_or(false) {
-    //     let broadcaster = state.broadcast_tx.clone();
-    //     let stream = stream_chat_response(
-    //         model.clone(),
-    //         tokenizer.clone(),
-    //         formatted_prompt,
-    //         options,
-    //         (*broadcaster).clone(),
-    //     );
-    //     let response = Sse::new(stream).keep_alive(
-    //         axum::response::sse::KeepAlive::new()
-    //             .interval(Duration::from_secs(30))
-    //             .text("keep-alive"),
-    //     );
-    //     return Ok::<_, (StatusCode, Json<ErrorResponse>)>(response.into_response());
-    // }
+    // 流式输出模式
+    if req.stream.unwrap_or(false) {
+        let model = state.llm_model.clone().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "model_not_available".to_string(),
+                message: "LLM模型未加载，无法启用流式输出".to_string(),
+            }),
+        ))?;
+        let tokenizer = state.llm_tokenizer.clone().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "tokenizer_not_available".to_string(),
+                message: "Tokenizer未加载".to_string(),
+            }),
+        ))?;
+
+        let stream = stream_chat_response(
+            model,
+            tokenizer,
+            formatted_prompt,
+            options,
+        );
+        let response = Sse::new(stream).keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(Duration::from_secs(30))
+                .text("keep-alive"),
+        );
+        return Ok(response.into_response());
+    }
 
     let (reply, prompt_tokens, completion_tokens) = perform_llm_inference(&state, &formatted_prompt, options)?;
     let duration_ms = start_time.elapsed().as_millis();
@@ -661,92 +681,40 @@ async fn chat_completions_handler(
     Ok(Json(response).into_response())
 }
 
-// fn stream_chat_response(
-//     model: Arc<Mutex<sage::core::Model<NdArray>>>,
-//     tokenizer: Arc<Tokenizer>,
-//     formatted_prompt: String,
-//     options: GenerateOptions,
-//     broadcaster: tokio::sync::broadcast::Sender<ServerEvent>,
-// ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-//     let created_time = std::time::SystemTime::now()
-//         .duration_since(std::time::UNIX_EPOCH)
-//         .unwrap()
-//         .as_secs();
-//     let request_id = Uuid::new_v4().to_string();
+fn stream_chat_response(
+    llm_model: Arc<LazyModel<NdArray>>,
+    tokenizer: Arc<Tokenizer>,
+    formatted_prompt: String,
+    options: GenerateOptions,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-//     async_stream::stream! {
-//         let device = NdArrayDevice::Cpu;
-//         let model_guard = model.lock().unwrap();
-//         
-//         let mut generation_state = sage::inference::GenerationState::new(
-//             sage::inference::ModelType::Normal(&*model_guard),
-//             &tokenizer,
-//             &formatted_prompt,
-//             &options,
-//             &device,
-//         );
+    let device = NdArrayDevice::Cpu;
+    let model_arc = llm_model.get_model(&device);
 
-//         let mut full_content = String::new();
+    tokio::task::spawn_blocking(move || {
+        let model_guard = model_arc.lock().expect("Failed to lock model for streaming inference");
+        let tokenizer_ref: &Tokenizer = &*tokenizer;
 
-//         while !generation_state.is_stopped() {
-//             if let Some(token) = generation_state.next_token() {
-//                 full_content.push_str(&token);
+        sage::inference::generate_stream(
+            &*model_guard,
+            tokenizer_ref,
+            &formatted_prompt,
+            &options,
+            &device,
+            |token| {
+                if tx.send(token).is_err() {
+                    false // client disconnected, stop generation
+                } else {
+                    true // continue generation
+                }
+            },
+        );
+    });
 
-//                 let choice = ChatCompletionChoice {
-//                     index: 0,
-//                     message: ChatMessage {
-//                         role: "assistant".to_string(),
-//                         content: full_content.clone(),
-//                     },
-//                     finish_reason: None,
-//                 };
-
-//                 let chunk = ChatCompletionResponse {
-//                     id: request_id.clone(),
-//                     object: "chat.completion.chunk".to_string(),
-//                     created: created_time,
-//                     model: "sage-llm".to_string(),
-//                     choices: vec![choice],
-//                     usage: Usage {
-//                         prompt_tokens: formatted_prompt.len() / 4,
-//                         completion_tokens: full_content.len() / 4,
-//                         total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
-//                     },
-//                 };
-
-//                 let _ = broadcaster.send(ServerEvent::ChatMessage {
-//                     content: token.clone(),
-//                 });
-
-//                 yield Ok(Event::default().json_data(&chunk).unwrap());
-//             }
-//         }
-
-//         let final_choice = ChatCompletionChoice {
-//             index: 0,
-//             message: ChatMessage {
-//                 role: "assistant".to_string(),
-//                 content: full_content.clone(),
-//             },
-//             finish_reason: Some("stop".to_string()),
-//         };
-
-//         let final_chunk = ChatCompletionResponse {
-//             id: request_id,
-//             object: "chat.completion.chunk".to_string(),
-//             created: created_time,
-//             model: "sage-llm".to_string(),
-//             choices: vec![final_choice],
-//             usage: Usage {
-//                 prompt_tokens: formatted_prompt.len() / 4,
-//                 completion_tokens: full_content.len() / 4,
-//                 total_tokens: (formatted_prompt.len() + full_content.len()) / 4,
-//             },
-//         };
-
-//         yield Ok(Event::default().json_data(&final_chunk).unwrap());
-//     }
-// }
+    UnboundedReceiverStream::new(rx)
+        .map(|token| Ok(Event::default().data(token)))
+}
 
 async fn completions_handler(
     state: State<Arc<AppState>>,
@@ -771,6 +739,8 @@ async fn completions_handler(
         stop_sequences: Vec::new(),
         use_kv_cache: true,
         streaming: false,
+        beam_size: 1,
+        beam_penalty: 1.0,
     };
 
     let (reply, _, _) = perform_llm_inference(&state, &formatted_prompt, options)?;

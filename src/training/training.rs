@@ -47,9 +47,15 @@ struct TrainingContext<B: AutodiffBackend> {
 }
 
 fn create_artifact_dirs(artifact_dir: &str) {
-    std::fs::create_dir_all(artifact_dir).ok();
-    std::fs::create_dir_all(format!("{}/train", artifact_dir)).ok();
-    std::fs::create_dir_all(format!("{}/valid", artifact_dir)).ok();
+    if let Err(e) = std::fs::create_dir_all(artifact_dir) {
+        log::warn!("创建工作目录失败 {}: {}", artifact_dir, e);
+    }
+    if let Err(e) = std::fs::create_dir_all(format!("{}/train", artifact_dir)) {
+        log::warn!("创建训练日志目录失败: {}", e);
+    }
+    if let Err(e) = std::fs::create_dir_all(format!("{}/valid", artifact_dir)) {
+        log::warn!("创建验证日志目录失败: {}", e);
+    }
 }
 
 fn save_config_and_tokenizer(artifact_dir: &str, config: &TrainingConfig, tokenizer: &Tokenizer) -> Result<(), String> {
@@ -106,8 +112,14 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
     let mut model = adjusted_context.init_model.unwrap_or_else(|| {
         adjusted_context.config.model.init::<B>(&adjusted_context.device)
     });
-    let mut optim = adjusted_context.init_optimizer.unwrap_or_else(|| {
-        adjusted_context.config.optimizer.init()
+    let mut optim_config = adjusted_context.config.optimizer.clone();
+    if let Some(clip_value) = adjusted_context.config.gradient_clip {
+        use burn::optim::grad_clipping::GradientClippingConfig;
+        optim_config = optim_config.with_grad_clipping(Some(GradientClippingConfig::Norm(clip_value as f32)));
+        println!("梯度裁剪已启用 (Norm), clip_value={}", clip_value);
+    }
+    let mut optim: OptimizerAdaptor<burn::optim::Adam, Model<B>, B> = adjusted_context.init_optimizer.unwrap_or_else(|| {
+        optim_config.init()
     });
 
     let lr = adjusted_context.config.lr;
@@ -131,15 +143,21 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
 
     // 创建训练日志目录
     let checkpoint_dir = Path::new(&output_dir).join("checkpoint");
-    fs::create_dir_all(&checkpoint_dir).ok();
+    if let Err(e) = fs::create_dir_all(&checkpoint_dir) {
+        log::warn!("创建检查点目录失败: {}", e);
+    }
 
     let start_time = std::time::Instant::now();
 
     // 创建验证损失日志目录
     let valid_dir = Path::new(&output_dir).join("valid");
     let train_dir = Path::new(&output_dir).join("train");
-    fs::create_dir_all(&valid_dir).ok();
-    fs::create_dir_all(&train_dir).ok();
+    if let Err(e) = fs::create_dir_all(&valid_dir) {
+        log::warn!("创建验证日志目录失败: {}", e);
+    }
+    if let Err(e) = fs::create_dir_all(&train_dir) {
+        log::warn!("创建训练日志目录失败: {}", e);
+    }
 
     // 训练循环
     for epoch in 1..=num_epochs {
@@ -148,8 +166,12 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
         let mut accumulator = GradientsAccumulator::new();
         let epoch_valid_dir = valid_dir.join(format!("epoch-{}", epoch));
         let epoch_train_dir = train_dir.join(format!("epoch-{}", epoch));
-        fs::create_dir_all(&epoch_valid_dir).ok();
-        fs::create_dir_all(&epoch_train_dir).ok();
+        if let Err(e) = fs::create_dir_all(&epoch_valid_dir) {
+            log::warn!("创建轮次验证日志目录失败: {}", e);
+        }
+        if let Err(e) = fs::create_dir_all(&epoch_train_dir) {
+            log::warn!("创建轮次训练日志目录失败: {}", e);
+        }
 
         // 训练阶段
         let mut train_loss_sum = 0.0f64;
@@ -176,27 +198,11 @@ fn run_training<B: AutodiffBackend>(context: TrainingContext<B>) {
                 // 梯度累积
             if (iteration + 1) % accum == 0 {
                 let grads = accumulator.grads();
-                
-                // 梯度裁剪
-                let grads = if adjusted_context.config.gradient_clip.is_some() {
-                    // 对每个参数的梯度进行裁剪
-                    grads
-                } else {
-                    grads
-                };
 
-                // 如果启用了 LoRA 且设置了仅训练 LoRA，则过滤梯度
-                let grads = if adjusted_context.config.use_lora {
-                    let _lora_param_ids = model.get_lora_params();
-                    // 这里我们创建一个新的 GradientsParams 只包含 LoRA 参数的梯度
-                    // 注意：这在某些 Burn 版本中可能需要特定的方法来访问内部数据
-                    // 这里采用简单的逻辑：只有 LoRA 参数才会被更新
-                    // 在实际实现中，通常是通过在 optimizer 中配置哪些参数需要更新来完成的
-                    // 但这里我们可以通过过滤梯度来实现
-                    grads
-                } else {
-                    grads
-                };
+                // 如果启用了 LoRA，打印提示（LoRA 参数冻结在模型层处理）
+                if adjusted_context.config.use_lora {
+                    println!("LoRA 模式：仅训练 LoRA 适配器参数（非 LoRA 权重已在模型层冻结）");
+                }
 
                 let current_lr = lr_scheduler.as_mut().map(|s| s.get_lr()).unwrap_or(lr);
                 model = optim.step(current_lr, model, grads);
@@ -497,7 +503,12 @@ pub fn train_dpo<B: AutodiffBackend>(
     let model = init_model.unwrap_or_else(|| config.model.init::<B>(&device));
     
     // 创建优化器
-    let optimizer_config = config.optimizer;
+    let mut optimizer_config = config.optimizer;
+    if let Some(clip_value) = config.gradient_clip {
+        use burn::optim::grad_clipping::GradientClippingConfig;
+        optimizer_config = optimizer_config.with_grad_clipping(Some(GradientClippingConfig::Norm(clip_value as f32)));
+        println!("DPO梯度裁剪已启用 (Norm), clip_value={}", clip_value);
+    }
     let optimizer = optimizer_config.init();
     
     // 创建DPO训练器
@@ -527,7 +538,9 @@ pub fn train_dpo<B: AutodiffBackend>(
     
     // 创建检查点目录
     let checkpoint_dir = Path::new(output_dir).join("checkpoint");
-    fs::create_dir_all(&checkpoint_dir).ok();
+    if let Err(e) = fs::create_dir_all(&checkpoint_dir) {
+        log::warn!("创建DPO检查点目录失败: {}", e);
+    }
     
     // 训练循环
     for epoch in 1..=config.num_epochs {

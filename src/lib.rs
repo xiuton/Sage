@@ -18,7 +18,6 @@ pub mod transformer; // Transformer 组件 - 基于 Burn TransformerEncoder
 // 自定义模块 (Sage 项目特定实现)
 // -----------------------------------------------------------------------------
 pub mod configs;   // 配置管理
-pub mod api;       // API 服务器
 pub mod tools;     // 工具函数 (模型导出, 下载等)
 pub mod utils;     // 通用工具 (错误处理, 日志, 性能监控)
 pub mod quantization; // 量化推理支持

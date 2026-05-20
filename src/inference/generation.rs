@@ -85,7 +85,6 @@ pub struct BeamState<'a, B: Backend> {
     tokenizer: &'a Tokenizer,
     tokens: Vec<usize>,
     score: f32,
-    #[allow(dead_code)]
     cache: Option<burn::nn::transformer::TransformerEncoderAutoregressiveCache<B>>,
     seen_tokens: HashSet<usize>,
     token_frequency: HashMap<usize, usize>,
@@ -179,16 +178,24 @@ impl<'a, B: Backend> BeamState<'a, B> {
         )
         .unsqueeze::<2>();
 
-        let output = match &self.model {
-            ModelType::Normal(model) => {
-                model.forward(input)
-            },
-            ModelType::Quantized(model) => model.forward(input),
-            ModelType::Multimodal(model, image) => {
-                use crate::core::multimodal::MultimodalInput;
-                let multimodal_input = MultimodalInput::new(input, (**image).clone());
-                model.forward_multimodal(multimodal_input)
-            },
+        let output = {
+            // 分割借用：分别获取 model 和 cache 的引用，避开同时借用 self
+            let cache = &mut self.cache;
+            match &self.model {
+                ModelType::Normal(model) => {
+                    if let Some(c) = cache.as_mut() {
+                        model.forward_autoregressive_inference(input, c)
+                    } else {
+                        model.forward(input)
+                    }
+                },
+                ModelType::Quantized(model) => model.forward(input),
+                ModelType::Multimodal(model, image) => {
+                    use crate::core::multimodal::MultimodalInput;
+                    let multimodal_input = MultimodalInput::new(input, (**image).clone());
+                    model.forward_multimodal(multimodal_input)
+                },
+            }
         };
 
         let [_, seq_len, _] = output.dims();
@@ -198,7 +205,7 @@ impl<'a, B: Backend> BeamState<'a, B> {
         let mut logits_vec: Vec<f32> = last_token_logits
             .to_data()
             .as_slice::<f32>()
-            .unwrap()
+            .expect("inference logits tensor must be f32")
             .to_vec();
 
         // 应用温度
@@ -314,7 +321,6 @@ pub struct GenerationState<'a, B: Backend> {
     device: &'a B::Device,
     generated_tokens: usize,
     stopped: bool,
-    #[allow(dead_code)]
     cache: Option<burn::nn::transformer::TransformerEncoderAutoregressiveCache<B>>,
     last_token_only: bool,
 }
@@ -416,16 +422,24 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         let input_prep_duration = input_prep_start.elapsed();
         
         let forward_start = Instant::now();
-        let output = match &self.model {
-            ModelType::Normal(model) => {
-                model.forward(input)
-            },
-            ModelType::Quantized(model) => model.forward(input),
-            ModelType::Multimodal(model, image) => {
-                use crate::core::multimodal::MultimodalInput;
-                let multimodal_input = MultimodalInput::new(input, (**image).clone());
-                model.forward_multimodal(multimodal_input)
-            },
+        let output = {
+            // 分割借用：分别获取 model 和 cache 的引用
+            let kv_cache = &mut self.cache;
+            match &self.model {
+                ModelType::Normal(model) => {
+                    if let Some(c) = kv_cache.as_mut() {
+                        model.forward_autoregressive_inference(input, c)
+                    } else {
+                        model.forward(input)
+                    }
+                },
+                ModelType::Quantized(model) => model.forward(input),
+                ModelType::Multimodal(model, image) => {
+                    use crate::core::multimodal::MultimodalInput;
+                    let multimodal_input = MultimodalInput::new(input, (**image).clone());
+                    model.forward_multimodal(multimodal_input)
+                },
+            }
         };
         let forward_duration = forward_start.elapsed();
         let [_, seq_len, _] = output.dims();
@@ -438,10 +452,8 @@ impl<'a, B: Backend> GenerationState<'a, B> {
         let mut logits_vec: Vec<f32> = last_token_logits
             .to_data()
             .as_slice::<f32>()
-            .unwrap()
+            .expect("speculative decoding logits must be f32")
             .to_vec();
-
-        // 应用温度
         let temperature = self.options.temperature.max(1.0e-5);
         for v in logits_vec.iter_mut() {
             *v /= temperature;
@@ -876,7 +888,7 @@ pub fn generate_speculative<B: Backend>(
             let logits_vec: Vec<f32> = last_logits
                 .to_data()
                 .as_slice::<f32>()
-                .unwrap()
+                .expect("generation logits tensor must be f32")
                 .to_vec();
 
             let temperature = options.temperature.max(1e-5);
@@ -920,7 +932,7 @@ pub fn generate_speculative<B: Backend>(
             let logits_vec: Vec<f32> = logits
                 .to_data()
                 .as_slice::<f32>()
-                .unwrap()
+                .expect("quantized generation logits must be f32")
                 .to_vec();
 
             let mut indexed: Vec<(usize, f32)> = logits_vec.into_iter().enumerate().collect();

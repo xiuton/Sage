@@ -19,7 +19,10 @@ fn test_serde_error_conversion() {
 
 #[test]
 fn test_string_conversion() {
-    let sage_err: SageError = "配置解析失败: 缺少 batch_size 字段".to_string().into();
+    let sage_err = SageError::configuration(
+        "配置解析失败: 缺少 batch_size 字段".to_string(),
+        None::<String>,
+    );
     let msg = format!("{}", sage_err);
     assert!(msg.contains("配置错误"));
     assert!(msg.contains("batch_size"));

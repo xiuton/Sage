@@ -112,7 +112,7 @@ fn example_basic_setup(device: &NdArrayDevice) {
     };
     
     // 初始化视觉编码器
-    let _vision_encoder = VisionEncoder::new(&vision_config, device);
+    let _vision_encoder = VisionEncoder::<Backend>::new(&vision_config, device);
     
     // 创建多模态配置
     let multimodal_config = MultimodalConfig {
@@ -122,7 +122,7 @@ fn example_basic_setup(device: &NdArrayDevice) {
     };
     
     // 初始化多模态融合层
-    let _multimodal_fusion = MultimodalFusion::new(&multimodal_config, device);
+    let _multimodal_fusion = MultimodalFusion::<Backend>::new(&multimodal_config, device);
     
     println!("   ✅ 基础多模态模块初始化成功");
 }
@@ -135,7 +135,7 @@ fn example_vision_encoder(device: &NdArrayDevice) {
         image_size: 224,
     };
     
-    let resnet = VisionEncoder::new(&resnet_config, device);
+    let resnet = VisionEncoder::<Backend>::new(&resnet_config, device);
     
     // 创建示例输入
     let dummy_image: Tensor<Backend, 4> = Tensor::ones([1, 3, 224, 224], device);
@@ -155,7 +155,7 @@ fn example_multimodal_fusion(device: &NdArrayDevice) {
         fusion: "gated".to_string(),
     };
     
-    let fusion = MultimodalFusion::new(&config, device);
+    let fusion = MultimodalFusion::<Backend>::new(&config, device);
     
     // 创建示例特征
     let vision_features: Tensor<Backend, 2> = Tensor::ones([1, 512], device);
@@ -182,8 +182,8 @@ fn example_full_inference(device: &NdArrayDevice) {
         fusion: "gated".to_string(),
     };
     
-    let vision_encoder = VisionEncoder::new(&vision_config, device);
-    let multimodal_fusion = MultimodalFusion::new(&multimodal_config, device);
+    let vision_encoder = VisionEncoder::<Backend>::new(&vision_config, device);
+    let multimodal_fusion = MultimodalFusion::<Backend>::new(&multimodal_config, device);
     let preprocessor = ImagePreprocessor::new(224, device.clone());
     
     // 2. 处理图像（实际中加载真实图像）
