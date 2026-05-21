@@ -33,6 +33,8 @@ pub struct GenerateOptions {
     pub presence_penalty: f32,
     /// 频率惩罚（基于 token 出现次数降低概率）
     pub frequency_penalty: f32,
+    /// 最大连续重复次数（超过则强制抑制）
+    pub max_consecutive: usize,
     /// 随机种子（None 则使用系统熵）
     pub seed: Option<u64>,
     /// 上下文窗口长度
@@ -58,10 +60,11 @@ impl Default for GenerateOptions {
             temperature: 1.0,
             top_k: 50,
             top_p: 0.9,
-            repetition_penalty: 1.0,
+            repetition_penalty: 1.15,
             punctuation_penalty: 1.0,
-            presence_penalty: 0.0,
-            frequency_penalty: 0.0,
+            presence_penalty: 0.1,
+            frequency_penalty: 0.05,
+            max_consecutive: 2,
             seed: None,
             context_len: 512,
             stop_on_user: false,
@@ -467,6 +470,31 @@ impl<'a, B: Backend> GenerationState<'a, B> {
                 if self.options.presence_penalty > 0.0 {
                     logits_vec[*token_id] -= self.options.presence_penalty;
                 }
+            }
+        }
+
+        // 紧邻 token 强抑制：防止同一个字连续出现两次
+        if self.generated_tokens > 0 {
+            let last_token = self.tokens[self.tokens.len() - 1];
+            let neighbor_penalty = 1.0 + (self.options.repetition_penalty - 1.0) * 3.0;
+            logits_vec[last_token] /= neighbor_penalty;
+        }
+
+        // 连续重复抑制：同一个字符连续出现超过 max_consecutive 次时强制抑制
+        if self.generated_tokens >= 2 {
+            let mut consecutive_count = 1;
+            let last_token = self.tokens[self.tokens.len() - 1];
+            for i in (1..self.tokens.len()).rev() {
+                if self.tokens[i] == self.tokens[i - 1] {
+                    consecutive_count += 1;
+                } else {
+                    break;
+                }
+            }
+            if consecutive_count >= self.options.max_consecutive {
+                let penalty = 1.0 + (consecutive_count as f32 - 1.0) * 5.0;
+                logits_vec[last_token] /= penalty;
+                log::debug!("[Generation] Consecutive repetition detected: token={} count={} penalty={}", last_token, consecutive_count, penalty);
             }
         }
 

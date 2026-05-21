@@ -31,7 +31,7 @@ struct Args {
     #[arg(short = 'p', long, default_value_t = 0.9)]
     top_p: f32,
 
-    #[arg(short = 'r', long, default_value_t = 1.1)]
+    #[arg(short = 'r', long, default_value_t = 1.3)]
     repetition_penalty: f32,
 
     #[arg(long, default_value_t = 1.3)]
@@ -97,8 +97,9 @@ impl Args {
             top_p: self.top_p,
             repetition_penalty: self.repetition_penalty,
             punctuation_penalty: self.punctuation_penalty,
-            presence_penalty: 0.0,
-            frequency_penalty: 0.0,
+            presence_penalty: 0.3,
+            frequency_penalty: 0.15,
+            max_consecutive: 2,
             seed: self.seed,
             context_len,
             stop_on_user: self.stop_on_user,
