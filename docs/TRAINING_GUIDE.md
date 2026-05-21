@@ -386,19 +386,52 @@ cargo run --bin image_gen -- `
 
 ## 语料获取
 
-### 1. 使用内置生成工具
+### 1. 使用内置生成工具（推荐）
+
+`gen_data` 是 Sage 内置的综合数据生成工具，可以生成高质量的问答、长文本、代码和多轮对话语料。
+
+**快速上手：**
 
 ```bash
-# 生成综合语料（包含普通对话、Web 问答、多模态数据）
-cargo run --release --bin gen_data -- --out data/corpus.jsonl --count 1000 --web --multimodal --seed 123
+# 生成 2000 条综合语料（含 SFT JSONL + 纯文本语料）
+cargo run --release --bin gen_data -- -c 2000
+
+# 进阶：生成 5000 条并自动训练 BPE tokenizer（核心流程）
+cargo run --release --bin gen_data -- -c 5000 --train-bpe --bpe-vocab-size 32000
 ```
 
+**数据内容组成（按比例混合）：**
+
+| 类型 | 占比 | 说明 |
+|------|------|------|
+| 本地 QA 问答 | 60% | 30+ 条专家撰写的高质量问答对（覆盖 AI、编程、NLP、数据库等 20+ 领域） |
+| 长文本文章 | 15% | 10 篇深度技术文章（AI 发展史、Rust 所有权、量子力学等，每篇 400-800 字） |
+| 代码片段 | 10% | Rust/Python/JavaScript/Go/SQL 实用代码 |
+| 多轮对话 | 10% | 3-4 轮连续对话（机器学习、Rust、Docker、区块链等话题） |
+| 合成问答 | 5% | 模板化自动生成的问题（计算、推荐、对比等） |
+
+**输出文件：**
+
+执行 `gen_data -c 2000` 后生成：
+- `data/sft_data.jsonl` — 2,000 条 SFT 对话数据（JSONL 格式，约 1.6 MB）
+- `data/corpus.txt` — 纯文本语料（约 1.3 MB，8,000+ 行，用于 BPE 训练）
+
 **参数说明：**
-- `--out`：输出文件路径
-- `--count`：生成数据数量
-- `--web`：包含网络/Web 风格问答
-- `--multimodal`：包含多模态图像路径
-- `--seed`：随机种子
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-c, --count` | 生成数据条数 | 1000 |
+| `-s, --seed` | 随机种子 | 42 |
+| `--out` | SFT JSONL 输出路径 | `data/sft_data.jsonl` |
+| `--corpus-out` | 纯文本语料输出路径 | `./data/corpus.txt` |
+| `--train-bpe` | 生成后自动训练 BPE tokenizer | false |
+| `--bpe-vocab-size` | BPE 词汇表大小 | 32000 |
+| `--bpe-output` | BPE tokenizer 保存路径 | `./models/tokenizer_bpe.json` |
+| `--web` | 混合 Web 风格问答 | false |
+| `--multimodal` | 添加多模态图像路径 | false |
+| `--image-dir` | 图片扫描目录（文生图） | - |
+
+**完整参数列表** 请参阅 [COMMANDS.md](COMMANDS.md#4-gen_data综合数据生成与-bpe-训练)。
 
 ### 2. 公开数据集
 
@@ -432,6 +465,69 @@ cargo run --release --bin gen_data -- --out data/corpus.jsonl --count 1000 --web
     {"role": "assistant", "content": "回答内容"}
 ]}
 ```
+
+## BPE Tokenizer 训练
+
+BPE（Byte-Pair Encoding）是一种数据驱动的子词分词算法，能有效处理未登录词（OOV）问题，适合中文和代码混合的语料。
+
+### 为什么用 BPE？
+
+| 特性 | 字符级 Tokenizer | BPE Tokenizer |
+|------|-----------------|---------------|
+| 词表大小 | ~5000（中文字符+符号） | 8000-50000（可配置） |
+| 编码效率 | 每个字符一个 token | 高频词/词组 1 个 token |
+| 处理未登录词 | 可以（拼音拆解） | 可以（子词拆解） |
+| 语义表示 | 无语义信息 | 子词含语义 |
+
+### 训练 BPE Tokenizer
+
+**方式一：生成语料时自动训练（推荐流程）**
+
+```bash
+# 单条命令完成：生成语料 -> 训练 BPE -> 保存
+cargo run --release --bin gen_data -- -c 5000 --train-bpe --bpe-vocab-size 32000 --bpe-output ./models/tokenizer_bpe.json
+```
+
+流程说明：
+1. `gen_data` 先生成 5,000 条综合语料
+2. 自动提取纯文本保存到 `data/corpus.txt`
+3. 调用 `Tokenizer::new_bpe()` 在纯文本上训练 BPE
+4. 将训练好的 tokenizer 保存到指定路径
+
+**方式二：分步执行（灵活控制）**
+
+```bash
+# 步骤 1：先生成语料
+cargo run --release --bin gen_data -- -c 10000
+
+# 步骤 2：用 create_tokenizer 单独训练
+cargo run --release --bin create_tokenizer -- \
+    --sample-file ./data/corpus.txt \
+    --use-bpe \
+    --vocab-size 32000 \
+    --output ./models/tokenizer_bpe.json
+```
+
+### 在训练中使用 BPE
+
+```bash
+cargo run --release --bin train -- \
+    --corpus ./data/corpus.txt \
+    --use-bpe \
+    --bpe-vocab-size 32000 \
+    --output-dir ./models/my_model \
+    --num-epochs 50 \
+    --max-seq-len 256 \
+    --learning-rate 5e-5 \
+    --backend cpu
+```
+
+关键参数：
+- `--use-bpe`：启用 BPE 分词器（默认使用字符级分词）
+- `--bpe-vocab-size`：BPE 词表大小，建议值：
+  - 纯中文语料：8000-16000
+  - 中英文混合：16000-32000
+  - 含大量代码：32000-50000
 
 ## 实际训练流程
 

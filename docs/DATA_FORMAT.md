@@ -20,9 +20,31 @@ Sage 目前支持三类训练目标：
 推荐使用内置的 `gen_data` 工具生成各种格式的示例数据：
 
 ```bash
+# 生成包含综合语料（问答、长文本、代码、多轮对话）的 SFT 数据 + 纯文本语料
+cargo run --release --bin gen_data -- -c 2000
+
+# 生成数据并自动训练 BPE tokenizer
+cargo run --release --bin gen_data -- -c 5000 --train-bpe --bpe-vocab-size 32000
+
 # 生成包含 Web 问答和多模态路径的综合 SFT 数据
 cargo run --release --bin gen_data -- --out data/train.jsonl --count 1000 --web --multimodal
 ```
+
+`gen_data` 支持生成的五种数据类型：
+
+| 数据类型 | 占比 | 输出格式 | 说明 |
+|---------|------|---------|------|
+| QA 问答 | 60% | JSONL + TXT | 30+ 条专家撰写的问答对，覆盖 20+ 领域 |
+| 长文本文章 | 15% | JSONL + TXT | 10 篇深度技术文章，每篇 400-800 字 |
+| 代码片段 | 10% | JSONL + TXT | Rust/Python/JS/Go/SQL 实用代码 |
+| 多轮对话 | 10% | JSONL + TXT | 3-4 轮连续对话 |
+| 合成问答 | 5% | JSONL + TXT | 模板化自动生成的问答 |
+
+**输出文件**：
+- `data/sft_data.jsonl` — SFT 对话数据（JSONL 格式）
+- `data/corpus.txt` — 纯文本语料（一行一段，用于 LM 续写训练或 BPE 训练）
+
+> 完整参数列表请参阅 [COMMANDS.md](COMMANDS.md#4-gen_data综合数据生成与-bpe-训练)。
 
 ---
 

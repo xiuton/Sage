@@ -353,7 +353,7 @@ cargo run --bin image_gen -- --backend gpu --prompt "a starry night sky" --outpu
 
 ---
 
-## 4) gen_data（数据生成）
+## 4) gen_data（综合数据生成与 BPE 训练）
 
 运行：
 
@@ -361,22 +361,117 @@ cargo run --bin image_gen -- --backend gpu --prompt "a starry night sky" --outpu
 cargo run --release --bin gen_data -- [OPTIONS]
 ```
 
-### 4.1 生成 SFT 训练数据
+`gen_data` 是一个强大的综合数据生成工具，可以生成多种类型的训练语料（问答、长文本、代码、多轮对话），并可选地自动训练 BPE tokenizer。
+
+### 4.1 参数总览
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-c, --count` | 生成数据条数 | 1000 |
+| `-s, --seed` | 随机种子 | 42 |
+| `--out` | SFT JSONL 输出路径 | `data/sft_data.jsonl` |
+| `--corpus-out` | 纯文本语料输出路径（用于 BPE 训练） | `./data/corpus.txt` |
+| `--train-bpe` | 生成语料后自动训练 BPE tokenizer | false |
+| `--bpe-vocab-size` | BPE 词汇表大小 | 32000 |
+| `--bpe-output` | BPE tokenizer 输出路径 | `./models/tokenizer_bpe.json` |
+| `--web` | 混合 Web 风格问答 | false |
+| `--web-only` | 仅使用 Web 风格问答 | false |
+| `--multimodal` | 添加多模态图像路径字段 | false |
+| `--image-dir` | 图片目录（用于 text-to-image 数据生成） | - |
+| `--text-to-image-data` | 文生图数据输出路径 | `data/text_to_image_pairs.jsonl` |
+
+### 4.2 数据内容组成
+
+生成的数据包含五种类型，按比例混合：
+
+| 类型 | 占比 | 说明 |
+|------|------|------|
+| 本地 QA 问答 | 60% | 高质量专家撰写的问答对（30+ 条，循环使用） |
+| 长文本文章 | 15% | 深度技术文章（10 篇，每篇 400-800 字） |
+| 代码片段 | 10% | Rust/Python/JS/Go/SQL 实用代码 |
+| 多轮对话 | 10% | 3-4 轮连续对话（4 组） |
+| 合成问答 | 5% | 模板化自动生成的问答 |
+
+### 4.3 覆盖领域
+
+涵盖 20+ 领域的高质量语料：
+
+人工智能、机器学习、深度学习、NLP、计算机视觉、强化学习、编程语言（Rust/Python/Go/JS/C++）、软件工程、数据库、云计算、DevOps、网络安全、区块链、计算机科学、数学、物理学、生物学、医学、天文学、历史文化、哲学、经济学、环境科学
+
+### 4.4 常用示例
+
+**A. 生成 SFT 训练数据 + 纯文本语料**
 
 ```bash
-cargo run --release --bin gen_data -- --out data/sft_demo.jsonl --count 1000
+cargo run --release --bin gen_data -- -c 2000
 ```
 
-### 4.2 生成多模态数据
+同时生成：
+- `data/sft_data.jsonl` — 2,000 条 SFT 对话数据（JSONL 格式）
+- `data/corpus.txt` — 纯文本语料（约 1.3 MB，8,000+ 行）
+
+**B. 生成数据后自动训练 BPE Tokenizer**
 
 ```bash
-cargo run --release --bin gen_data -- --out data/multimodal_data.jsonl --count 500 --multimodal --image-dir ./images
+cargo run --release --bin gen_data -- -c 5000 --train-bpe --bpe-vocab-size 32000
 ```
 
-### 4.3 生成 Web 问答数据
+生成全部数据 -> 训练 BPE -> 保存到 `models/tokenizer_bpe.json`
+
+**C. 生成大规模语料 + 大词表 BPE**
+
+```bash
+cargo run --release --bin gen_data -- -c 10000 --train-bpe --bpe-vocab-size 50000
+```
+
+**D. 生成多模态数据**
+
+```bash
+cargo run --release --bin gen_data -- --out data/multimodal_data.jsonl --count 500 --multimodal
+```
+
+**E. 生成 Web 问答数据**
 
 ```bash
 cargo run --release --bin gen_data -- --out data/web_qa.jsonl --count 200 --web
+```
+
+**F. 从图片目录生成文生图数据**
+
+```bash
+cargo run --release --bin gen_data -- --image-dir data/images --text-to-image-data data/t2i.jsonl
+```
+
+### 4.5 BPE Tokenizer 训练
+
+训练 BPE tokenizer 有两种方式：
+
+**方式一：生成数据时自动训练（推荐）**
+
+```bash
+cargo run --release --bin gen_data -- -c 5000 --train-bpe --bpe-vocab-size 32000 --bpe-output ./models/tokenizer_bpe.json
+```
+
+**方式二：使用独立的 create_tokenizer 命令**
+
+```bash
+# 先生成语料
+cargo run --release --bin gen_data -- -c 5000
+# 再用 create_tokenizer 训练 BPE
+cargo run --release --bin create_tokenizer -- --sample-file ./data/corpus.txt --use-bpe --vocab-size 32000 --output ./models/tokenizer_bpe.json
+```
+
+### 4.6 在训练中使用 BPE Tokenizer
+
+```bash
+cargo run --release --bin train -- \
+    --corpus ./data/corpus.txt \
+    --use-bpe \
+    --bpe-vocab-size 32000 \
+    --output-dir ./models/my_model \
+    --num-epochs 50 \
+    --max-seq-len 256 \
+    --backend cpu
 ```
 
 ---
