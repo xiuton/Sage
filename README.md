@@ -253,10 +253,23 @@ Sage/
 
 ### Tokenizer（字符级 + BPE）
 
-- 字符级词表（Unicode `char`，天然支持中文）
+提供两种分词方式，通过训练时的 `--use-bpe` 参数切换：
+
+| 特性 | 字符级 (Char) | BPE (Byte-Pair Encoding) |
+|------|-------------|--------------------------|
+| 词表大小 | ~1075 (按语料字符自动构建) | 5000+ (通过 `--bpe-vocab-size` 配置) |
+| Token 粒度 | 单个汉字/字符 | 常见子词/词组 |
+| 序列长度 (同文本) | 较长 | 缩短 30-50% |
+| 重复字符问题 | 较容易出现 | 天然缓解 |
+| 语义学习能力 | 弱（需更长序列） | 强（子词含语义信息） |
+| 适用场景 | 小规模实验、快速验证 | 正式训练、生产环境 |
+
 - 特殊 token：`pad_id=0`、`unk_id=1`、`bos_id=2`、`eos_id=3`
 - 支持保存/加载：`tokenizer.json`
-- SFT 专用：`encode_with_assistant_mask` 生成 token 序列 + “只学助手回复”的 mask
+- SFT 专用：`encode_with_assistant_mask` 生成 token 序列 + "只学助手回复"的 mask
+- **独立创建工具**：`cargo run --release --bin create_tokenizer -- --use-bpe --vocab-size 5000 --sample-file ./data/corpus.txt --output ./models/tokenizer.json`
+
+**切换 BPE 后必须重新训练模型**（词表维度改变，旧权重不兼容）。
 
 代码入口：[core/tokenizer.rs](src/core/tokenizer.rs)
 
@@ -459,6 +472,53 @@ cargo run --release --bin train -- --backend cpu --sft-jsonl data.jsonl --output
 
 **注意**：GPU后端需要支持WGPU的显卡。
 在部分 Windows 环境中，如果运行时报 `应用程序控制策略已阻止此文件。(os error 4551)`，可参考 [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) 使用 `--target-dir`/`CARGO_TARGET_DIR` 绕过常见拦截点。
+
+### BPE 分词器训练（推荐）
+
+相比字符级分词器，BPE (Byte-Pair Encoding) 能显著减少重复字符问题并提升语义理解能力。
+
+```bash
+# 1. 准备语料（每行一条文本）
+# 2. 使用 BPE 训练模型
+cargo run --release --bin train -- \
+  --corpus ./data/corpus.txt \
+  --output-dir ./models/sage_bpe \
+  --config-path ./inference/configs/config_1B.json \
+  --model-size 30m \
+  --use-bpe \
+  --bpe-vocab-size 5000 \
+  --num-epochs 50 \
+  --max-seq-len 128 \
+  --backend gpu
+
+# 单独创建 BPE 分词器（不训练模型）
+cargo run --release --bin create_tokenizer -- \
+  --sample-file ./data/corpus.txt \
+  --output ./models/bpe_tokenizer.json \
+  --use-bpe \
+  --vocab-size 5000
+```
+
+**BPE 词表大小建议**：
+- 小语料（<1万行）：`--bpe-vocab-size 2000-3000`
+- 中语料（1-10万行）：`--bpe-vocab-size 5000-8000`
+- 大语料（>10万行）：`--bpe-vocab-size 8000-16000`
+
+> ⚠️ **重要**：切换 BPE 后必须重新训练模型（`--force`），旧权重因 `vocab_size` 改变而完全不兼容。
+
+### BPE 模型推理
+
+BPE 模型推理与字符级模型完全兼容，推理代码自动检测分词器类型：
+
+```bash
+cargo run --release --bin infer -- \
+  --model-dir ./models/sage_bpe \
+  --use-best \
+  --prompt "你好" \
+  --num-tokens 200 \
+  --temperature 0.8 \
+  --backend gpu
+```
 
 ### CPU 多线程优化
 
